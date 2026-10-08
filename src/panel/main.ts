@@ -33,6 +33,13 @@ const fmtBytes = (n: number) => {
   return `${n.toFixed(n < 10 ? 1 : 0)} ${u[i]}`;
 };
 
+const UPLOAD_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>`;
+function icon(cls: string): HTMLElement {
+  const w = h("span", { class: cls });
+  w.innerHTML = UPLOAD_ICON; // static, trusted markup
+  return w;
+}
+
 const SIDES: Side[] = ["left", "right", "top", "bottom"];
 
 // ---------------------------------------------------------------- state
@@ -49,7 +56,19 @@ const stage = h("section", { class: "card" });
 const layout = h("section", { class: "card" });
 const files = h("section", { class: "card" });
 const settings = h("section", { class: "card" });
+const veil = h("div", { id: "veil" });
+document.body.append(veil);
 app.append(header, stage, layout, files, settings);
+
+function showVeil(on: boolean) {
+  if (on) {
+    const c = !!snap?.connected;
+    veil.className = `show${c ? "" : " off"}`;
+    veil.replaceChildren(icon(""), h("div", {}, c ? `Drop to send to ${snap?.connected?.name}` : "Connect to a computer first"), ...(c ? [h("small", {}, "Files and folders")] : []));
+  } else {
+    veil.className = "";
+  }
+}
 
 /** Re-render a section only when its inputs changed (keeps focus while typing). */
 function update(el: HTMLElement, name: string, key: unknown, build: () => Node[]) {
@@ -162,6 +181,7 @@ function renderFiles(s: Snapshot) {
     const out: Node[] = [
       h("h2", {}, "Files"),
       h("div", { class: `drop${dropOver ? " over" : ""}${connected ? "" : " off"}` },
+        icon("ico"),
         h("div", {}, connected ? `Drop files or folders here to send them to ${peerName}` : "Connect to a computer to send files"),
         h("div", { class: "row", style: "justify-content:center;margin-top:10px" },
           h("button", { disabled: !connected, onclick: () => call("pick_and_send") }, "Choose files…"),
@@ -227,7 +247,7 @@ function render(s: Snapshot) {
 onSnapshot(render);
 onFileDrop(
   (paths) => { if (snap?.connected && paths.length) void call("send_files", { paths }); },
-  (over) => { dropOver = over; if (snap) renderFiles(snap); },
+  (over) => { dropOver = over; showVeil(over); if (snap) renderFiles(snap); },
 );
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });
 void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });

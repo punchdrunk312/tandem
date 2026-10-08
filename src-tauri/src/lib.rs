@@ -263,6 +263,15 @@ fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+    // WebView2 builds its drop target late: fix it up once the page exists.
+    for ms in [200u64, 900, 2500] {
+        let h = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(ms));
+            let h2 = h.clone();
+            let _ = h.run_on_main_thread(move || island::unblock_webview_drops(&h2));
+        });
+    }
 }
 
 /// The pairing / settings window: created hidden, hides instead of closing.
@@ -393,11 +402,15 @@ pub fn run() {
             Ok(())
         })
         // Closing the pairing window keeps Tandem running (the hooks must stay alive).
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
             }
+            WindowEvent::Focused(true) | WindowEvent::Resized(_) => {
+                island::unblock_webview_drops(window.app_handle());
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
