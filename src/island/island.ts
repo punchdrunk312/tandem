@@ -55,8 +55,9 @@ export class Island {
   private dirty = true;
   private canvasPx = 0;
 
-  // Rust starts the window at full size so the launch greeting has room.
-  private collapsed = false;
+  /** Mirrors the Rust side: the window starts as the tiny wake strip, and has to be
+   *  enlarged (set_collapsed false) before anything can be drawn. */
+  private collapsed = true;
   private collapseTimer: number | null = null;
   private wasInIsland = false;
   private pushedRect = { x: -1, y: -1, w: -1, h: -1 };

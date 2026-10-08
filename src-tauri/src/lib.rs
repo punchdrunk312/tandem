@@ -426,6 +426,16 @@ fn set_collapsed(app: AppHandle, sh: State<'_, Shared>, collapsed: bool) {
         .store(collapsed, std::sync::atomic::Ordering::Relaxed);
     island::apply_geometry(&app, sh.gate.pref(), collapsed);
     sh.gate.forget_ignore_state();
+    if let Some(w) = island::window(&app) {
+        log_line(
+            &app,
+            &format!(
+                "set_collapsed({collapsed}) -> size={:?} pos={:?}",
+                w.outer_size().ok(),
+                w.outer_position().ok()
+            ),
+        );
+    }
 }
 
 #[tauri::command]
