@@ -9,6 +9,11 @@ use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const CHUNK: usize = 64 * 1024;
+
+/// Set while this computer is being controlled / is controlling the other one: file
+/// sends slow down so a big transfer never competes with the mouse for the Wi-Fi.
+pub static SLOW_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const SLOW_BYTES_PER_SEC: u64 = 6 * 1024 * 1024;
 pub const MAX_ITEMS: usize = 20_000;
 
 /// What the sender keeps for an outstanding offer.
@@ -192,6 +197,12 @@ async fn serve_offer<W: AsyncWrite + Unpin>(
             left -= n as u64;
             sent += n as u64;
             progress(id, sent);
+            if SLOW_DOWN.load(std::sync::atomic::Ordering::Relaxed) {
+                tokio::time::sleep(std::time::Duration::from_micros(
+                    n as u64 * 1_000_000 / SLOW_BYTES_PER_SEC,
+                ))
+                .await;
+            }
         }
         w.send(&FileMsg::End).await?;
     }

@@ -16,7 +16,9 @@ use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use spake2::{Ed25519Group, Identity as SpakeId, Password, Spake2};
-use tokio::io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{
+    split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
+};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -122,6 +124,29 @@ impl<W: AsyncWrite + Unpin> SecureWriter<W> {
     }
 }
 
+impl<W: AsyncWrite + Unpin> SecureWriter<W> {
+    /// Encrypts several messages and writes them with a single syscall / packet.
+    pub async fn send_many<T: serde::Serialize>(&mut self, msgs: &[T]) -> Result<()> {
+        let mut buf = Vec::with_capacity(64 * msgs.len());
+        for m in msgs {
+            let plain = encode(m);
+            let ct = self
+                .cipher
+                .encrypt(&nonce(self.counter), plain.as_slice())
+                .map_err(|_| Error::Auth("encrypt".into()))?;
+            self.counter += 1;
+            if ct.len() > MAX_FRAME {
+                return Err(Error::TooLarge);
+            }
+            buf.extend_from_slice(&(ct.len() as u32).to_be_bytes());
+            buf.extend_from_slice(&ct);
+        }
+        self.w.write_all(&buf).await?;
+        self.w.flush().await?;
+        Ok(())
+    }
+}
+
 impl<R: AsyncRead + Unpin> SecureReader<R> {
     pub async fn recv<T: for<'a> serde::Deserialize<'a>>(&mut self) -> Result<T> {
         let ct = read_frame(&mut self.r, MAX_FRAME).await?;
@@ -137,8 +162,12 @@ impl<R: AsyncRead + Unpin> SecureReader<R> {
 fn make_halves<S: AsyncRead + AsyncWrite + Unpin>(
     s: S,
     keys: Keys,
-) -> (SecureReader<ReadHalf<S>>, SecureWriter<WriteHalf<S>>) {
+) -> (
+    SecureReader<BufReader<ReadHalf<S>>>,
+    SecureWriter<WriteHalf<S>>,
+) {
     let (r, w) = split(s);
+    let r = BufReader::with_capacity(16 * 1024, r);
     (
         SecureReader {
             r,
@@ -209,7 +238,10 @@ fn session_keys(base: &[u8], nonce_s: &[u8], nonce_c: &[u8], client: bool) -> Ke
     }
 }
 
-pub type Secure<S> = (SecureReader<ReadHalf<S>>, SecureWriter<WriteHalf<S>>);
+pub type Secure<S> = (
+    SecureReader<BufReader<ReadHalf<S>>>,
+    SecureWriter<WriteHalf<S>>,
+);
 
 // ---------- client side ----------
 

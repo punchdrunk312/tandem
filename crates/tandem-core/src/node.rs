@@ -22,6 +22,7 @@ use tokio::sync::{watch, Semaphore};
 use tokio::task::AbortHandle;
 
 const MAX_CLIP_TEXT: usize = 8 * 1024 * 1024;
+const MAX_CLIP_IMAGE: usize = 12 * 1024 * 1024;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
 const NEARBY_TTL: Duration = Duration::from_secs(8);
 
@@ -59,6 +60,16 @@ pub struct Persisted {
     pub clipboard_sync: bool,
     /// Clipboard files above this size are not fetched automatically.
     pub auto_file_limit_mb: u64,
+    /// No edge switching while a full-screen app (a game) is in front.
+    #[serde(default = "yes")]
+    pub game_mode: bool,
+    /// Milliseconds the cursor must keep pushing at the edge before it crosses.
+    #[serde(default)]
+    pub switch_delay_ms: u32,
+}
+
+fn yes() -> bool {
+    true
 }
 
 pub trait Store: Send + Sync {
@@ -131,6 +142,8 @@ pub struct Snapshot {
     pub nearby: Vec<NearbyView>,
     pub transfers: Vec<TransferView>,
     pub clipboard_sync: bool,
+    pub game_mode: bool,
+    pub switch_delay_ms: u32,
     pub error: Option<String>,
 }
 
@@ -259,6 +272,8 @@ impl Shared {
             nearby,
             transfers: self.transfers.lock().unwrap().clone(),
             clipboard_sync: per.clipboard_sync,
+            game_mode: per.game_mode,
+            switch_delay_ms: per.switch_delay_ms,
             error: st.error.clone(),
         }
     }
@@ -304,13 +319,25 @@ impl Shared {
     }
 
     fn transfer_progress(&self, id: u64, dir: &str, bytes: u64) {
-        let mut v = self.transfers.lock().unwrap();
-        if let Some(x) = v.iter_mut().find(|x| x.id == id && x.direction == dir) {
-            x.bytes = bytes;
-            x.state = "active".into();
+        let mut done = false;
+        {
+            let mut v = self.transfers.lock().unwrap();
+            if let Some(x) = v.iter_mut().find(|x| x.id == id && x.direction == dir) {
+                x.bytes = bytes;
+                x.state = "active".into();
+                done = bytes >= x.total;
+            }
         }
-        drop(v);
-        self.publish();
+        // One chunk is 64 KB: at LAN speed that is thousands of updates a second, each
+        // one a full snapshot. The UI shows ~12 a second anyway.
+        static LAST_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let now = START.get_or_init(Instant::now).elapsed().as_millis() as u64;
+        let last = LAST_MS.load(std::sync::atomic::Ordering::Relaxed);
+        if done || now.saturating_sub(last) >= 60 {
+            LAST_MS.store(now, std::sync::atomic::Ordering::Relaxed);
+            self.publish();
+        }
     }
 
     fn transfer_finish(
@@ -363,6 +390,8 @@ enum Cmd {
     Forget(String),
     SendFiles(Vec<PathBuf>),
     SetClipboardSync(bool),
+    SetGameMode(bool),
+    SetSwitchDelay(u32),
     SetName(String),
     NewCode,
     Engage,
@@ -383,6 +412,8 @@ impl Node {
                 peers: vec![],
                 clipboard_sync: true,
                 auto_file_limit_mb: 512,
+                game_mode: true,
+                switch_delay_ms: 0,
             }
         });
         store.save(&persisted);
@@ -440,6 +471,11 @@ impl Node {
 
         // Platform capture events -> actor.
         let (cap_tx, mut cap_rx) = unbounded_channel::<CaptureEvent>();
+        {
+            let p = sh.persisted.lock().unwrap();
+            platform.set_game_mode(p.game_mode);
+            platform.set_switch_delay(p.switch_delay_ms);
+        }
         platform.set_capture_sink(cap_tx);
         {
             let ev_tx = ev_tx.clone();
@@ -544,6 +580,12 @@ impl Node {
     }
     pub fn set_clipboard_sync(&self, on: bool) {
         self.cmd(Cmd::SetClipboardSync(on))
+    }
+    pub fn set_game_mode(&self, on: bool) {
+        self.cmd(Cmd::SetGameMode(on))
+    }
+    pub fn set_switch_delay(&self, ms: u32) {
+        self.cmd(Cmd::SetSwitchDelay(ms))
     }
     pub fn set_name(&self, name: String) {
         self.cmd(Cmd::SetName(name))
@@ -699,10 +741,8 @@ async fn writer_task<W: tokio::io::AsyncWrite + Unpin>(
                 _ => out.push(m),
             }
         }
-        for m in out {
-            if w.send(&m).await.is_err() {
-                return;
-            }
+        if w.send_many(&out).await.is_err() {
+            return;
         }
     }
 }
@@ -787,6 +827,10 @@ fn sig(c: &ClipContent) -> u64 {
             1u8.hash(&mut h);
             f.hash(&mut h)
         }
+        ClipContent::Image(b) => {
+            2u8.hash(&mut h);
+            b.hash(&mut h)
+        }
     }
     h.finish()
 }
@@ -822,6 +866,10 @@ impl Actor {
 
     fn set_control(&mut self, c: Control) {
         self.control = c;
+        files::SLOW_DOWN.store(
+            !matches!(c, Control::Local),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.sh.status.lock().unwrap().control = match c {
             Control::Local => "local",
             Control::Remote { .. } => "remote",
@@ -1152,6 +1200,14 @@ impl Actor {
                     plat.clipboard_set(&c);
                 }
             }
+            Msg::ClipImage(png) => {
+                let on = self.sh.persisted.lock().unwrap().clipboard_sync;
+                if on && !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
+                    let c = ClipContent::Image(png);
+                    self.last_clip_sig = Some(sig(&c));
+                    plat.clipboard_set(&c);
+                }
+            }
             Msg::FileOffer { id, kind, items } => self.on_file_offer(id, kind, items),
         }
     }
@@ -1247,6 +1303,19 @@ impl Actor {
                 self.sh.save();
                 self.sh.publish();
             }
+            Cmd::SetGameMode(on) => {
+                self.sh.persisted.lock().unwrap().game_mode = on;
+                self.sh.platform.set_game_mode(on);
+                self.sh.save();
+                self.sh.publish();
+            }
+            Cmd::SetSwitchDelay(ms) => {
+                let ms = ms.min(3000);
+                self.sh.persisted.lock().unwrap().switch_delay_ms = ms;
+                self.sh.platform.set_switch_delay(ms);
+                self.sh.save();
+                self.sh.publish();
+            }
             Cmd::SetName(n) => {
                 let n: String = n.chars().filter(|c| !c.is_control()).take(48).collect();
                 if !n.trim().is_empty() {
@@ -1296,6 +1365,11 @@ impl Actor {
                 }
             }
             ClipContent::Files(paths) => self.build_offer(paths, OfferKind::Clipboard),
+            ClipContent::Image(png) => {
+                if !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
+                    self.send(Msg::ClipImage(png));
+                }
+            }
         }
     }
 

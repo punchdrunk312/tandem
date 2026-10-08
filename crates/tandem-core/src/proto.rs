@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -108,6 +108,8 @@ pub enum Msg {
     Ping,
     Pong,
     Bye,
+    /// A copied image, as PNG bytes.
+    ClipImage(Vec<u8>),
 }
 
 /// Messages on a dedicated file connection (receiver dials the sender).

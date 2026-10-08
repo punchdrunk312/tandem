@@ -5,6 +5,7 @@ import { IS_TAURI, fire, onEvent, onSnapshot } from "../bridge";
 import { Sound } from "../core/sound";
 import type { Snapshot } from "../types";
 import { Island, bootSnapshot } from "./island";
+import { SETTINGS_KEY, State } from "./state";
 
 async function main() {
   const root = document.getElementById("root");
@@ -33,6 +34,13 @@ async function main() {
     }));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
   await safe("boot", () => bootSnapshot(island));
+  // The pairing/settings window edits the same settings entry.
+  window.addEventListener("storage", (e) => {
+    if (e.key === SETTINGS_KEY) {
+      State.reloadSettings();
+      island.applySettings();
+    }
+  });
   island.launch();
   fire("log_js", { msg: "island launched" });
 

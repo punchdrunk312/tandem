@@ -21,5 +21,13 @@ export interface Snapshot {
     path: string | null;
   }[];
   clipboard_sync: boolean;
+  game_mode: boolean;
+  switch_delay_ms: number;
   error: string | null;
+}
+
+export interface UiOptions {
+  enabled: boolean;
+  hide_fullscreen: boolean;
+  monitor_cursor: boolean;
 }

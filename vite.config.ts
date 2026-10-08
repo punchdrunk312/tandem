@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         island: resolve(__dirname, "index.html"),
         settings: resolve(__dirname, "settings.html"),
+        edge: resolve(__dirname, "edge.html"),
       },
     },
   },

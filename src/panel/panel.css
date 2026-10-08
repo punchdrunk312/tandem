@@ -141,3 +141,7 @@ kbd { font: 12px var(--mono); background: var(--surface-3); border: 1px solid va
 .sep { height: 1px; background: var(--line); margin: 8px 0; }
 .drop .ico { display: block; }
 .drop .ico svg { width: 34px; height: 34px; display: block; }
+
+select { font: inherit; color: var(--ink); background: #000; border: 1px solid var(--line-2); border-radius: 12px; padding: 8px 12px; width: 100%; cursor: pointer; transition: border-color 0.14s, box-shadow 0.14s; }
+select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.14); }
+option { background: #0a0b0d; color: var(--ink); }

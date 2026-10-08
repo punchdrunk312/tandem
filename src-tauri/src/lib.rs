@@ -18,6 +18,36 @@ use island::{IslandRect, PollGate};
 
 struct Shared {
     gate: Arc<PollGate>,
+    ui: std::sync::Mutex<UiOptions>,
+    ui_path: PathBuf,
+}
+
+/// Top-bar preferences (kept in `ui.json`, separate from the pairing data).
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct UiOptions {
+    /// Show the top bar at all.
+    #[serde(default = "yes")]
+    enabled: bool,
+    /// The bar sleeps while a full-screen app (game, F11 video) is in front.
+    #[serde(default = "yes")]
+    hide_fullscreen: bool,
+    /// Follow the cursor to whichever display it is on.
+    #[serde(default)]
+    monitor_cursor: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for UiOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hide_fullscreen: true,
+            monitor_cursor: false,
+        }
+    }
 }
 
 struct AppState {
@@ -177,6 +207,47 @@ fn set_clipboard_sync(st: State<'_, AppState>, on: bool) {
 }
 
 #[tauri::command]
+fn set_game_mode(st: State<'_, AppState>, on: bool) {
+    st.node.set_game_mode(on);
+}
+
+#[tauri::command]
+fn set_switch_delay(st: State<'_, AppState>, ms: u32) {
+    st.node.set_switch_delay(ms);
+}
+
+#[tauri::command]
+fn ui_get(sh: State<'_, Shared>) -> UiOptions {
+    sh.ui.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn ui_set(app: AppHandle, sh: State<'_, Shared>, opts: UiOptions) {
+    apply_ui(&app, &sh.gate, &opts);
+    if let Ok(b) = serde_json::to_vec_pretty(&opts) {
+        let _ = std::fs::write(&sh.ui_path, b);
+    }
+    *sh.ui.lock().unwrap() = opts;
+}
+
+fn apply_ui(app: &AppHandle, gate: &PollGate, o: &UiOptions) {
+    use std::sync::atomic::Ordering::Relaxed;
+    gate.hide_fullscreen.store(o.hide_fullscreen, Relaxed);
+    gate.monitor_cursor.store(o.monitor_cursor, Relaxed);
+    if let Some(w) = island::window(app) {
+        if o.enabled {
+            island::apply_geometry(app, gate.pref(), gate.collapsed.load(Relaxed));
+            island::make_non_activating(&w);
+            let _ = w.show();
+            gate.set_active(true);
+        } else {
+            gate.set_active(false);
+            let _ = w.hide();
+        }
+    }
+}
+
+#[tauri::command]
 fn set_name(st: State<'_, AppState>, name: String) {
     st.node.set_name(name);
 }
@@ -221,7 +292,7 @@ fn stage_root() -> PathBuf {
 }
 
 fn unhex(s: &str) -> Option<String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..s.len() / 2)
@@ -347,14 +418,12 @@ fn log_line(app: &AppHandle, msg: &str) {
 
 // ------------------------------------------------------------------ island
 
-const PREF: &str = "primary";
-
 #[tauri::command]
 fn set_collapsed(app: AppHandle, sh: State<'_, Shared>, collapsed: bool) {
     sh.gate
         .collapsed
         .store(collapsed, std::sync::atomic::Ordering::Relaxed);
-    island::apply_geometry(&app, PREF, collapsed);
+    island::apply_geometry(&app, sh.gate.pref(), collapsed);
     sh.gate.forget_ignore_state();
 }
 
@@ -371,7 +440,7 @@ fn set_island_rect(sh: State<'_, Shared>, x: f64, y: f64, width: f64, height: f6
 #[tauri::command]
 fn reposition(app: AppHandle, sh: State<'_, Shared>) {
     let c = sh.gate.collapsed.load(std::sync::atomic::Ordering::Relaxed);
-    island::apply_geometry(&app, PREF, c);
+    island::apply_geometry(&app, sh.gate.pref(), c);
     sh.gate.forget_ignore_state();
 }
 
@@ -410,6 +479,27 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// The thin drop strip that appears along the screen edge facing the other computer
+/// while a file is being dragged towards it. Hidden and click-through otherwise.
+fn create_edge_window(app: &tauri::App) -> tauri::Result<()> {
+    let w = WebviewWindowBuilder::new(app, island::EDGE_LABEL, WebviewUrl::App("edge.html".into()))
+        .title("Tandem edge")
+        .inner_size(72.0, 300.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focused(false)
+        .visible(false)
+        .disable_drag_drop_handler()
+        .build()?;
+    island::make_non_activating(&w);
+    let _ = w.set_ignore_cursor_events(true);
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -444,15 +534,33 @@ pub fn run() {
                 }),
             ))?;
 
+            let gate = Arc::new(PollGate::new());
+
             // Push state to the UI, at most ~12 times a second.
             let mut rx = node.subscribe();
             let handle = app.handle().clone();
+            let gate2 = gate.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     if rx.changed().await.is_err() {
                         break;
                     }
                     let s = rx.borrow_and_update().clone();
+                    // Which screen edge leads to the other computer (drag-to-edge strip).
+                    let edge = s
+                        .paired
+                        .iter()
+                        .find(|p| p.connected)
+                        .map(|p| match p.side {
+                            Edge::Left => 1,
+                            Edge::Right => 2,
+                            Edge::Top => 3,
+                            Edge::Bottom => 4,
+                        })
+                        .unwrap_or(0);
+                    gate2
+                        .peer_edge
+                        .store(edge, std::sync::atomic::Ordering::Relaxed);
                     let _ = handle.emit("snapshot", &s);
                     tokio::time::sleep(Duration::from_millis(80)).await;
                 }
@@ -460,16 +568,31 @@ pub fn run() {
             app.manage(AppState { node, download_dir });
 
             let _ = std::fs::remove_dir_all(stage_root());
-            let gate = Arc::new(PollGate::new());
-            app.manage(Shared { gate: gate.clone() });
+            let ui_path = cfg_dir.join("ui.json");
+            let ui: UiOptions = std::fs::read(&ui_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default();
+            app.manage(Shared {
+                gate: gate.clone(),
+                ui: std::sync::Mutex::new(ui.clone()),
+                ui_path,
+            });
+            gate.hide_fullscreen
+                .store(ui.hide_fullscreen, std::sync::atomic::Ordering::Relaxed);
+            gate.monitor_cursor
+                .store(ui.monitor_cursor, std::sync::atomic::Ordering::Relaxed);
 
             create_main_window(app)?;
+            create_edge_window(app)?;
 
             // Island: borderless, transparent, never takes focus.
             if let Some(win) = island::window(app.handle()) {
                 island::make_non_activating(&win);
-                island::apply_geometry(app.handle(), PREF, true);
-                let _ = win.show();
+                island::apply_geometry(app.handle(), gate.pref(), true);
+                if ui.enabled {
+                    let _ = win.show();
+                }
                 log_line(
                     app.handle(),
                     &format!(
@@ -482,8 +605,8 @@ pub fn run() {
             } else {
                 log_line(app.handle(), "island window MISSING");
             }
-            gate.set_active(true);
-            island::spawn_cursor_poll(app.handle().clone(), gate, PREF);
+            gate.set_active(ui.enabled);
+            island::spawn_cursor_poll(app.handle().clone(), gate);
 
             // Tray.
             let open = MenuItem::with_id(app, "open", "Pair / settings…", true, None::<&str>)?;
@@ -532,12 +655,11 @@ pub fn run() {
             Ok(())
         })
         // Closing the pairing window keeps Tandem running (the hooks must stay alive).
-        .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
             }
-            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
@@ -559,6 +681,10 @@ pub fn run() {
             stage_chunk,
             stage_finish,
             log_js,
+            set_game_mode,
+            set_switch_delay,
+            ui_get,
+            ui_set,
             set_collapsed,
             set_island_rect,
             reposition,

@@ -523,7 +523,19 @@ export class Island {
     requestAnimationFrame(this.frame);
   }
 
+  /** Minimum ms between drawn frames. A busy Mochi in a corner doesn't need 60 fps —
+   *  and on a slower PC the animation must never compete with the mouse. */
+  private frameBudget(): number {
+    if (State.mode === "hidden") return 0; // only geometry settling, already cheap
+    if (State.fileDragOver || State.view === "greeting") return 0;
+    return State.mode === "expanded" ? 24 : 50;
+  }
+
   private frame = (nowMs: number) => {
+    if (nowMs - this.lastFrame < this.frameBudget() - 2) {
+      requestAnimationFrame(this.frame);
+      return;
+    }
     const dt = Math.min(0.05, (nowMs - this.lastFrame) / 1000);
     this.lastFrame = nowMs;
 

@@ -24,6 +24,8 @@ impl Screen {
 pub enum ClipContent {
     Text(String),
     Files(Vec<PathBuf>),
+    /// PNG bytes.
+    Image(Vec<u8>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +59,10 @@ pub trait Platform: Send + Sync + 'static {
     fn release_all(&self);
     fn clipboard_get(&self) -> Option<ClipContent>;
     fn clipboard_set(&self, c: &ClipContent);
+    /// Game mode: no edge switching while a full-screen app is in front.
+    fn set_game_mode(&self, _on: bool) {}
+    /// How long the cursor must keep pushing against the edge before it crosses.
+    fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>);
 }

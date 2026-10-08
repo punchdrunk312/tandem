@@ -16,6 +16,8 @@ const base: Snapshot = {
   nearby: [],
   transfers: [],
   clipboard_sync: true,
+    game_mode: true,
+    switch_delay_ms: 0,
   error: null,
 };
 let state: Snapshot = { ...base };
@@ -71,6 +73,16 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
     }
     case "autostart_get":
       return true;
+    case "ui_get":
+      return { enabled: true, hide_fullscreen: true, monitor_cursor: false };
+    case "set_game_mode":
+      state.game_mode = !!args?.on;
+      push();
+      return;
+    case "set_switch_delay":
+      state.switch_delay_ms = Number(args?.ms ?? 0);
+      push();
+      return;
     case "set_clipboard_sync":
       state.clipboard_sync = !!args?.on;
       push();

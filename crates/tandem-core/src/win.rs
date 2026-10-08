@@ -13,11 +13,12 @@ use crate::proto::{Button, Edge, InputEvent};
 use std::collections::HashSet;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc::UnboundedSender;
 use windows::core::w;
 use windows::Win32::Foundation::*;
+use windows::Win32::Media::timeBeginPeriod;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
@@ -40,6 +41,75 @@ const CF_UNICODETEXT: u32 = 13;
 const CF_HDROP: u32 = 15;
 
 const HOTKEY_VK: u32 = 0x91; // Scroll Lock: jump to the other computer / emergency exit
+
+// Mouse motion is batched: a 1000 Hz mouse would otherwise put 1000 small packets a
+// second on the Wi-Fi, which is what makes the far cursor stutter. Movement is sent
+// at most every MOVE_EVERY_US, always in order with clicks and keys.
+static GAME_MODE: AtomicBool = AtomicBool::new(true);
+/// Set by the watcher thread while a full-screen app is in front (and game mode is on).
+static GAME_ACTIVE: AtomicBool = AtomicBool::new(false);
+static SWITCH_DELAY_MS: AtomicU32 = AtomicU32::new(0);
+/// When the cursor first touched the edge in the current push (µs, 0 = not pushing).
+static EDGE_SINCE_US: AtomicU64 = AtomicU64::new(0);
+
+/// Polls whether a full-screen app is running (QUNS_BUSY / D3D full screen / presentation).
+fn game_watcher_thread() {
+    use windows::Win32::UI::Shell::{
+        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
+        QUNS_RUNNING_D3D_FULL_SCREEN,
+    };
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let on = GAME_MODE.load(Relaxed)
+            && matches!(
+                unsafe { SHQueryUserNotificationState() },
+                Ok(s) if s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE
+            );
+        GAME_ACTIVE.store(on, Relaxed);
+    }
+}
+
+static PEND_DX: AtomicI32 = AtomicI32::new(0);
+static PEND_DY: AtomicI32 = AtomicI32::new(0);
+static LAST_FLUSH_US: AtomicU64 = AtomicU64::new(0);
+const MOVE_EVERY_US: u64 = 4000;
+
+fn now_us() -> u64 {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_micros() as u64
+}
+
+fn flush_move() {
+    let dx = PEND_DX.swap(0, Relaxed);
+    let dy = PEND_DY.swap(0, Relaxed);
+    if dx != 0 || dy != 0 {
+        emit(CaptureEvent::Input(InputEvent::MouseMove { dx, dy }));
+    }
+    LAST_FLUSH_US.store(now_us(), Relaxed);
+}
+
+fn reset_move() {
+    PEND_DX.store(0, Relaxed);
+    PEND_DY.store(0, Relaxed);
+}
+
+/// Sends the tail of a movement when the mouse stops between two batches.
+fn flusher_thread() {
+    loop {
+        if !CAPTURING.load(Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            continue;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let pending = PEND_DX.load(Relaxed) != 0 || PEND_DY.load(Relaxed) != 0;
+        if pending && now_us().saturating_sub(LAST_FLUSH_US.load(Relaxed)) >= MOVE_EVERY_US {
+            flush_move();
+        }
+    }
+}
 
 fn emit(ev: CaptureEvent) {
     if let Some(s) = SINK.get() {
@@ -138,14 +208,25 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         let button_down = unsafe {
             GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0
         };
-        if !at_edge || button_down {
+        if !at_edge || button_down || GAME_ACTIVE.load(Relaxed) {
             AT_EDGE.store(0, Relaxed);
+            EDGE_SINCE_US.store(0, Relaxed);
             return false;
+        }
+        let now = now_us().max(1);
+        if EDGE_SINCE_US.load(Relaxed) == 0 {
+            EDGE_SINCE_US.store(now, Relaxed);
         }
         if AT_EDGE.fetch_add(1, Relaxed) + 1 < PUSH_EVENTS {
             return false;
         }
+        // Optional hold-to-cross delay, to stop accidental switches.
+        let delay_us = SWITCH_DELAY_MS.load(Relaxed) as u64 * 1000;
+        if now.saturating_sub(EDGE_SINCE_US.load(Relaxed)) < delay_us {
+            return false;
+        }
         AT_EDGE.store(0, Relaxed);
+        EDGE_SINCE_US.store(0, Relaxed);
         let fx = (h.x - s.x) as f32 / (s.width - 1).max(1) as f32;
         let fy = (h.y - s.y) as f32 / (s.height - 1).max(1) as f32;
         let (edge, frac) = match edge {
@@ -154,6 +235,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             3 => (Edge::Top, fx),
             _ => (Edge::Bottom, fx),
         };
+        reset_move();
         CAPTURING.store(true, Relaxed);
         let (cx, cy) = s.center();
         unsafe {
@@ -175,7 +257,12 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             if dx == 0 && dy == 0 {
                 return true;
             }
-            Some(InputEvent::MouseMove { dx, dy })
+            PEND_DX.fetch_add(dx, Relaxed);
+            PEND_DY.fetch_add(dy, Relaxed);
+            if now_us().saturating_sub(LAST_FLUSH_US.load(Relaxed)) >= MOVE_EVERY_US {
+                flush_move();
+            }
+            None
         }
         WM_LBUTTONDOWN => Some(InputEvent::Button {
             button: Button::Left,
@@ -223,6 +310,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         _ => None,
     };
     if let Some(ev) = ev {
+        flush_move(); // keep clicks and wheel in order with the motion before them
         emit(CaptureEvent::Input(ev));
     }
     true
@@ -264,6 +352,7 @@ fn key_inner(msg: u32, k: &KbdLl) -> bool {
     if !CAPTURING.load(Relaxed) {
         return false;
     }
+    flush_move();
     emit(CaptureEvent::Input(InputEvent::Key {
         vk: k.vk as u16,
         scan: k.scan as u16,
@@ -351,6 +440,11 @@ impl WinPlatform {
         // Coordinates must be physical pixels on every monitor.
         unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+        // 1 ms timers: without this Windows sleeps in 15.6 ms steps and every
+        // timed wait in the app (batching, polling) turns choppy.
+        unsafe {
+            timeBeginPeriod(1);
         }
         Self {
             pressed: Mutex::new(Pressed::default()),
@@ -466,6 +560,7 @@ impl Platform for WinPlatform {
     }
 
     fn begin_capture(&self) {
+        reset_move();
         let (cx, cy) = vscreen().center();
         unsafe {
             let _ = SetCursorPos(cx, cy);
@@ -621,19 +716,42 @@ impl Platform for WinPlatform {
                         put(fmt, &1u32.to_le_bytes());
                     }
                 }
+                ClipContent::Image(png) => {
+                    let fmt = RegisterClipboardFormatW(w!("PNG"));
+                    if fmt != 0 {
+                        put(fmt, png);
+                    }
+                }
             }
             let _ = CloseClipboard();
         }
     }
 
+    fn set_game_mode(&self, on: bool) {
+        GAME_MODE.store(on, Relaxed);
+        if !on {
+            GAME_ACTIVE.store(false, Relaxed);
+        }
+    }
+
+    fn set_switch_delay(&self, ms: u32) {
+        SWITCH_DELAY_MS.store(ms, Relaxed);
+    }
+
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {
         if SINK.set(tx).is_ok() {
+            let _ = std::thread::Builder::new()
+                .name("tandem-game".into())
+                .spawn(game_watcher_thread);
             if let Err(e) = std::thread::Builder::new()
                 .name("tandem-input".into())
                 .spawn(hook_thread)
             {
                 log::error!("cannot start input thread: {e}");
             }
+            let _ = std::thread::Builder::new()
+                .name("tandem-flush".into())
+                .spawn(flusher_thread);
         }
     }
 }
@@ -702,6 +820,19 @@ unsafe fn read_clipboard() -> Option<ClipContent> {
         let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
         let _ = GlobalUnlock(g);
         return Some(ClipContent::Text(s));
+    }
+    // Screenshots and "copy image": apps that offer the compressed "PNG" format.
+    let png_fmt = RegisterClipboardFormatW(w!("PNG"));
+    if png_fmt != 0 && IsClipboardFormatAvailable(png_fmt).is_ok() {
+        let h = GetClipboardData(png_fmt).ok()?;
+        let g = HGLOBAL(h.0);
+        let p = GlobalLock(g) as *const u8;
+        if p.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(p, GlobalSize(g)).to_vec();
+        let _ = GlobalUnlock(g);
+        return Some(ClipContent::Image(bytes));
     }
     None
 }

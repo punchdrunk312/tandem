@@ -144,6 +144,18 @@ async fn pair_cross_clipboard_and_files() {
         b.plat.clipboard_get() == Some(ClipContent::Text("reply from A".into()))
     })
     .await;
+    // Images travel too.
+    let png = vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4];
+    b.plat.user_copy(ClipContent::Image(png.clone()));
+    until("A has image", || {
+        a.plat.clipboard_get() == Some(ClipContent::Image(png.clone()))
+    })
+    .await;
+    a.plat.user_copy(ClipContent::Text("reply from A".into()));
+    until("B has text again", || {
+        b.plat.clipboard_get() == Some(ClipContent::Text("reply from A".into()))
+    })
+    .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         a.plat.clipboard_get(),
@@ -261,4 +273,22 @@ async fn hotkey_engage_and_edge_race_are_safe() {
     a.node.disconnect(); // B must release the mouse capture however the link ends
     until("B back to local", || b.node.snapshot().connected.is_none()).await;
     assert!(!b.plat.st.lock().unwrap().capturing);
+}
+
+#[tokio::test]
+async fn settings_persist_and_reach_the_platform() {
+    let a = start("A").await;
+    assert!(a.node.snapshot().game_mode);
+    a.node.set_game_mode(false);
+    a.node.set_switch_delay(400);
+    until("settings applied", || {
+        let s = a.node.snapshot();
+        !s.game_mode && s.switch_delay_ms == 400
+    })
+    .await;
+    a.node.set_switch_delay(99_999);
+    until("delay clamped", || {
+        a.node.snapshot().switch_delay_ms == 3000
+    })
+    .await;
 }

@@ -73,6 +73,20 @@ from Coucou. Move the cursor to the top edge to wake it.
 Mochi and the island come from Coucou and are for private use only; do not publish
 this repo or ship it under Coucou's name or assets.
 
+## Newer features
+
+- **Hide in full-screen apps** — the top bar goes to sleep while a game or F11 video is in
+  front, so it can't block clicks. Rest the cursor at the top of the screen to wake it.
+- **Drag across the edge** — drag a file towards the screen edge that faces the other
+  computer: a drop strip appears, release on it to send.
+- **Game mode** — no edge switching while a full-screen app is open (Scroll Lock still jumps).
+- **Hold at the edge** — optional delay before the cursor crosses, against accidental switches.
+- **Copied images** — screenshots (Win+Shift+S) and "copy image" travel with the clipboard
+  as PNG. Needs the app that copied to offer the PNG format (Snipping Tool, browsers do).
+- **File sends slow down while you are controlling the other PC**, so big transfers never
+  make the mouse lag.
+- Top-bar settings (display, sounds, collapse delay) live in the panel.
+
 ## Status — read this
 
 Verified automatically (Linux): handshake/pairing, wrong-code rejection, encrypted

@@ -1,6 +1,6 @@
 import "./panel.css";
 import { call, onFileDrop, onSnapshot } from "./api";
-import type { Side, Snapshot } from "../types";
+import type { Side, Snapshot, UiOptions } from "../types";
 
 // ---------------------------------------------------------------- tiny DOM helper
 // Everything that comes from the network (computer names, file names, errors)
@@ -56,9 +56,10 @@ const stage = h("section", { class: "card" });
 const layout = h("section", { class: "card" });
 const files = h("section", { class: "card" });
 const settings = h("section", { class: "card" });
+const topbar = h("section", { class: "card" });
 const veil = h("div", { id: "veil" });
 document.body.append(veil);
-app.append(header, stage, layout, files, settings);
+app.append(header, stage, layout, files, settings, topbar);
 
 function showVeil(on: boolean) {
   if (on) {
@@ -213,14 +214,24 @@ function renderFiles(s: Snapshot) {
 
 let autostart = false;
 function renderSettings(s: Snapshot) {
-  update(settings, "settings", [s.device_name, s.clipboard_sync, autostart, s.paired.map((p) => [p.id, p.name])], () => {
+  update(settings, "settings", [s.device_name, s.clipboard_sync, s.game_mode, s.switch_delay_ms, autostart, s.paired.map((p) => [p.id, p.name])], () => {
     const name = h("input", { type: "text", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
     const out: Node[] = [
       h("h2", {}, "Settings"),
       h("div", { class: "stack" },
         h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "This computer's name (shown to others, applies after restart)"), name),
-        h("label", { class: "toggle" }, h("span", {}, "Share clipboard (text and copied files)"),
+        h("label", { class: "toggle" }, h("span", {}, "Share clipboard (text, images, copied files)"),
           h("input", { type: "checkbox", checked: s.clipboard_sync, onchange: (e: Event) => call("set_clipboard_sync", { on: (e.target as HTMLInputElement).checked }) })),
+        h("label", { class: "toggle" }, h("span", {}, "Game mode — don't switch computers while a full-screen app is open"),
+          h("input", { type: "checkbox", checked: s.game_mode, onchange: (e: Event) => call("set_game_mode", { on: (e.target as HTMLInputElement).checked }) })),
+        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Hold at the screen edge before switching"),
+          (() => {
+            const sel = h("select", { onchange: (e: Event) => call("set_switch_delay", { ms: Number((e.target as HTMLSelectElement).value) }) });
+            for (const [ms, label] of [[0, "Instant"], [250, "¼ second"], [500, "½ second"], [1000, "1 second"]] as const) {
+              sel.append(h("option", { value: String(ms), selected: s.switch_delay_ms === ms }, label));
+            }
+            return sel;
+          })()),
         h("label", { class: "toggle" }, h("span", {}, "Start Tandem with Windows"),
           h("input", { type: "checkbox", checked: autostart, onchange: async (e: Event) => { const on = (e.target as HTMLInputElement).checked; await call("autostart_set", { on }); autostart = on; } })),
         h("p", { class: "muted" }, h("kbd", {}, "Scroll Lock"), " jumps to the other computer — and brings your mouse straight back if anything feels stuck.")),
@@ -235,6 +246,54 @@ function renderSettings(s: Snapshot) {
   });
 }
 
+// ---------------------------------------------------------------- top bar settings
+// Rust-side options live in ui.json; sound options are the island's own localStorage
+// entry (same origin, so the island picks changes up through the `storage` event).
+const ISLAND_KEY = "tandem.island";
+function islandSettings(): { soundEnabled: boolean; soundVolume: number; autoCloseInterval: number } {
+  try {
+    return { soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15, ...JSON.parse(localStorage.getItem(ISLAND_KEY) ?? "{}") };
+  } catch {
+    return { soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15 };
+  }
+}
+function saveIsland(patch: Partial<ReturnType<typeof islandSettings>>) {
+  try {
+    localStorage.setItem(ISLAND_KEY, JSON.stringify({ ...islandSettings(), ...patch }));
+  } catch { /* storage unavailable */ }
+}
+
+let ui: UiOptions = { enabled: true, hide_fullscreen: true, monitor_cursor: false };
+function renderTopBar() {
+  const is = islandSettings();
+  update(topbar, "topbar", [ui, is], () => {
+    const setUi = (patch: Partial<UiOptions>) => {
+      ui = { ...ui, ...patch };
+      void call("ui_set", { opts: ui });
+    };
+    const toggle = (label: string, on: boolean, change: (v: boolean) => void) =>
+      h("label", { class: "toggle" }, h("span", {}, label),
+        h("input", { type: "checkbox", checked: on, onchange: (e: Event) => change((e.target as HTMLInputElement).checked) }));
+    const screenSel = h("select", { onchange: (e: Event) => setUi({ monitor_cursor: (e.target as HTMLSelectElement).value === "cursor" }) },
+      h("option", { value: "primary", selected: !ui.monitor_cursor }, "Main display"),
+      h("option", { value: "cursor", selected: ui.monitor_cursor }, "Whichever display the cursor is on"));
+    const close = h("select", { onchange: (e: Event) => { saveIsland({ autoCloseInterval: Number((e.target as HTMLSelectElement).value) }); renderTopBar(); } });
+    for (const [sec, label] of [[5, "5 seconds"], [15, "15 seconds"], [30, "30 seconds"], [60, "1 minute"]] as const) {
+      close.append(h("option", { value: String(sec), selected: is.autoCloseInterval === sec }, label));
+    }
+    return [
+      h("h2", {}, "Top bar"),
+      h("div", { class: "stack" },
+        toggle("Show the top bar", ui.enabled, (v) => setUi({ enabled: v })),
+        toggle("Hide it while a full-screen app is open", ui.hide_fullscreen, (v) => setUi({ hide_fullscreen: v })),
+        toggle("Sounds", is.soundEnabled, (v) => { saveIsland({ soundEnabled: v }); renderTopBar(); }),
+        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Show it on"), screenSel),
+        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Collapse after"), close),
+        h("p", { class: "muted" }, "In a full-screen app, rest the cursor at the top of the screen for a moment to bring the bar back.")),
+    ];
+  });
+}
+
 function render(s: Snapshot) {
   snap = s;
   renderHeader(s);
@@ -242,6 +301,7 @@ function render(s: Snapshot) {
   renderLayout(s);
   renderFiles(s);
   renderSettings(s);
+  renderTopBar();
 }
 
 onSnapshot(render);
@@ -249,5 +309,6 @@ onFileDrop(
   (d) => { if (snap?.connected) void d.send().catch((err) => console.error("send failed", err)); },
   (over) => { dropOver = over; showVeil(over); if (snap) renderFiles(snap); },
 );
+void call<UiOptions>("ui_get").then((v) => { if (v) { ui = v; renderTopBar(); } }).catch(() => {});
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });
 void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });

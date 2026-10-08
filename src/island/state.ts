@@ -10,7 +10,8 @@ export interface IslandSettings {
 }
 
 const DEFAULTS: IslandSettings = { soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15 };
-const KEY = "tandem.island";
+export const SETTINGS_KEY = "tandem.island";
+const KEY = SETTINGS_KEY;
 
 function load(): IslandSettings {
   try {
@@ -53,6 +54,11 @@ class IslandState {
 
   notify() {
     for (const fn of this.listeners) fn();
+  }
+
+  /** The panel window edits the same localStorage entry: pick its changes up. */
+  reloadSettings() {
+    this.settings = load();
   }
 
   saveSettings() {
