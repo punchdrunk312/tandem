@@ -73,10 +73,20 @@ from Coucou. Move the cursor to the top edge to wake it.
 Mochi and the island come from Coucou and are for private use only; do not publish
 this repo or ship it under Coucou's name or assets.
 
+## When the top bar shows up
+
+The bar sleeps until it is useful, and there is always a way to get it back:
+
+- **Cursor at the top edge**, near the middle → the little pill appears.
+- **Start dragging a file** in Explorer / on the desktop while connected → the bar opens
+  its drop view by itself; drag the file up into Mochi.
+- **Something happens** (connected, control switched, a file arrives) → it peeks out.
+- **Ctrl+Alt+T**, the **tray icon**, or **starting Tandem again** → it appears, always.
+- In a **full-screen app** it stays out of the way (no clicks stolen). Rest the cursor at
+  the very top, near the middle, for half a second to bring it up.
+
 ## Newer features
 
-- **Hide in full-screen apps** — the top bar goes to sleep while a game or F11 video is in
-  front, so it can't block clicks. Rest the cursor at the top of the screen to wake it.
 - **Drag across the edge** — drag a file towards the screen edge that faces the other
   computer: a drop strip appears, release on it to send.
 - **Game mode** — no edge switching while a full-screen app is open (Scroll Lock still jumps).

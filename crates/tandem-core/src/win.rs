@@ -52,19 +52,69 @@ static SWITCH_DELAY_MS: AtomicU32 = AtomicU32::new(0);
 /// When the cursor first touched the edge in the current push (µs, 0 = not pushing).
 static EDGE_SINCE_US: AtomicU64 = AtomicU64::new(0);
 
-/// Polls whether a full-screen app is running (QUNS_BUSY / D3D full screen / presentation).
-fn game_watcher_thread() {
-    use windows::Win32::UI::Shell::{
-        SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
-        QUNS_RUNNING_D3D_FULL_SCREEN,
+/// Window class of the foreground window ("CabinetWClass" is File Explorer).
+pub fn foreground_class() -> String {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return String::new();
+        }
+        let mut buf = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut buf);
+        String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    }
+}
+
+/// True when the foreground window covers a whole monitor and has no title bar: games,
+/// F11 browsers, full-screen video, presentations. A maximised normal window keeps its
+/// title bar and the taskbar, so it never counts. (`SHQueryUserNotificationState`'s
+/// "busy" answer is deliberately not used: it reports far too many false positives.)
+pub fn fullscreen_foreground() -> bool {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
+        }
+        let mut name = [0u16; 64];
+        let n = GetClassNameW(hwnd, &mut name);
+        let class = String::from_utf16_lossy(&name[..n.max(0) as usize]);
+        if matches!(
+            class.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+        ) {
+            return false;
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        if style & WS_CAPTION.0 == WS_CAPTION.0 {
+            return false;
+        }
+        let mut r = RECT::default();
+        if GetWindowRect(hwnd, &mut r).is_err() {
+            return false;
+        }
+        let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(mon, &mut mi).as_bool() {
+            return false;
+        }
+        r.left <= mi.rcMonitor.left
+            && r.top <= mi.rcMonitor.top
+            && r.right >= mi.rcMonitor.right
+            && r.bottom >= mi.rcMonitor.bottom
+    }
+}
+
+/// Polls whether a full-screen app is in front (game mode).
+fn game_watcher_thread() {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let on = GAME_MODE.load(Relaxed)
-            && matches!(
-                unsafe { SHQueryUserNotificationState() },
-                Ok(s) if s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE
-            );
+        let on = GAME_MODE.load(Relaxed) && fullscreen_foreground();
         GAME_ACTIVE.store(on, Relaxed);
     }
 }

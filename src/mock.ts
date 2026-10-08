@@ -53,6 +53,7 @@ export function onEvent(name: string, cb: (p: unknown) => void) {
 
 // Handy for tests / poking at the UI from the dev console.
 (window as unknown as Record<string, unknown>).__mock = {
+  emit: (name: string, payload?: unknown) => (events.get(name) ?? []).forEach((cb) => cb(payload)),
   set: (patch: Partial<Snapshot>) => {
     state = { ...state, ...patch };
     push();

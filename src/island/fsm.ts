@@ -11,7 +11,7 @@ export class IslandStateMachine {
   /** home → petit delay, seconds. */
   homeToPetitDelay = 15;
   /** petit → hidden delay, seconds. */
-  petitToHiddenDelay = 60;
+  petitToHiddenDelay = 12;
   /** coucou → petit once the greeting animation ends (no hover). */
   greetAutoCollapseDelay = 0.6;
   /** coucou → petit while the mouse hovers the greeting. */

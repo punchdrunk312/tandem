@@ -28,10 +28,10 @@ async function main() {
 
   await safe("snapshot listener", () => onSnapshot((s: Snapshot) => island.applySnapshot(s)));
   await safe("cursor listener", () => onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y)));
-  await safe("tray listener", () =>
-    onEvent<string>("tray", (what) => {
-      if (what === "open") island.alert("home");
-    }));
+  await safe("summon listener", () => onEvent<null>("summon", () => island.summon()));
+  await safe("wake listener", () => onEvent<null>("wake", () => island.wake()));
+  await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
+  await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
   await safe("boot", () => bootSnapshot(island));
   // The pairing/settings window edits the same settings entry.

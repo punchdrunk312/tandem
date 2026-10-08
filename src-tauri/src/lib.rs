@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 mod island;
 use island::{IslandRect, PollGate};
@@ -457,6 +458,18 @@ fn quit_app(app: AppHandle) {
 
 // ------------------------------------------------------------------ shell
 
+/// Bring the top bar back (tray, hotkey, starting Tandem again). If the bar is switched
+/// off in the settings there is nothing to summon: open the settings window instead.
+fn summon_island(app: &AppHandle) {
+    let sh = app.state::<Shared>();
+    let enabled = sh.ui.lock().unwrap().enabled;
+    if enabled {
+        island::summon(app, &sh.gate);
+    } else {
+        show_main(app);
+    }
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -503,8 +516,18 @@ fn create_edge_window(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app)
+            // Starting Tandem again brings the bar back.
+            summon_island(app)
         }))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        summon_island(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -608,9 +631,23 @@ pub fn run() {
             gate.set_active(ui.enabled);
             island::spawn_cursor_poll(app.handle().clone(), gate);
 
+            // Ctrl+Alt+T: bring the top bar back from anywhere.
+            if let Err(e) = app.global_shortcut().register(Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::ALT),
+                Code::KeyT,
+            )) {
+                log_line(app.handle(), &format!("hotkey not registered: {e}"));
+            }
+
             // Tray.
             let open = MenuItem::with_id(app, "open", "Pair / settings…", true, None::<&str>)?;
-            let bar = MenuItem::with_id(app, "bar", "Show the top bar", true, None::<&str>)?;
+            let bar = MenuItem::with_id(
+                app,
+                "bar",
+                "Show the top bar  (Ctrl+Alt+T)",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&bar, &open, &quit])?;
             let mut tray = TrayIconBuilder::new()
@@ -619,9 +656,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "open" => show_main(app),
-                    "bar" => {
-                        let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open");
-                    }
+                    "bar" => summon_island(app),
                     "quit" => {
                         app.state::<AppState>().node.disconnect();
                         app.exit(0);
@@ -635,9 +670,7 @@ pub fn run() {
                         ..
                     } = ev
                     {
-                        let _ = tray
-                            .app_handle()
-                            .emit_to(island::WINDOW_LABEL, "tray", "open");
+                        summon_island(tray.app_handle());
                     }
                 });
             if let Some(icon) = app.default_window_icon() {

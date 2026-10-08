@@ -263,9 +263,40 @@ export class Island {
     this.expand(view);
   }
 
+  /** A full-screen app is in front: stay hidden unless asked. */
+  private quiet = false;
+
+  setQuiet(q: boolean) {
+    if (q === this.quiet) return;
+    this.quiet = q;
+    if (q) {
+      State.fileDragOver = false;
+      this.fsm.forceHidden();
+    }
+  }
+
+  /** Explicit request (tray, hotkey, Tandem started again, full-screen gesture). */
+  summon() {
+    this.quiet = false;
+    this.alert("home");
+  }
+
   /** Something happened: peek out of hiding for a moment. */
   reveal() {
+    if (this.quiet) return;
     this.fsm.reveal();
+  }
+
+  /** Cursor rested against the top edge near the middle: show the pill. */
+  wake() {
+    if (this.quiet) return;
+    this.fsm.reveal();
+  }
+
+  /** A file drag started in Explorer / on the desktop: open the drop view right away. */
+  dragHint(on: boolean) {
+    if (this.quiet) return;
+    this.onDragDrop({ type: on ? "enter" : "leave" });
   }
 
   private showNote(msg: string, ms = 2600) {
