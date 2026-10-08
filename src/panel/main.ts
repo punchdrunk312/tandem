@@ -246,7 +246,7 @@ function render(s: Snapshot) {
 
 onSnapshot(render);
 onFileDrop(
-  (paths) => { if (snap?.connected && paths.length) void call("send_files", { paths }); },
+  (d) => { if (snap?.connected) void d.send().catch((err) => console.error("send failed", err)); },
   (over) => { dropOver = over; showVeil(over); if (snap) renderFiles(snap); },
 );
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });

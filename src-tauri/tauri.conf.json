@@ -33,10 +33,9 @@
         "closable": false,
         "focus": false,
         "visible": false,
-        "dragDropEnabled": true,
+        "dragDropEnabled": false,
         "x": 0,
-        "y": 0,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+        "y": 0
       }
     ]
   },

@@ -15,15 +15,26 @@ async function main() {
   const island = new Island(root);
   island.applySettings();
 
-  onSnapshot((s: Snapshot) => island.applySnapshot(s));
-  await onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y));
-  await onEvent<string>("tray", (what) => {
-    if (what === "open") island.alert("home");
-  });
-  await onEvent<null>("screen-changed", () => fire("reposition"));
+  const safe = async (what: string, f: () => Promise<unknown> | unknown) => {
+    try {
+      await f();
+    } catch (err) {
+      fire("log_js", { msg: `${what}: ${String(err)}` });
+    }
+  };
+  window.addEventListener("error", (e) => fire("log_js", { msg: `error: ${e.message}` }));
+  window.addEventListener("unhandledrejection", (e) => fire("log_js", { msg: `rejection: ${String(e.reason)}` }));
 
-  await bootSnapshot(island);
+  await safe("snapshot listener", () => onSnapshot((s: Snapshot) => island.applySnapshot(s)));
+  await safe("cursor listener", () => onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y)));
+  await safe("tray listener", () =>
+    onEvent<string>("tray", (what) => {
+      if (what === "open") island.alert("home");
+    }));
+  await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
+  await safe("boot", () => bootSnapshot(island));
   island.launch();
+  fire("log_js", { msg: "island launched" });
 
   if (!IS_TAURI) document.addEventListener("click", () => Sound.resume(), { once: true });
 }

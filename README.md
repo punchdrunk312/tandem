@@ -105,3 +105,7 @@ The island's Rust side (`src-tauri/src/island.rs`, window wiring in `lib.rs`) is
 but has not been compiled or run: this environment has no Windows target. The island UI
 itself was checked in a browser with a mock backend. Expect to fix small compile or
 click-through issues on first `npm run tauri dev`.
+
+Dropped files arrive in the page as normal HTML5 file drops, are copied chunk by chunk
+into a temporary staging folder, and are sent from there. If something looks wrong,
+`tandem.log` in `%APPDATA%\dev.tandem.app\` records the island's start-up and any page errors.

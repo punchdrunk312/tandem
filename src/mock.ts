@@ -48,15 +48,9 @@ export function onEvent(name: string, cb: (p: unknown) => void) {
   events.set(name, [...(events.get(name) ?? []), cb]);
 }
 
-type DragCb = (e: { type: "enter" | "over" | "leave" | "drop"; paths?: string[] }) => void;
-const dragCbs: DragCb[] = [];
-export function onDragDrop(cb: DragCb) {
-  dragCbs.push(cb);
-}
 
 // Handy for tests / poking at the UI from the dev console.
 (window as unknown as Record<string, unknown>).__mock = {
-  drag: (type: "enter" | "over" | "leave" | "drop", paths?: string[]) => dragCbs.forEach((c) => c({ type, paths })),
   set: (patch: Partial<Snapshot>) => {
     state = { ...state, ...patch };
     push();
@@ -81,10 +75,12 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       state.clipboard_sync = !!args?.on;
       push();
       return;
-    case "send_files":
+    case "stage_begin":
+      return "mock";
+    case "stage_finish":
       state.transfers = [
         ...state.transfers,
-        { id: Date.now(), name: String((args?.paths as string[])[0]).split(/[\\/]/).pop() ?? "file", direction: "out", bytes: 0, total: 5_000_000, state: "active", message: "", path: null },
+        { id: Date.now(), name: String((args?.names as string[])[0] ?? "file"), direction: "out", bytes: 0, total: 5_000_000, state: "active", message: "", path: null },
       ];
       push();
       return;

@@ -4,7 +4,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { Snapshot } from "./types";
 import * as mock from "./mock";
 
@@ -35,18 +34,99 @@ export async function onEvent<T>(name: string, handler: (payload: T) => void) {
   else mock.onEvent(name, handler as (p: unknown) => void);
 }
 
-export interface DragDropPayload {
-  type: "enter" | "over" | "leave" | "drop";
-  paths?: string[];
+/** Files dropped on a window: HTML5 drop → copied into a staging folder → sent. */
+export interface Dropped {
+  /** Top-level items (files and folders). */
+  count: number;
+  send(): Promise<void>;
 }
 
-export async function onDragDrop(handler: (e: DragDropPayload) => void) {
-  if (IS_TAURI) {
-    await getCurrentWebview().onDragDropEvent((e) => {
-      const p = e.payload;
-      handler({ type: p.type, paths: "paths" in p ? p.paths : undefined });
-    });
-  } else {
-    mock.onDragDrop(handler);
+export interface DragDropPayload {
+  type: "enter" | "over" | "leave" | "drop";
+  drop?: Dropped;
+}
+
+const CHUNK = 4 * 1024 * 1024;
+const hex = (str: string) => Array.from(new TextEncoder().encode(str), (b) => b.toString(16).padStart(2, "0")).join("");
+
+interface Item {
+  rel: string;
+  file: File;
+}
+
+async function walk(entry: FileSystemEntry, prefix: string, out: Item[]): Promise<void> {
+  if (entry.isFile) {
+    const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
+    out.push({ rel: prefix + entry.name, file });
+  } else if (entry.isDirectory) {
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    for (;;) {
+      const batch = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej));
+      if (!batch.length) break;
+      for (const e of batch) await walk(e, `${prefix}${entry.name}/`, out);
+    }
   }
+}
+
+async function stageAndSend(tops: { name: string; entry: FileSystemEntry | null; file: File | null }[]) {
+  const items: Item[] = [];
+  for (const t of tops) {
+    if (t.entry) await walk(t.entry, "", items);
+    else if (t.file) items.push({ rel: t.file.name, file: t.file });
+  }
+  if (!items.length) return;
+  const id = await call<string>("stage_begin");
+  for (const { rel, file } of items) {
+    let off = 0;
+    do {
+      const buf = new Uint8Array(await file.slice(off, off + CHUNK).arrayBuffer());
+      if (IS_TAURI) {
+        await invoke("stage_chunk", buf, { headers: { "x-session": id, "x-path": hex(rel), "x-offset": String(off) } });
+      }
+      off += buf.length;
+    } while (off < file.size);
+  }
+  await call("stage_finish", { id, names: tops.map((t) => t.name) });
+}
+
+/** Whole-window drop handling for both windows. Works in a plain browser too. */
+export async function onDragDrop(handler: (e: DragDropPayload) => void) {
+  let depth = 0;
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  document.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth++;
+    handler({ type: "enter" });
+  });
+  document.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    handler({ type: "over" });
+  });
+  document.addEventListener("dragleave", (e) => {
+    if (!hasFiles(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) handler({ type: "leave" });
+  });
+  document.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    // Entries must be read synchronously, inside the event.
+    const tops: { name: string; entry: FileSystemEntry | null; file: File | null }[] = [];
+    const items = Array.from(e.dataTransfer?.items ?? []);
+    for (const it of items) {
+      if (it.kind !== "file") continue;
+      const entry = it.webkitGetAsEntry?.() ?? null;
+      const file = it.getAsFile();
+      const name = entry?.name ?? file?.name;
+      if (name) tops.push({ name, entry, file });
+    }
+    handler({ type: "drop", drop: { count: tops.length, send: () => stageAndSend(tops) } });
+  });
+  // Dropping on the page must never navigate away to the file.
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
 }

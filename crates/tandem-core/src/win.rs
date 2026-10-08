@@ -494,14 +494,26 @@ impl Platform for WinPlatform {
                 }
                 let nx = (p.x + dx).clamp(s.x, s.x + s.width - 1);
                 let ny = (p.y + dy).clamp(s.y, s.y + s.height - 1);
-                let ax = ((nx - s.x) as i64 * 65535 / (s.width - 1).max(1) as i64) as i32;
-                let ay = ((ny - s.y) as i64 * 65535 / (s.height - 1).max(1) as i64) as i32;
+                // Round up so the 0..65535 grid never lands one pixel short: with
+                // flooring, 1-pixel moves are swallowed and the cursor feels sticky.
+                let w = s.width.max(1) as i64;
+                let h = s.height.max(1) as i64;
+                let ax = (((nx - s.x) as i64 * 65536 + w - 1) / w).min(65535) as i32;
+                let ay = (((ny - s.y) as i64 * 65536 + h - 1) / h).min(65535) as i32;
                 send(&[mouse_input(
                     ax,
                     ay,
                     0,
                     MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
                 )]);
+                // Windows' own conversion differs slightly between versions and DPI
+                // setups; if it still missed the pixel, correct it exactly.
+                let mut q = POINT::default();
+                unsafe {
+                    if GetCursorPos(&mut q).is_ok() && (q.x != nx || q.y != ny) {
+                        let _ = SetCursorPos(nx, ny);
+                    }
+                }
             }
             InputEvent::Button { button, down } => {
                 let (f, data) = button_flags(*button, *down);

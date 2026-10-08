@@ -212,6 +212,139 @@ fn autostart_set(app: AppHandle, on: bool) -> R {
     (if on { al.enable() } else { al.disable() }).map_err(|e| e.to_string())
 }
 
+// ------------------------------------------------------------------ dropped files
+
+/// Files dropped on a window arrive as bytes (HTML5 drop). They are copied into a
+/// staging folder and sent from there.
+fn stage_root() -> PathBuf {
+    std::env::temp_dir().join("Tandem").join("out")
+}
+
+fn unhex(s: &str) -> Option<String> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
+}
+
+/// A relative path made only of plain names: no `..`, drive letters or backslashes.
+fn safe_rel(rel: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in rel.split('/') {
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.contains(['\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
+        {
+            return None;
+        }
+        out.push(part);
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+fn safe_id(id: &str) -> Option<PathBuf> {
+    (!id.is_empty() && id.len() < 40 && id.chars().all(|c| c.is_ascii_alphanumeric()))
+        .then(|| stage_root().join(id))
+}
+
+#[tauri::command]
+fn stage_begin() -> Result<String, String> {
+    let id = format!(
+        "{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    std::fs::create_dir_all(stage_root().join(&id)).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+#[tauri::command]
+fn stage_chunk(request: tauri::ipc::Request<'_>) -> R {
+    use std::io::{Seek, SeekFrom, Write};
+    let h = request.headers();
+    let get = |k: &str| h.get(k).and_then(|v| v.to_str().ok()).map(str::to_owned);
+    let dir = get("x-session")
+        .and_then(|s| safe_id(&s))
+        .ok_or("bad session")?;
+    let rel = get("x-path")
+        .and_then(|p| unhex(&p))
+        .and_then(|p| safe_rel(&p))
+        .ok_or("bad path")?;
+    let off: u64 = get("x-offset")
+        .and_then(|o| o.parse().ok())
+        .ok_or("bad offset")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw bytes".into());
+    };
+    let path = dir.join(rel);
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
+    f.write_all(bytes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn stage_finish(st: State<'_, AppState>, id: String, names: Vec<String>) -> R {
+    let dir = safe_id(&id).ok_or("bad session")?;
+    let paths: Vec<PathBuf> = names
+        .iter()
+        .filter_map(|n| safe_rel(n))
+        .map(|n| dir.join(n))
+        .filter(|p| p.exists())
+        .collect();
+    if paths.is_empty() {
+        return Err("nothing to send".into());
+    }
+    st.node.send_files(paths);
+    Ok(())
+}
+
+/// Debug trail for the island's page (JS errors, launch) — `tandem.log` in the config folder.
+#[tauri::command]
+fn log_js(app: AppHandle, msg: String) {
+    log_line(&app, &format!("js: {msg}"));
+}
+
+fn log_line(app: &AppHandle, msg: &str) {
+    use std::io::Write;
+    let Ok(dir) = app.path().app_config_dir() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("tandem.log");
+    // Keep it small: start over past 256 KB.
+    if std::fs::metadata(&path)
+        .map(|m| m.len() > 262_144)
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{secs}] {msg}");
+    }
+}
+
 // ------------------------------------------------------------------ island
 
 const PREF: &str = "primary";
@@ -255,22 +388,11 @@ fn quit_app(app: AppHandle) {
 
 // ------------------------------------------------------------------ shell
 
-const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
-
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
-    }
-    // WebView2 builds its drop target late: fix it up once the page exists.
-    for ms in [200u64, 900, 2500] {
-        let h = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(ms));
-            let h2 = h.clone();
-            let _ = h.run_on_main_thread(move || island::unblock_webview_drops(&h2));
-        });
     }
 }
 
@@ -283,10 +405,7 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .center()
         .resizable(true)
         .visible(false)
-        .drag_and_drop(true);
-    #[cfg(windows)]
-    let b = b.additional_browser_args(BROWSER_ARGS);
-    let _ = BROWSER_ARGS;
+        .disable_drag_drop_handler();
     b.build()?;
     Ok(())
 }
@@ -340,6 +459,7 @@ pub fn run() {
             });
             app.manage(AppState { node, download_dir });
 
+            let _ = std::fs::remove_dir_all(stage_root());
             let gate = Arc::new(PollGate::new());
             app.manage(Shared { gate: gate.clone() });
 
@@ -350,8 +470,18 @@ pub fn run() {
                 island::make_non_activating(&win);
                 island::apply_geometry(app.handle(), PREF, true);
                 let _ = win.show();
+                log_line(
+                    app.handle(),
+                    &format!(
+                        "island window ok: pos={:?} size={:?} visible={:?}",
+                        win.outer_position().ok(),
+                        win.outer_size().ok(),
+                        win.is_visible().ok()
+                    ),
+                );
+            } else {
+                log_line(app.handle(), "island window MISSING");
             }
-            island::unblock_webview_drops(app.handle());
             gate.set_active(true);
             island::spawn_cursor_poll(app.handle().clone(), gate, PREF);
 
@@ -407,9 +537,6 @@ pub fn run() {
                 api.prevent_close();
                 let _ = window.hide();
             }
-            WindowEvent::Focused(true) | WindowEvent::Resized(_) => {
-                island::unblock_webview_drops(window.app_handle());
-            }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
@@ -428,6 +555,10 @@ pub fn run() {
             open_downloads,
             autostart_get,
             autostart_set,
+            stage_begin,
+            stage_chunk,
+            stage_finish,
+            log_js,
             set_collapsed,
             set_island_rect,
             reposition,

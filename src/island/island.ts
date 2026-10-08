@@ -2,7 +2,7 @@
 // drag-and-drop. Adapted from Coucou's island controller, with Tandem's status,
 // actions and "drop a file on Mochi to send it" in place of the Claude views.
 
-import { call, fire, IS_TAURI, onDragDrop, type DragDropPayload } from "../bridge";
+import { call, fire, IS_TAURI, onDragDrop, type DragDropPayload, type Dropped } from "../bridge";
 import { Spring, Tracked } from "../core/anim";
 import {
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_W, ROUNDED_CORNER,
@@ -300,8 +300,8 @@ export class Island {
       }
       case "drop": {
         State.fileDragOver = false;
-        const paths = e.paths ?? [];
-        if (!paths.length) {
+        const dropped = e.drop;
+        if (!dropped?.count) {
           this.engine.animateMorph(0);
           this.setView("home");
           return;
@@ -312,15 +312,18 @@ export class Island {
           this.showNote("Connect to a computer first — then drop again.");
           return;
         }
-        this.swallow(paths);
+        this.swallow(dropped);
         break;
       }
     }
   }
 
   /** Mochi eats the file(s); the transfer itself runs in Rust. */
-  private swallow(paths: string[]) {
-    fire("send_files", { paths });
+  private swallow(dropped: Dropped) {
+    dropped.send().catch(() => {
+      Sound.play("error");
+      this.showNote("Couldn't read that file.");
+    });
     this.engine.gulp();
     Sound.play("approve");
     this.engine.triggerEmote("happy");

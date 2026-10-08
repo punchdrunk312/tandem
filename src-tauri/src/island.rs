@@ -104,14 +104,12 @@ pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
 
 #[cfg(windows)]
 mod sys {
-    use tauri::{AppHandle, Manager, WebviewWindow};
-    use windows::core::BOOL;
-    use windows::Win32::Foundation::{HWND, LPARAM, POINT};
-    use windows::Win32::System::Ole::RevokeDragDrop;
+    use tauri::WebviewWindow;
+    use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, GetClassNameW, GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW,
-        GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
     };
 
     pub fn cursor_physical() -> Option<(f64, f64)> {
@@ -144,45 +142,12 @@ mod sys {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
         }
     }
-
-    unsafe extern "system" fn revoke_render_widget(hwnd: HWND, _: LPARAM) -> BOOL {
-        let mut name = [0u16; 64];
-        let len = unsafe { GetClassNameW(hwnd, &mut name) };
-        if len > 0 {
-            let class = String::from_utf16_lossy(&name[..len as usize]);
-            if class == "Chrome_RenderWidgetHostHWND" {
-                let _ = unsafe { RevokeDragDrop(hwnd) };
-            }
-        }
-        true.into()
-    }
-
-    /// Lets dropped files reach the app again.
-    ///
-    /// wry installs its drop target by walking the webview's child windows **once**,
-    /// when the webview is created. WebView2 creates `Chrome_RenderWidgetHostHWND`
-    /// later and registers its own target on it; being the innermost window, that one
-    /// wins, and since the page has no HTML5 drop handler it refuses everything — the
-    /// "no drop" cursor, with nothing reaching Tauri. Revoking it makes OLE fall
-    /// through to the target wry registered on the parent widget, which is the one
-    /// that feeds Tauri's drag events. Cheap and idempotent.
-    pub fn unblock_webview_drops(app: &AppHandle, labels: &[&str]) {
-        for label in labels {
-            let Some(win) = app.get_webview_window(label) else {
-                continue;
-            };
-            let Some(hwnd) = hwnd_of(&win) else { continue };
-            unsafe {
-                let _ = EnumChildWindows(Some(hwnd), Some(revoke_render_widget), LPARAM(0));
-            }
-        }
-    }
 }
 
 /// Non-Windows stand-ins so the crate still type-checks for UI development.
 #[cfg(not(windows))]
 mod sys {
-    use tauri::{AppHandle, WebviewWindow};
+    use tauri::WebviewWindow;
     pub fn cursor_physical() -> Option<(f64, f64)> {
         None
     }
@@ -190,14 +155,9 @@ mod sys {
         false
     }
     pub fn make_non_activating(_: &WebviewWindow) {}
-    pub fn unblock_webview_drops(_: &AppHandle, _: &[&str]) {}
 }
 
 pub use sys::make_non_activating;
-
-pub fn unblock_webview_drops(app: &AppHandle) {
-    sys::unblock_webview_drops(app, &[WINDOW_LABEL, "main"]);
-}
 
 // ------------------------------------------------------------------ geometry
 
@@ -273,7 +233,10 @@ fn current_screen_key(app: &AppHandle, pref: &str) -> Option<(i32, i32, u32, u32
 /// visible. Parked on a condvar the rest of the time.
 pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>, pref: &'static str) {
     std::thread::spawn(move || {
-        let mut was_down = false;
+        let mut was_near = false;
+        let mut last_collapsed = true;
+        let mut last_key = (0.0, 0.0, 0.0, 0.0, false, true);
+        let mut geo: Option<(f64, f64, f64, f64, f64)> = None;
         // Remembered across wakes so a display change while hidden is noticed the
         // moment the island comes back.
         let mut last_screen: Option<(i32, i32, u32, u32, u64)> = None;
@@ -281,6 +244,7 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>, pref: &'static str
             gate.wait_until_active();
             let mut last = (f64::MIN, f64::MIN);
             let mut ticks: u32 = 0;
+            geo = None;
             while gate.is_active() {
                 std::thread::sleep(Duration::from_millis(16));
 
@@ -301,47 +265,54 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>, pref: &'static str
                 }
 
                 let Some(win) = window(&app) else { continue };
-                let Ok(origin) = win.outer_position() else {
-                    continue;
-                };
-                let scale = win.scale_factor().unwrap_or(1.0);
                 let Some((cx, cy)) = sys::cursor_physical() else {
                     continue;
                 };
-                let x = (cx - origin.x as f64) / scale;
-                let y = (cy - origin.y as f64) / scale;
-                let size = match win.inner_size() {
-                    Ok(s) => (s.width as f64 / scale, s.height as f64 / scale),
-                    Err(_) => (PANEL_W, PANEL_H),
+
+                // Window origin / scale / size change rarely, and each query is a round
+                // trip to the UI thread — so refresh them a few times a second only, or
+                // right after the window was resized.
+                let collapsed = gate.collapsed.load(Ordering::Relaxed);
+                if geo.is_none() || ticks % 10 == 0 || collapsed != last_collapsed {
+                    last_collapsed = collapsed;
+                    if let (Ok(o), Ok(sz)) = (win.outer_position(), win.inner_size()) {
+                        let sc = win.scale_factor().unwrap_or(1.0);
+                        geo = Some((
+                            o.x as f64,
+                            o.y as f64,
+                            sc,
+                            sz.width as f64 / sc,
+                            sz.height as f64 / sc,
+                        ));
+                    }
+                }
+                let Some((ox, oy, scale, w, h)) = geo else {
+                    continue;
                 };
-                if (x - last.0).abs() < 1.0 && (y - last.1).abs() < 1.0 {
+                let x = (cx - ox) / scale;
+                let y = (cy - oy) / scale;
+
+                let r = *gate.rect.lock().unwrap();
+                let down = sys::left_button_down();
+                let key = (r.x, r.y, r.w, r.h, down, collapsed);
+                if (x - last.0).abs() < 1.0 && (y - last.1).abs() < 1.0 && key == last_key {
                     continue;
                 }
                 last = (x, y);
+                last_key = key;
 
                 // Click-through: the window only takes the mouse over the island shape.
-                let r = *gate.rect.lock().unwrap();
                 let on_island = r.w > 0.0
                     && x >= r.x - HIT_MARGIN
                     && x <= r.x + r.w + HIT_MARGIN
                     && y >= r.y - HIT_MARGIN
                     && y <= r.y + r.h + HIT_MARGIN;
 
-                // A file being dragged has to be able to find us. WS_EX_TRANSPARENT —
-                // what click-through is on Windows — hides the window from
-                // WindowFromPoint, so OLE finds no drop target and shows the "no drop"
-                // cursor. So while a button is held anywhere over the panel, the whole
-                // panel takes the mouse, which also makes the drop zone forgiving.
-                // A press may be the start of a drag: make sure the drop target is ours
-                // before the file arrives.
-                let down = sys::left_button_down();
-                if down && !was_down {
-                    let handle = app.clone();
-                    let _ = app.run_on_main_thread(move || unblock_webview_drops(&handle));
-                }
-                was_down = down;
-
-                let dragging = down && x >= 0.0 && x <= size.0 && y >= 0.0 && y <= size.1;
+                // A file being dragged has to be able to find us. Click-through
+                // (WS_EX_TRANSPARENT) hides the window from OLE's drop-target search, so
+                // while a button is held over the window the whole window takes the
+                // mouse — which also makes the drop zone forgiving.
+                let dragging = down && x >= 0.0 && x <= w && y >= 0.0 && y <= h;
 
                 let accept = on_island || dragging;
                 if gate.ignoring.load(Ordering::Relaxed) == accept {
@@ -349,7 +320,15 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>, pref: &'static str
                     let _ = win.set_ignore_cursor_events(!accept);
                 }
 
-                let _ = win.emit("cursor", CursorPayload { x, y });
+                // While the island sleeps it only needs to hear about the cursor near
+                // its wake strip; everything else would just be 60 events a second of
+                // pointless work (and lag on a slow machine).
+                let near = !collapsed
+                    || (y >= -8.0 && y <= STRIP_H + 60.0 && x >= -80.0 && x <= STRIP_W + 80.0);
+                if near || was_near {
+                    let _ = win.emit("cursor", CursorPayload { x, y });
+                }
+                was_near = near;
             }
         }
     });
