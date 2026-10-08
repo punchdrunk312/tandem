@@ -503,6 +503,7 @@ impl Node {
             session: None,
             dialing_since: None,
             last_dial: HashMap::new(),
+            no_auto_until: None,
             last_clip_sig: None,
         };
         tokio::spawn(actor.run(ev_rx));
@@ -769,6 +770,8 @@ struct Actor {
     session: Option<Session>,
     dialing_since: Option<Instant>,
     last_dial: HashMap<String, Instant>,
+    /// After a deliberate disconnect (either side) nobody redials for a while.
+    no_auto_until: Option<Instant>,
     last_clip_sig: Option<u64>,
 }
 
@@ -883,6 +886,9 @@ impl Actor {
     /// dials, so two computers don't dial each other at the same time.
     fn auto_connect(&mut self) {
         if self.session.is_some() || self.dialing_since.is_some() {
+            return;
+        }
+        if self.no_auto_until.is_some_and(|t| Instant::now() < t) {
             return;
         }
         let per = self.sh.persisted.lock().unwrap().clone();
@@ -1076,7 +1082,10 @@ impl Actor {
         match m {
             Msg::Ping => self.send(Msg::Pong),
             Msg::Pong => {}
-            Msg::Bye => self.drop_session("peer closed the connection"),
+            Msg::Bye => {
+                self.no_auto_until = Some(Instant::now() + Duration::from_secs(10));
+                self.drop_session("peer closed the connection")
+            }
             Msg::Layout { peer_side } => {
                 let mine = peer_side.opposite();
                 self.apply_side(mine, false);
@@ -1172,12 +1181,14 @@ impl Actor {
     fn on_cmd(&mut self, c: Cmd) {
         match c {
             Cmd::Connect { addr, port, code } => {
+                self.no_auto_until = None;
                 if self.session.is_none() {
                     self.sh.set_error(None);
                     self.start_dial(SocketAddr::new(addr, port), ClientAuth::Pair { code });
                 }
             }
             Cmd::ConnectKnown { peer_id } => {
+                self.no_auto_until = None;
                 let per = self.sh.persisted.lock().unwrap().clone();
                 let Some(p) = per.peers.iter().find(|p| p.id == peer_id) else {
                     return;
@@ -1200,6 +1211,7 @@ impl Actor {
                 }
             }
             Cmd::Disconnect => {
+                self.no_auto_until = Some(Instant::now() + Duration::from_secs(30));
                 self.send(Msg::Bye);
                 self.drop_session("");
             }
