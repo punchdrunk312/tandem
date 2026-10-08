@@ -1,0 +1,41 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  portable:
+    name: core tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci && npm run build
+
+  windows:
+    name: Windows build (input hooks + installer)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      # This is the job that compiles src/win.rs — the Windows hook/clipboard layer.
+      - run: cargo clippy -p tandem-core -p tandem-cli --all-targets -- -D warnings
+      - run: cargo test -p tandem-core -p tandem-cli
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tandem-windows
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/tandem.exe

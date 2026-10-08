@@ -1,0 +1,15 @@
+[package]
+name = "tandem-cli"
+description = "Headless Tandem: pair and share mouse/keyboard from a terminal (also handy for debugging)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tandem"
+path = "src/main.rs"
+
+[dependencies]
+tandem-core = { path = "../tandem-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "signal", "time"] }
+serde_json = "1"
