@@ -1,0 +1,195 @@
+/* Tandem island — the black shape at the top of the screen (Mochi lives here). */
+
+:root {
+  color-scheme: dark;
+  --font: system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --ink: #f5f6f8;
+  --dim: #9398a1;
+  --dim-2: #6b7079;
+  --teal: #2dd4bf;
+  --amber: #fbbf24;
+  --red: #f4505e;
+  --red-text: #ff8d97;
+  --green: #22c55e;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: var(--font);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+/* In a plain browser there is no desktop behind the island: give it one. */
+html.dev body { background: #2b2f38; }
+
+#root { position: fixed; inset: 0; }
+
+/* Invisible strip that wakes the island when it is hidden. */
+#wake-strip {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 6px;
+  background: transparent;
+}
+
+#island {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  background: #000;
+  border-radius: 0 0 14px 14px;
+  overflow: visible;
+  will-change: width, height, transform;
+}
+
+#island-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+#bot-canvas, #greeting-canvas { position: absolute; pointer-events: none; }
+
+#bot-glow {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+  filter: blur(6px);
+  transition: opacity 0.4s ease-in-out, background 0.4s ease-in-out;
+}
+
+#compact-label {
+  position: absolute;
+  white-space: nowrap;
+  max-width: 216px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 18px;
+  color: #c9ccd3;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+}
+
+#content {
+  position: absolute;
+  inset: 0;
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  transition: opacity 0.2s ease-in-out;
+}
+
+/* ── header ─────────────────────────────────────────────────────────────── */
+
+#header {
+  height: 34px;
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 12px;
+}
+#header .spacer { flex: 1; }
+.hd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim-2); margin-right: 8px; transition: background 0.3s; }
+.hd-dot.on { background: var(--green); box-shadow: 0 0 8px rgba(34, 197, 94, 0.7); }
+.hd-title { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--dim); }
+
+.icon-btn {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  background: none; border: none; border-radius: 8px;
+  color: var(--dim); cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.icon-btn:hover { background: rgba(255, 255, 255, 0.09); color: var(--ink); }
+.icon-btn:focus-visible, .btn:focus-visible, .side-btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+
+/* ── views ──────────────────────────────────────────────────────────────── */
+
+#views { position: relative; flex: 1 1 auto; min-height: 0; }
+
+.view {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(0.97);
+  pointer-events: none;
+  transition: opacity 0.16s ease-in;
+}
+.view.on {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity 0.2s ease-out 0.06s;
+}
+
+/* home */
+.h-text { position: absolute; left: 96px; right: 150px; top: 2px; }
+.h-title { font-size: 18px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-sub { font-size: 12.5px; line-height: 1.4; color: var(--dim); margin-top: 3px; min-height: 35px; }
+.h-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+.btn {
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 6px 13px;
+  border: none; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1); color: var(--ink);
+  cursor: pointer; white-space: nowrap;
+  transition: background 0.12s;
+}
+.btn:hover { background: rgba(255, 255, 255, 0.18); }
+.btn.primary { background: var(--ink); color: #000; }
+.btn.primary:hover { background: #fff; }
+
+.side-pick {
+  position: absolute; right: 22px; top: 6px;
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  grid-template-rows: repeat(3, 26px);
+  gap: 3px;
+}
+.side-btn {
+  border: none; border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07); color: var(--dim);
+  font-size: 10px; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.side-btn:hover { background: rgba(255, 255, 255, 0.16); color: var(--ink); }
+.side-btn.on { background: var(--teal); color: #04201c; }
+.side-me { grid-area: 2 / 2; display: grid; place-items: center; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim-2); }
+.at-top { grid-area: 1 / 2; } .at-left { grid-area: 2 / 1; } .at-right { grid-area: 2 / 3; } .at-bottom { grid-area: 3 / 2; }
+
+.xfers { position: absolute; left: 20px; right: 20px; top: 112px; }
+.xfer { display: flex; gap: 10px; height: 40px; align-items: flex-start; }
+.x-dir { font-size: 13px; color: var(--dim); width: 12px; padding-top: 1px; }
+.x-body { flex: 1; min-width: 0; }
+.x-top { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.x-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.x-state { margin-left: auto; color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+.x-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.1); margin-top: 5px; overflow: hidden; }
+.x-bar > i { display: block; height: 100%; width: 0; background: var(--teal); border-radius: 2px; transition: width 0.15s; }
+.xfer.done .x-bar > i { background: var(--green); }
+.xfer.error .x-bar > i { background: var(--red); }
+.x-msg { color: var(--red-text); font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* drop */
+.d-text { position: absolute; left: 190px; right: 30px; top: 18px; }
+.d-title { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+.d-sub { font-size: 12.5px; color: var(--dim); margin-top: 4px; }
+.drop.bad .d-title { color: var(--red-text); }
+
+/* note */
+.n-msg { position: absolute; left: 100px; right: 30px; top: 16px; font-size: 16px; font-weight: 600; line-height: 1.35; }

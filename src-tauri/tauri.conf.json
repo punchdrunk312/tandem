@@ -17,27 +17,47 @@
     },
     "windows": [
       {
-        "label": "main",
+        "label": "island",
         "title": "Tandem",
         "url": "index.html",
-        "width": 460,
-        "height": 780,
-        "minWidth": 400,
-        "minHeight": 560,
-        "center": true,
-        "resizable": true,
-        "dragDropEnabled": true
+        "width": 240,
+        "height": 6,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "focus": false,
+        "visible": false,
+        "dragDropEnabled": true,
+        "x": 0,
+        "y": 0,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
       }
     ]
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico"],
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
     "category": "Utility",
     "shortDescription": "Share one mouse and keyboard between two computers",
     "windows": {
-      "nsis": { "installMode": "currentUser" }
+      "nsis": {
+        "installMode": "currentUser"
+      }
     }
   }
 }

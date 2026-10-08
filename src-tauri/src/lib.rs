@@ -9,8 +9,16 @@ use tandem_core::proto::{Edge, DEFAULT_TCP_PORT, DISCOVERY_PORT};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
+
+mod island;
+use island::{IslandRect, PollGate};
+
+struct Shared {
+    gate: Arc<PollGate>,
+}
 
 struct AppState {
     node: Node,
@@ -204,7 +212,50 @@ fn autostart_set(app: AppHandle, on: bool) -> R {
     (if on { al.enable() } else { al.disable() }).map_err(|e| e.to_string())
 }
 
+// ------------------------------------------------------------------ island
+
+const PREF: &str = "primary";
+
+#[tauri::command]
+fn set_collapsed(app: AppHandle, sh: State<'_, Shared>, collapsed: bool) {
+    sh.gate
+        .collapsed
+        .store(collapsed, std::sync::atomic::Ordering::Relaxed);
+    island::apply_geometry(&app, PREF, collapsed);
+    sh.gate.forget_ignore_state();
+}
+
+#[tauri::command]
+fn set_island_rect(sh: State<'_, Shared>, x: f64, y: f64, width: f64, height: f64) {
+    sh.gate.set_rect(IslandRect {
+        x,
+        y,
+        w: width,
+        h: height,
+    });
+}
+
+#[tauri::command]
+fn reposition(app: AppHandle, sh: State<'_, Shared>) {
+    let c = sh.gate.collapsed.load(std::sync::atomic::Ordering::Relaxed);
+    island::apply_geometry(&app, PREF, c);
+    sh.gate.forget_ignore_state();
+}
+
+#[tauri::command]
+fn open_main_window(app: AppHandle) {
+    show_main(&app);
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.state::<AppState>().node.disconnect();
+    app.exit(0);
+}
+
 // ------------------------------------------------------------------ shell
+
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -212,6 +263,23 @@ fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+}
+
+/// The pairing / settings window: created hidden, hides instead of closing.
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("settings.html".into()))
+        .title("Tandem")
+        .inner_size(460.0, 780.0)
+        .min_inner_size(400.0, 560.0)
+        .center()
+        .resizable(true)
+        .visible(false)
+        .drag_and_drop(true);
+    #[cfg(windows)]
+    let b = b.additional_browser_args(BROWSER_ARGS);
+    let _ = BROWSER_ARGS;
+    b.build()?;
+    Ok(())
 }
 
 pub fn run() {
@@ -263,16 +331,35 @@ pub fn run() {
             });
             app.manage(AppState { node, download_dir });
 
+            let gate = Arc::new(PollGate::new());
+            app.manage(Shared { gate: gate.clone() });
+
+            create_main_window(app)?;
+
+            // Island: borderless, transparent, never takes focus.
+            if let Some(win) = island::window(app.handle()) {
+                island::make_non_activating(&win);
+                island::apply_geometry(app.handle(), PREF, true);
+                let _ = win.show();
+            }
+            island::unblock_webview_drops(app.handle());
+            gate.set_active(true);
+            island::spawn_cursor_poll(app.handle().clone(), gate, PREF);
+
             // Tray.
-            let open = MenuItem::with_id(app, "open", "Open Tandem", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "Pair / settings…", true, None::<&str>)?;
+            let bar = MenuItem::with_id(app, "bar", "Show the top bar", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let menu = Menu::with_items(app, &[&bar, &open, &quit])?;
             let mut tray = TrayIconBuilder::new()
                 .tooltip("Tandem")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "open" => show_main(app),
+                    "bar" => {
+                        let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open");
+                    }
                     "quit" => {
                         app.state::<AppState>().node.disconnect();
                         app.exit(0);
@@ -286,7 +373,9 @@ pub fn run() {
                         ..
                     } = ev
                     {
-                        show_main(tray.app_handle());
+                        let _ = tray
+                            .app_handle()
+                            .emit_to(island::WINDOW_LABEL, "tray", "open");
                     }
                 });
             if let Some(icon) = app.default_window_icon() {
@@ -294,15 +383,16 @@ pub fn run() {
             }
             tray.build(app)?;
 
-            // Started by "Start with Windows": stay in the tray.
-            if std::env::args().any(|a| a == "--hidden") {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
+            // First run: show the pairing window unless started by "Start with Windows".
+            if !std::env::args().any(|a| a == "--hidden") {
+                let paired = app.state::<AppState>().node.snapshot().paired.is_empty();
+                if paired {
+                    show_main(app.handle());
                 }
             }
             Ok(())
         })
-        // Closing the window keeps Tandem running in the tray (the hooks must stay alive).
+        // Closing the pairing window keeps Tandem running (the hooks must stay alive).
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
@@ -325,6 +415,11 @@ pub fn run() {
             open_downloads,
             autostart_get,
             autostart_set,
+            set_collapsed,
+            set_island_rect,
+            reposition,
+            open_main_window,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tandem");

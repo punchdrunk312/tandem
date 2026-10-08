@@ -3685,6 +3685,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tokio",
+ "windows 0.61.3",
 ]
 
 [[package]]

@@ -60,6 +60,19 @@ On non-Windows systems the input layer is an in-memory stand-in, so pairing,
 clipboard and file transfer can be developed and tested anywhere
 (`npm run dev` in a browser even uses a mocked backend: `#offline`, `#connected`, `#remote`, `#controlled`).
 
+## The top bar (Mochi)
+
+A black island sits at the top centre of your main screen with Mochi, the little bot
+from Coucou. Move the cursor to the top edge to wake it.
+
+- **Drag a file onto it** → Mochi swallows it and sends it to the connected computer.
+- Shows connection state, which side the other PC is on, and live transfers.
+- Gear icon opens the pairing / settings window; the tray icon does the same.
+- No AI features — those were removed from the Coucou code.
+
+Mochi and the island come from Coucou and are for private use only; do not publish
+this repo or ship it under Coucou's name or assets.
+
 ## Status — read this
 
 Verified automatically (Linux): handshake/pairing, wrong-code rejection, encrypted
@@ -87,3 +100,8 @@ hooks without any UI), then the app.
   events before it crosses (so scrollbars and window borders at the edge stay usable);
   dragging with a button held never crosses.
 * The installer is unsigned, so SmartScreen will warn.
+
+The island's Rust side (`src-tauri/src/island.rs`, window wiring in `lib.rs`) is written
+but has not been compiled or run: this environment has no Windows target. The island UI
+itself was checked in a browser with a mock backend. Expect to fix small compile or
+click-through issues on first `npm run tauri dev`.

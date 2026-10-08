@@ -1,9 +1,10 @@
 // Browser-only stand-in for the Rust side, so the UI can be developed (and
 // screenshotted) without Tauri. Pick a scenario with the URL hash:
-//   #offline  #connected  #remote  #controlled
+//   #offline  #pair  #connected  #remote  #controlled   (+ "&xfer" for transfers)
 import type { Snapshot } from "./types";
 
-const scenario = (location.hash || "#offline").slice(1);
+const hash = (location.hash || "#offline").slice(1);
+const [scenario, ...flags] = hash.split("&");
 const base: Snapshot = {
   device_id: "a1b2c3d4e5f60718",
   device_name: "DESKTOP-WORK",
@@ -12,42 +13,62 @@ const base: Snapshot = {
   control: "offline",
   connected: null,
   paired: [],
-  nearby: [
-    { id: "n1", name: "LAPTOP-HOME", addr: "192.168.1.42", port: 24800, paired: false },
-    { id: "n2", name: "Studio-PC", addr: "192.168.1.57", port: 24800, paired: true },
-  ],
+  nearby: [],
   transfers: [],
   clipboard_sync: true,
   error: null,
 };
 let state: Snapshot = { ...base };
-if (scenario !== "offline") {
+if (scenario === "pair") {
+  state.nearby = [{ id: "n1", name: "LAPTOP-HOME", addr: "192.168.1.42", port: 24800, paired: false }];
+} else if (scenario !== "offline") {
   state = {
     ...base,
     control: scenario === "connected" ? "local" : (scenario as Snapshot["control"]),
     connected: { id: "n2", name: "Studio-PC" },
     paired: [{ id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true }],
-    nearby: [],
-    transfers: [
-      { id: 1, name: "holiday-photos", direction: "out", bytes: 48_000_000, total: 120_000_000, state: "active", message: "", path: null },
-      { id: 2, name: "invoice.pdf", direction: "in", bytes: 220_000, total: 220_000, state: "done", message: "", path: "C:\\Users\\me\\Downloads\\Tandem" },
-      { id: 3, name: "movie.mkv", direction: "in", bytes: 0, total: 4_000_000_000, state: "error", message: "Copied files are too large to sync automatically — use Send files", path: null },
-    ],
   };
 }
+if (flags.includes("xfer")) {
+  state.transfers = [
+    { id: 1, name: "holiday-photos", direction: "out", bytes: 48_000_000, total: 120_000_000, state: "active", message: "", path: null },
+    { id: 2, name: "invoice.pdf", direction: "in", bytes: 220_000, total: 220_000, state: "done", message: "", path: "C:\\Users\\me\\Downloads\\Tandem" },
+  ];
+}
 const listeners: ((s: Snapshot) => void)[] = [];
-const push = () => listeners.forEach((l) => l({ ...state }));
+const push = () => listeners.forEach((l) => l(structuredClone(state)));
 
 export function onSnapshot(cb: (s: Snapshot) => void) {
   listeners.push(cb);
-  setTimeout(() => cb({ ...state }), 0);
+  setTimeout(() => cb(structuredClone(state)), 0);
 }
+
+const events = new Map<string, ((p: unknown) => void)[]>();
+export function onEvent(name: string, cb: (p: unknown) => void) {
+  events.set(name, [...(events.get(name) ?? []), cb]);
+}
+
+type DragCb = (e: { type: "enter" | "over" | "leave" | "drop"; paths?: string[] }) => void;
+const dragCbs: DragCb[] = [];
+export function onDragDrop(cb: DragCb) {
+  dragCbs.push(cb);
+}
+
+// Handy for tests / poking at the UI from the dev console.
+(window as unknown as Record<string, unknown>).__mock = {
+  drag: (type: "enter" | "over" | "leave" | "drop", paths?: string[]) => dragCbs.forEach((c) => c({ type, paths })),
+  set: (patch: Partial<Snapshot>) => {
+    state = { ...state, ...patch };
+    push();
+  },
+  state: () => state,
+};
 
 export async function call(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   console.log("[mock]", cmd, args);
   switch (cmd) {
     case "snapshot":
-      return { ...state };
+      return structuredClone(state);
     case "set_side": {
       const s = String(args?.side);
       state.paired = state.paired.map((p) => ({ ...p, side: (s[0].toUpperCase() + s.slice(1)) as never }));
@@ -58,6 +79,13 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       return true;
     case "set_clipboard_sync":
       state.clipboard_sync = !!args?.on;
+      push();
+      return;
+    case "send_files":
+      state.transfers = [
+        ...state.transfers,
+        { id: Date.now(), name: String((args?.paths as string[])[0]).split(/[\\/]/).pop() ?? "file", direction: "out", bytes: 0, total: 5_000_000, state: "active", message: "", path: null },
+      ];
       push();
       return;
     case "connect":
