@@ -28,8 +28,8 @@ async function main() {
 
   await safe("snapshot listener", () => onSnapshot((s: Snapshot) => island.applySnapshot(s)));
   await safe("cursor listener", () => onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y)));
-  await safe("summon listener", () => onEvent<null>("summon", () => island.summon()));
-  await safe("wake listener", () => onEvent<null>("wake", () => island.wake()));
+  await safe("hotkey listener", () => onEvent<"bar" | "pill">("hotkey", (what) => island.hotkey(what)));
+  await safe("note listener", () => onEvent<string>("note", (msg) => island.note(msg)));
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));

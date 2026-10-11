@@ -61,6 +61,8 @@ export function onEvent(name: string, cb: (p: unknown) => void) {
   state: () => state,
 };
 
+let shellMenuOn = false;
+
 export async function call(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   console.log("[mock]", cmd, args);
   switch (cmd) {
@@ -74,6 +76,11 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
     }
     case "autostart_get":
       return true;
+    case "shell_menu_get":
+      return shellMenuOn;
+    case "shell_menu_set":
+      shellMenuOn = !!args?.on;
+      return;
     case "ui_get":
       return { enabled: true, hide_fullscreen: true, monitor_cursor: false };
     case "set_game_mode":

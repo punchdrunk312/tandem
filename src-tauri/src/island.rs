@@ -5,7 +5,7 @@
 // is a black shape drawn at the top centre of the main display inside a
 // borderless, transparent, always-on-top window that never takes focus.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -50,9 +50,6 @@ pub struct PollGate {
     pub rect: Mutex<IslandRect>,
     /// Mirrors the window flag so we only call into Win32 when it changes.
     ignoring: AtomicBool,
-    /// Which screen edge leads to the connected computer: 0 none, 1 left, 2 right,
-    /// 3 top, 4 bottom. Drives the drag-across-the-edge strip.
-    pub peer_edge: AtomicU8,
     /// Island goes to sleep while a full-screen app is in front.
     pub hide_fullscreen: AtomicBool,
     /// Follow the cursor to whichever display it is on (otherwise: primary display).
@@ -75,7 +72,6 @@ impl PollGate {
             collapsed: AtomicBool::new(true),
             rect: Mutex::new(IslandRect::default()),
             ignoring: AtomicBool::new(false),
-            peer_edge: AtomicU8::new(0),
             hide_fullscreen: AtomicBool::new(true),
             monitor_cursor: AtomicBool::new(false),
             reveal_until_ms: AtomicU64::new(0),
@@ -127,7 +123,7 @@ pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
 mod sys {
     use tauri::WebviewWindow;
     use windows::Win32::Foundation::{HWND, POINT};
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_SPACE};
     use windows::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
         WS_EX_TOOLWINDOW,
@@ -165,6 +161,10 @@ mod sys {
         unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
     }
 
+    pub fn space_down() -> bool {
+        unsafe { (GetAsyncKeyState(VK_SPACE.0 as i32) as u16 & 0x8000) != 0 }
+    }
+
     fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
         let raw = win.hwnd().ok()?.0 as isize;
         if raw == 0 {
@@ -193,6 +193,9 @@ mod sys {
         None
     }
     pub fn left_button_down() -> bool {
+        false
+    }
+    pub fn space_down() -> bool {
         false
     }
     pub fn fullscreen_app_active() -> bool {
@@ -279,87 +282,20 @@ fn current_screen_key(app: &AppHandle, pref: &str) -> Option<(i32, i32, u32, u32
     ))
 }
 
-// ------------------------------------------------------------------ edge drop strip
-
-/// Logical thickness of the strip that appears along the edge facing the other
-/// computer while a drag is in flight. Dropping a file on it sends the file.
-const EDGE_STRIP: f64 = 72.0;
-pub const EDGE_LABEL: &str = "edge";
-
-/// Bounding box of all displays, physical pixels: (x, y, width, height).
-fn virtual_screen(app: &AppHandle) -> Option<(i32, i32, i32, i32)> {
-    let ms = app.available_monitors().ok()?;
-    let mut it = ms.iter();
-    let first = it.next()?;
-    let (mut l, mut t) = (first.position().x, first.position().y);
-    let (mut r, mut b) = (
-        l + first.size().width as i32,
-        t + first.size().height as i32,
-    );
-    for m in it {
-        l = l.min(m.position().x);
-        t = t.min(m.position().y);
-        r = r.max(m.position().x + m.size().width as i32);
-        b = b.max(m.position().y + m.size().height as i32);
-    }
-    Some((l, t, r - l, b - t))
-}
-
-/// Pixels between the cursor and `edge` of the virtual screen (negative: outside).
-fn edge_distance(edge: u8, vs: (i32, i32, i32, i32), cx: f64, cy: f64) -> f64 {
-    match edge {
-        1 => cx - vs.0 as f64,
-        2 => (vs.0 + vs.2 - 1) as f64 - cx,
-        3 => cy - vs.1 as f64,
-        _ => (vs.1 + vs.3 - 1) as f64 - cy,
-    }
-}
-
-fn show_edge_strip(app: &AppHandle, edge: u8, vs: (i32, i32, i32, i32), scale: f64) {
-    let Some(w) = app.get_webview_window(EDGE_LABEL) else {
-        return;
-    };
-    let t = (EDGE_STRIP * scale).round() as i32;
-    let (x, y, wd, ht) = match edge {
-        1 => (vs.0, vs.1, t, vs.3),
-        2 => (vs.0 + vs.2 - t, vs.1, t, vs.3),
-        3 => (vs.0, vs.1, vs.2, t),
-        _ => (vs.0, vs.1 + vs.3 - t, vs.2, t),
-    };
-    let _ = w.set_size(PhysicalSize::new(wd.max(1) as u32, ht.max(1) as u32));
-    let _ = w.set_position(PhysicalPosition::new(x, y));
-    let _ = w.set_ignore_cursor_events(false);
-    let _ = w.emit(
-        "edge-side",
-        match edge {
-            1 => "left",
-            2 => "right",
-            3 => "top",
-            _ => "bottom",
-        },
-    );
-    sys::show_no_activate(&w);
-    let _ = w.set_always_on_top(true);
-}
-
-fn hide_edge_strip(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(EDGE_LABEL) {
-        let _ = w.set_ignore_cursor_events(true);
-        let _ = w.hide();
-    }
-}
-
 pub fn now_ms() -> u64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-/// Bring the island back, whatever state it is in: the tray icon, the hotkey, starting
-/// Tandem a second time and the full-screen "rest at the top" gesture all end up here.
-/// Re-asserts geometry and z-order so even a mis-placed window is recovered.
-pub fn summon(app: &AppHandle, gate: &PollGate) {
+/// How long a hotkey keeps the bar available inside a full-screen app.
+const REVEAL_MS: u64 = 10_000;
+
+/// A hotkey was pressed: `what` is "bar" (Ctrl+Alt+T, the control bar) or "pill"
+/// (Ctrl+Alt+U, the transfer bar). The page decides what to show or hide; this makes
+/// sure the window is in place, on top and allowed to show even in a full-screen app.
+pub fn hotkey(app: &AppHandle, gate: &PollGate, what: &'static str) {
     gate.reveal_until_ms
-        .store(now_ms() + 10_000, Ordering::Relaxed);
+        .store(now_ms() + REVEAL_MS, Ordering::Relaxed);
     if let Some(win) = window(app) {
         apply_geometry(app, gate.pref(), gate.collapsed.load(Ordering::Relaxed));
         gate.forget_ignore_state();
@@ -368,7 +304,12 @@ pub fn summon(app: &AppHandle, gate: &PollGate) {
         let _ = win.set_always_on_top(true);
     }
     gate.set_active(true);
-    let _ = app.emit_to(WINDOW_LABEL, "summon", ());
+    let _ = app.emit_to(WINDOW_LABEL, "hotkey", what);
+}
+
+/// The page closed the bar again: a full-screen app gets its screen back at once.
+pub fn end_reveal(gate: &PollGate) {
+    gate.reveal_until_ms.store(0, Ordering::Relaxed);
 }
 
 /// Window classes whose drags are file drags: Explorer windows and the desktop.
@@ -379,54 +320,66 @@ fn is_file_surface(class: &str) -> bool {
     )
 }
 
-/// Watches the cursor and tells the island page what is going on — at ~60 Hz while the
-/// island is on, parked on a condvar otherwise.
+/// `true` when `slot` is empty or older than `every`; stamps it.
+fn due(slot: &mut Option<Instant>, every: Duration, now: Instant) -> bool {
+    match slot {
+        Some(t) if now.duration_since(*t) < every => false,
+        _ => {
+            *slot = Some(now);
+            true
+        }
+    }
+}
+
+type Geo = (f64, f64, f64, f64, f64); // origin x, y (physical), scale, width, height (logical)
+
+/// Watches the cursor on behalf of the page.
+///
+/// The bar is a one-pixel-line at rest and never pops up by itself, so this thread has
+/// very little to do: while the window is collapsed and no mouse button is down it only
+/// checks (twenty times a second) for a button press, plus a full-screen check a few times
+/// a second. It speeds up to ~60 Hz only while the panel is open or a button is held.
 ///
 /// Events sent to the island window:
-/// * `cursor`    window-logical cursor position (only while it matters)
-/// * `wake`      cursor rested against the top edge near the middle: show the pill
-/// * `drag-hint` a file drag started in Explorer / on the desktop while connected
-/// * `quiet`     a full-screen app is in front: stay out of the way
-/// * `summon`    explicit request to show (tray, hotkey, full-screen gesture)
+/// * `cursor`     window-logical cursor position (only while the panel is open and near)
+/// * `quiet`      a full-screen app is in front: stay out of the way
+/// * `drag-hint`  Space was pressed while dragging a file in Explorer / on the desktop
+///   (true), or the drag ended (false)
+/// * `screen-changed`  displays changed: place the window again
+/// * `hotkey`     (sent by [`hotkey`])
 ///
 /// The window itself is never hidden: it is transparent and click-through everywhere
-/// except over the island shape, so it can't "disappear" — and it can't eat clicks.
+/// except over the bar's shape — and over its whole area while a drag hint is up, so the
+/// drag has something to drop on.
 pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
     std::thread::spawn(move || {
         let mut last_screen: Option<(i32, i32, u32, u32, u64)> = None;
         loop {
             gate.wait_until_active();
 
-            let mut ticks: u32 = 0;
-            let mut geo: Option<(f64, f64, f64, f64, f64)> = None;
-            let mut vs: Option<(i32, i32, i32, i32)> = None;
+            let mut geo: Option<Geo> = None;
+            let (mut geo_at, mut screen_at, mut fs_at) = (None, None, None);
+            let mut fs = false;
+            let mut quiet_sent: Option<bool> = None;
             let mut last = (f64::MIN, f64::MIN);
             let mut last_key = (0.0, 0.0, 0.0, 0.0, false, true);
             let mut last_collapsed = true;
             let mut was_near = false;
-
-            // Press / drag tracking.
+            let mut last_feed = Instant::now();
             let mut was_down = false;
-            let mut press_inside = false;
-            let mut press_pt = (0.0, 0.0);
-            let mut drag_checked = false;
-            let mut drag_started = false;
+            let mut was_space = false;
             let mut hint_on = false;
-            let mut edge_shown = false;
-
-            // Full-screen handling and edge wake.
-            let mut fs = false;
-            let mut quiet_sent: Option<bool> = None;
-            let mut dwell: Option<Instant> = None;
-            let mut wake_armed = true;
 
             while gate.is_active() {
-                std::thread::sleep(Duration::from_millis(16));
-                ticks = ticks.wrapping_add(1);
+                let fast = was_down || hint_on || !gate.collapsed.load(Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(if fast { 16 } else { 50 }));
+                let now_i = Instant::now();
+                let collapsed = gate.collapsed.load(Ordering::Relaxed);
+                let down = sys::left_button_down();
 
                 // Monitors get plugged in, unplugged, rearranged and rescaled: re-place
-                // the island when that happens. Checked about twice a second.
-                if ticks.is_multiple_of(30) {
+                // the island when that happens.
+                if due(&mut screen_at, Duration::from_millis(500), now_i) {
                     let now = current_screen_key(&app, gate.pref());
                     if now.is_some() && now != last_screen {
                         let first = last_screen.is_none();
@@ -436,25 +389,54 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                         }
                     }
                 }
-                if ticks.is_multiple_of(15) {
+                if due(&mut fs_at, Duration::from_millis(250), now_i) {
                     fs = gate.hide_fullscreen.load(Ordering::Relaxed)
                         && sys::fullscreen_app_active();
                 }
-                if ticks.is_multiple_of(30) || vs.is_none() {
-                    vs = virtual_screen(&app);
+
+                let now = now_ms();
+                let revealed = now < gate.reveal_until_ms.load(Ordering::Relaxed);
+                let quiet = fs && !revealed;
+                if quiet_sent != Some(quiet) {
+                    quiet_sent = Some(quiet);
+                    let _ = app.emit_to(WINDOW_LABEL, "quiet", quiet);
+                    if quiet && hint_on {
+                        hint_on = false;
+                        let _ = app.emit_to(WINDOW_LABEL, "drag-hint", false);
+                    }
                 }
 
-                let Some(win) = window(&app) else { continue };
+                let Some(win) = window(&app) else {
+                    was_down = down;
+                    continue;
+                };
+
+                // Idle fast path: the strip is collapsed, nothing is held. Keep it
+                // click-through and go back to sleep.
+                if collapsed && !down && !was_down && !hint_on {
+                    if !gate.ignoring.load(Ordering::Relaxed) {
+                        gate.ignoring.store(true, Ordering::Relaxed);
+                        let _ = win.set_ignore_cursor_events(true);
+                    }
+                    was_space = false;
+                    last_collapsed = collapsed;
+                    continue;
+                }
+
                 let Some((cx, cy)) = sys::cursor_physical() else {
+                    was_down = down;
                     continue;
                 };
 
                 // Window origin / scale / size change rarely and each query is a round
                 // trip to the UI thread: refresh a few times a second, or right after a
                 // resize.
-                let collapsed = gate.collapsed.load(Ordering::Relaxed);
-                if geo.is_none() || ticks.is_multiple_of(10) || collapsed != last_collapsed {
+                if geo.is_none()
+                    || collapsed != last_collapsed
+                    || due(&mut geo_at, Duration::from_millis(150), now_i)
+                {
                     last_collapsed = collapsed;
+                    geo_at = Some(now_i);
                     if let (Ok(o), Ok(sz)) = (win.outer_position(), win.inner_size()) {
                         let sc = win.scale_factor().unwrap_or(1.0);
                         geo = Some((
@@ -467,6 +449,7 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     }
                 }
                 let Some((ox, oy, scale, w, h)) = geo else {
+                    was_down = down;
                     continue;
                 };
                 let x = (cx - ox) / scale;
@@ -474,100 +457,34 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                 let mid = ox + w * scale / 2.0;
                 let inside = x >= 0.0 && x <= w && y >= 0.0 && y <= h;
 
-                // ---- full-screen: stay quiet unless asked ----------------------------
-                let now = now_ms();
-                let revealed = now < gate.reveal_until_ms.load(Ordering::Relaxed);
-                let quiet = fs && !revealed;
-                if quiet_sent != Some(quiet) {
-                    quiet_sent = Some(quiet);
-                    let _ = app.emit_to(WINDOW_LABEL, "quiet", quiet);
-                }
-                if fs {
-                    // Resting at the very top, near the middle, brings the island back.
-                    let at_top = cy <= oy + 2.0 * scale && (cx - mid).abs() <= 210.0 * scale;
-                    if at_top && quiet {
-                        let t = *dwell.get_or_insert_with(Instant::now);
-                        if t.elapsed() >= Duration::from_millis(450) {
-                            dwell = None;
-                            summon(&app, &gate);
-                        }
-                    } else {
-                        dwell = None;
-                    }
-                    // Keep it awake while the cursor is around the island.
-                    if revealed
-                        && (-4.0..=PANEL_H + 40.0).contains(&y)
-                        && (cx - mid).abs() <= (PANEL_W / 2.0) * scale
-                    {
-                        gate.reveal_until_ms.store(now + 4_000, Ordering::Relaxed);
-                    }
+                // Keep the bar available while the cursor is around it in a full-screen app.
+                if fs
+                    && revealed
+                    && (-4.0..=PANEL_H + 40.0).contains(&y)
+                    && (cx - mid).abs() <= (PANEL_W / 2.0) * scale
+                {
+                    gate.reveal_until_ms
+                        .store(now + REVEAL_MS / 2, Ordering::Relaxed);
                 }
 
-                // ---- buttons, drags ---------------------------------------------------
-                let down = sys::left_button_down();
-                if down && !was_down {
-                    press_pt = (cx, cy);
-                    press_inside = inside;
-                    drag_checked = false;
-                    drag_started = false;
+                // ---- Space while holding a file ---------------------------------------
+                // Picking a file up does nothing on its own. Pressing Space while it is
+                // held opens the drop view; letting go anywhere closes it again.
+                let space = down && sys::space_down();
+                if space && !was_space && !quiet && is_file_surface(&sys::foreground_class()) {
+                    hint_on = !hint_on;
+                    let _ = app.emit_to(WINDOW_LABEL, "drag-hint", hint_on);
                 }
-                if !down {
-                    press_inside = false;
-                    drag_checked = false;
-                    drag_started = false;
+                was_space = space;
+                if !down && hint_on {
+                    hint_on = false;
+                    let _ = app.emit_to(WINDOW_LABEL, "drag-hint", false);
                 }
                 was_down = down;
-                // A file drag: the press started in Explorer / on the desktop and the
-                // cursor has since travelled a little. Checked once per press.
-                if down && !press_inside && !drag_checked {
-                    let moved = ((cx - press_pt.0).powi(2) + (cy - press_pt.1).powi(2)).sqrt();
-                    if moved > 24.0 * scale {
-                        drag_checked = true;
-                        drag_started = is_file_surface(&sys::foreground_class());
-                    }
-                }
-                let connected_edge = gate.peer_edge.load(Ordering::Relaxed);
-
-                // The island opens its drop view as soon as a file drag starts.
-                let want_hint = drag_started && connected_edge != 0 && !quiet;
-                if want_hint != hint_on {
-                    hint_on = want_hint;
-                    let _ = app.emit_to(WINDOW_LABEL, "drag-hint", want_hint);
-                }
-
-                // Dragging towards the edge that leads to the other computer: a drop
-                // strip appears there.
-                if let Some(v) = vs {
-                    let d = if connected_edge != 0 {
-                        edge_distance(connected_edge, v, cx, cy)
-                    } else {
-                        -1.0
-                    };
-                    let reach = if edge_shown { 240.0 } else { 90.0 } * scale;
-                    let want = drag_started && !fs && d >= 0.0 && d <= reach;
-                    if want && !edge_shown {
-                        edge_shown = true;
-                        show_edge_strip(&app, connected_edge, v, scale);
-                    } else if !want && edge_shown {
-                        edge_shown = false;
-                        hide_edge_strip(&app);
-                    }
-                }
-
-                // ---- top edge wake ----------------------------------------------------
-                // Touching the top edge near the middle brings up the pill, even though
-                // the island itself is only a few pixels wide while it sleeps.
-                let in_zone = cy <= oy + 1.0 * scale && (cx - mid).abs() <= 210.0 * scale;
-                if in_zone && wake_armed && !quiet && collapsed {
-                    wake_armed = false;
-                    let _ = app.emit_to(WINDOW_LABEL, "wake", ());
-                } else if cy > oy + 40.0 * scale {
-                    wake_armed = true;
-                }
 
                 // ---- click-through and cursor feed -------------------------------------
                 let r = *gate.rect.lock().unwrap();
-                let key = (r.x, r.y, r.w, r.h, down, collapsed);
+                let key = (r.x, r.y, r.w, r.h, hint_on, collapsed);
                 if (x - last.0).abs() < 1.0 && (y - last.1).abs() < 1.0 && key == last_key {
                     continue;
                 }
@@ -580,23 +497,27 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     && x <= r.x + r.w + HIT_MARGIN
                     && y >= r.y - HIT_MARGIN
                     && y <= r.y + r.h + HIT_MARGIN;
-                // A file being dragged has to find a drop target. Click-through hides the
-                // window from OLE, so while a button that was pressed *elsewhere* is held
-                // over the window, the window takes the mouse. A press that started on the
-                // window is an ordinary click on whatever is under it.
-                let dragging = down && inside && !press_inside;
-                let accept = on_island || dragging;
+                // A file being dragged has to find a drop target, and click-through hides
+                // the window from OLE: only while the drag hint is up does the whole
+                // window take the mouse. At any other time a drag passes straight through
+                // (desktop icons, window borders, ...).
+                let accept = on_island || (hint_on && inside && !quiet);
                 if gate.ignoring.load(Ordering::Relaxed) == accept {
                     gate.ignoring.store(!accept, Ordering::Relaxed);
                     let _ = win.set_ignore_cursor_events(!accept);
                 }
 
-                // While the island sleeps it only needs the cursor near its wake strip.
+                // The page only needs the cursor while the panel is open and the cursor is
+                // near it (Mochi's eyes follow it, hover timers need to know when it left).
                 let near = !collapsed
-                    || ((-8.0..=STRIP_H + 60.0).contains(&y)
-                        && (-80.0..=STRIP_W + 80.0).contains(&x));
-                if !quiet && (near || was_near) {
-                    let _ = win.emit("cursor", CursorPayload { x, y });
+                    && !quiet
+                    && (-220.0..=w + 220.0).contains(&x)
+                    && (-60.0..=h + 220.0).contains(&y);
+                if (near || was_near)
+                    && (on_island || last_feed.elapsed() >= Duration::from_millis(33))
+                {
+                    last_feed = Instant::now();
+                    let _ = app.emit_to(WINDOW_LABEL, "cursor", CursorPayload { x, y });
                 }
                 was_near = near;
             }

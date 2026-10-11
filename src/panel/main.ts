@@ -187,7 +187,7 @@ function renderFiles(s: Snapshot) {
         h("div", { class: "row", style: "justify-content:center;margin-top:10px" },
           h("button", { disabled: !connected, onclick: () => call("pick_and_send") }, "Choose files…"),
           h("button", { onclick: () => call("open_downloads") }, "Open received folder"))),
-      h("p", { class: "muted", style: "margin-top:8px" }, "Tip: copy files in Explorer here and paste them on the other computer — no dragging needed."),
+      h("p", { class: "muted", style: "margin-top:8px" }, "Tip: copy files in Explorer (Ctrl+C) and paste them on the other computer (Ctrl+V) — no dragging needed."),
     ];
     if (s.transfers.length) {
       const list = h("div", { class: "stack", style: "margin-top:14px" });
@@ -264,9 +264,10 @@ function saveIsland(patch: Partial<ReturnType<typeof islandSettings>>) {
 }
 
 let ui: UiOptions = { enabled: true, hide_fullscreen: true, monitor_cursor: false };
+let shellMenu = false;
 function renderTopBar() {
   const is = islandSettings();
-  update(topbar, "topbar", [ui, is], () => {
+  update(topbar, "topbar", [ui, is, shellMenu], () => {
     const setUi = (patch: Partial<UiOptions>) => {
       ui = { ...ui, ...patch };
       void call("ui_set", { opts: ui });
@@ -289,7 +290,16 @@ function renderTopBar() {
         toggle("Sounds", is.soundEnabled, (v) => { saveIsland({ soundEnabled: v }); renderTopBar(); }),
         h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Show it on"), screenSel),
         h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Collapse after"), close),
-        h("p", { class: "muted" }, "In a full-screen app, rest the cursor at the top of the screen for a moment to bring the bar back.")),
+        toggle("“Send with Tandem” in the Explorer right-click menu", shellMenu, (v) => {
+          void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });
+        }),
+        h("p", { class: "muted" },
+          "At rest the bar is a thin line at the top of the screen. ",
+          h("kbd", {}, "Ctrl+Alt+T"), " opens or closes the control bar. ",
+          h("kbd", {}, "Ctrl+Alt+U"), " opens or closes the small transfer bar."),
+        h("p", { class: "muted" },
+          "To send a file by drag: pick it up in Explorer or on the desktop, press ",
+          h("kbd", {}, "Space"), ", and drop it on the bar. Let go anywhere else and the bar closes again.")),
     ];
   });
 }
@@ -310,5 +320,6 @@ onFileDrop(
   (over) => { dropOver = over; showVeil(over); if (snap) renderFiles(snap); },
 );
 void call<UiOptions>("ui_get").then((v) => { if (v) { ui = v; renderTopBar(); } }).catch(() => {});
+void call<boolean>("shell_menu_get").then((v) => { shellMenu = !!v; renderTopBar(); }).catch(() => {});
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });
 void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });

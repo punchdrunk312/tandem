@@ -34,6 +34,8 @@ class IslandState {
   mouseInIsland = { x: 0, y: 0 };
 
   fileDragOver = false;
+  /** Dropped files being copied to the staging folder before the transfer starts. */
+  staging = 0;
   isPinned = false;
   lastActivity = performance.now();
 

@@ -806,12 +806,15 @@ impl Platform for WinPlatform {
     }
 }
 
+/// Runs on the clipboard worker thread (never on the engine), so it can afford to wait
+/// for an app that is still holding the clipboard open — Explorer does for a moment
+/// after a copy.
 unsafe fn open_clipboard() -> bool {
-    for _ in 0..20 {
+    for _ in 0..30 {
         if OpenClipboard(None).is_ok() {
             return true;
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
     false
 }

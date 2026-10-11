@@ -4,8 +4,7 @@
   "description": "Main window",
   "windows": [
     "main",
-    "island",
-    "edge"
+    "island"
   ],
   "permissions": [
     "core:default"

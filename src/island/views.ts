@@ -71,7 +71,7 @@ export function homeText(s: Snapshot | null): { title: string; sub: string } {
   const side = s.paired.find((p) => p.connected)?.side.toLowerCase() ?? "right";
   switch (s.control) {
     case "local":
-      return { title: `Connected to ${peer}`, sub: `Push your cursor through the ${side} edge — or drop a file on me to send it.` };
+      return { title: `Connected to ${peer}`, sub: `Push your cursor through the ${side} edge. To send a file: pick it up, press Space, drop it on me.` };
     case "remote":
       return { title: `Controlling ${peer}`, sub: "Your mouse and keyboard are over there. Push back through the edge, or press Scroll Lock." };
     case "controlled":

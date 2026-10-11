@@ -62,33 +62,30 @@ clipboard and file transfer can be developed and tested anywhere
 
 ## The top bar (Mochi)
 
-A black island sits at the top centre of your main screen with Mochi, the little bot
-from Coucou. Move the cursor to the top edge to wake it.
+At rest the bar is **one thin line** at the top centre of your main screen. It takes no
+clicks and never pops up by itself; its colour shows the state (grey: not connected,
+green: connected, teal: you are controlling the other PC, amber: it is controlling you,
+pulsing teal: a transfer is running).
 
-- **Drag a file onto it** → Mochi swallows it and sends it to the connected computer.
-- Shows connection state, which side the other PC is on, and live transfers.
-- Gear icon opens the pairing / settings window; the tray icon does the same.
+- **Ctrl+Alt+T** opens the control bar (Mochi, status, which side the other PC is on, Jump /
+  Disconnect). Press it again to close. It also closes by itself after a while.
+- **Ctrl+Alt+U** opens or closes the small transfer bar (progress of what is being sent or
+  received). It appears by itself while a transfer runs; close it by hand with the same key.
+- **Send a file by dragging:** pick it up in Explorer or on the desktop, press **Space**, drop
+  it on the bar. Let go anywhere else and the bar closes again. Nothing opens just because you
+  dragged something, so moving desktop icons is unaffected.
+- **Right-click → "Send with Tandem"** on any file or folder (switch it on in the settings).
+- **Copy files with Ctrl+C** on one PC and **paste with Ctrl+V** in Explorer on the other
+  (up to 512 MB; larger ones: use Send).
+- In a **full-screen app** the line hides too. The two hotkeys still work there and the bar
+  goes away again when you close it.
 - No AI features — those were removed from the Coucou code.
 
 Mochi and the island come from Coucou and are for private use only; do not publish
 this repo or ship it under Coucou's name or assets.
 
-## When the top bar shows up
-
-The bar sleeps until it is useful, and there is always a way to get it back:
-
-- **Cursor at the top edge**, near the middle → the little pill appears.
-- **Start dragging a file** in Explorer / on the desktop while connected → the bar opens
-  its drop view by itself; drag the file up into Mochi.
-- **Something happens** (connected, control switched, a file arrives) → it peeks out.
-- **Ctrl+Alt+T**, the **tray icon**, or **starting Tandem again** → it appears, always.
-- In a **full-screen app** it stays out of the way (no clicks stolen). Rest the cursor at
-  the very top, near the middle, for half a second to bring it up.
-
 ## Newer features
 
-- **Drag across the edge** — drag a file towards the screen edge that faces the other
-  computer: a drop strip appears, release on it to send.
 - **Game mode** — no edge switching while a full-screen app is open (Scroll Lock still jumps).
 - **Hold at the edge** — optional delay before the cursor crosses, against accidental switches.
 - **Copied images** — screenshots (Win+Shift+S) and "copy image" travel with the clipboard

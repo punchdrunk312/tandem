@@ -541,6 +541,7 @@ impl Node {
             last_dial: HashMap::new(),
             no_auto_until: None,
             last_clip_sig: None,
+            clip: clipboard_worker(sh.platform.clone(), ev_tx.clone()),
         };
         tokio::spawn(actor.run(ev_rx));
         Ok(Node { sh, ev: ev_tx })
@@ -620,6 +621,8 @@ enum Ev {
         res: std::io::Result<Offer>,
     },
     ClipFiles(Vec<PathBuf>),
+    /// The clipboard worker read what is on the clipboard now.
+    ClipRead(ClipContent),
     DialFailed(String),
 }
 
@@ -813,6 +816,49 @@ struct Actor {
     /// After a deliberate disconnect (either side) nobody redials for a while.
     no_auto_until: Option<Instant>,
     last_clip_sig: Option<u64>,
+    /// Clipboard reads / writes run on their own thread: the clipboard can be held by
+    /// another app for a moment and a big image takes a while to copy, and the actor
+    /// that forwards mouse movement must never wait for either.
+    clip: std::sync::mpsc::Sender<ClipJob>,
+}
+
+enum ClipJob {
+    Read,
+    Write(ClipContent),
+}
+
+fn clipboard_worker(
+    plat: Arc<dyn Platform>,
+    ev_tx: UnboundedSender<Ev>,
+) -> std::sync::mpsc::Sender<ClipJob> {
+    let (tx, rx) = std::sync::mpsc::channel::<ClipJob>();
+    let _ = std::thread::Builder::new()
+        .name("tandem-clip".into())
+        .spawn(move || {
+            while let Ok(mut job) = rx.recv() {
+                // Several change notifications in a row only need the latest read, but
+                // writes always run, in order.
+                if matches!(job, ClipJob::Read) {
+                    while let Ok(next) = rx.try_recv() {
+                        if let ClipJob::Write(_) = next {
+                            job = next;
+                            break;
+                        }
+                    }
+                }
+                match job {
+                    ClipJob::Read => {
+                        if let Some(c) = plat.clipboard_get() {
+                            if ev_tx.send(Ev::ClipRead(c)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    ClipJob::Write(c) => plat.clipboard_set(&c),
+                }
+            }
+        });
+    tx
 }
 
 fn sig(c: &ClipContent) -> u64 {
@@ -1014,8 +1060,9 @@ impl Actor {
             Ev::ClipFiles(paths) => {
                 let c = ClipContent::Files(paths);
                 self.last_clip_sig = Some(sig(&c));
-                self.sh.platform.clipboard_set(&c);
+                let _ = self.clip.send(ClipJob::Write(c));
             }
+            Ev::ClipRead(c) => self.on_clip_read(c),
         }
     }
 
@@ -1197,7 +1244,7 @@ impl Actor {
                 if on && t.len() <= MAX_CLIP_TEXT {
                     let c = ClipContent::Text(t);
                     self.last_clip_sig = Some(sig(&c));
-                    plat.clipboard_set(&c);
+                    let _ = self.clip.send(ClipJob::Write(c));
                 }
             }
             Msg::ClipImage(png) => {
@@ -1205,7 +1252,7 @@ impl Actor {
                 if on && !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
                     let c = ClipContent::Image(png);
                     self.last_clip_sig = Some(sig(&c));
-                    plat.clipboard_set(&c);
+                    let _ = self.clip.send(ClipJob::Write(c));
                 }
             }
             Msg::FileOffer { id, kind, items } => self.on_file_offer(id, kind, items),
@@ -1350,9 +1397,15 @@ impl Actor {
         if !on || self.session.is_none() {
             return;
         }
-        let Some(c) = self.sh.platform.clipboard_get() else {
+        let _ = self.clip.send(ClipJob::Read);
+    }
+
+    /// The clipboard worker finished reading: send it on unless it is our own echo.
+    fn on_clip_read(&mut self, c: ClipContent) {
+        let on = self.sh.persisted.lock().unwrap().clipboard_sync;
+        if !on || self.session.is_none() {
             return;
-        };
+        }
         let s = sig(&c);
         if self.last_clip_sig == Some(s) {
             return; // our own echo, or unchanged

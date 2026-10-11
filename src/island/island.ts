@@ -35,7 +35,7 @@ export class Island {
   private botGlow!: HTMLElement;
   private greetingCanvas!: HTMLCanvasElement;
   private compactLabel!: HTMLElement;
-  private wakeStrip!: HTMLElement;
+  private lineEl!: HTMLElement;
 
   private header!: ViewHost;
   private views = new Map<IslandViewName, ViewHost>();
@@ -66,6 +66,15 @@ export class Island {
   private botHoverTimer: number | null = null;
   private lastLoveTime = 0;
   private botHoverStart = { x: 0, y: 0 };
+
+  /** Transfer bar opened with Ctrl+Alt+U: stays until it is toggled off again. */
+  private pillPinned = false;
+  /** Transfer bar closed by hand: stays closed until the next transfer starts. */
+  private pillSuppressed = false;
+  /** Space was pressed while dragging a file: the drop view is up for this drag. */
+  private hintActive = false;
+  private dropCloseTimer: number | null = null;
+  private lastDropAt = 0;
 
   private confusedRecovery: number | null = null;
   private flashTimer: number | null = null;
@@ -99,7 +108,7 @@ export class Island {
       },
     };
 
-    this.wakeStrip = h("div", { id: "wake-strip" });
+    this.lineEl = h("div", { id: "line" });
     this.botGlow = h("div", { id: "bot-glow" });
     this.botCanvas = h("canvas", { id: "bot-canvas" });
     this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
@@ -122,7 +131,7 @@ export class Island {
     this.greetingCanvas.style.width = `${EXPANDED_W}px`;
     this.greetingCanvas.style.height = "150px";
 
-    this.root.append(this.wakeStrip, this.islandEl);
+    this.root.append(this.lineEl, this.islandEl);
     this.applyGeometry();
   }
 
@@ -130,10 +139,18 @@ export class Island {
 
   private wireFsm() {
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
+    this.fsm.idleTarget = () => (this.wantPill() ? "petit" : "hidden");
+    this.fsm.petitHold = () => this.wantPill();
     this.fsm.onTransition = (from, to) => {
       switch (to) {
         case "hidden":
+          if (from === "coucou") {
+            this.greeting.interrupt();
+            State.view = State.defaultView();
+          }
           this.setMode("hidden");
+          // A full-screen app gets its screen back right away.
+          fire("end_reveal");
           break;
         case "petit":
           if (from === "coucou") this.greeting.interrupt();
@@ -155,6 +172,12 @@ export class Island {
     };
   }
 
+  /** Should the small transfer bar be up right now? */
+  private wantPill(): boolean {
+    if (this.quiet || this.pillSuppressed) return false;
+    return this.pillPinned || State.activeTransfers.length > 0 || State.staging > 0;
+  }
+
   launch() {
     this.fsm.launch();
   }
@@ -165,30 +188,31 @@ export class Island {
     const prev = State.snap;
     State.snap = s;
     if (prev) {
+      // Connection changes don't pop anything up: the line at the top changes colour.
       if (!prev.connected && s.connected) {
-        Sound.play("approve");
+        this.ping("approve");
         this.engine.triggerEmote("happy");
-        this.reveal();
       } else if (prev.connected && !s.connected) {
-        Sound.play("blip");
-        this.reveal();
+        this.ping("blip");
       } else if (prev.control !== s.control) {
-        Sound.play(s.control === "remote" ? "open" : "blip");
-        this.reveal();
+        this.ping(s.control === "remote" ? "open" : "blip");
       }
       for (const t of s.transfers) {
         const before = prev.transfers.find((p) => p.id === t.id && p.direction === t.direction);
         if (!before) {
+          // A new transfer brings the pill back, even if it was closed by hand.
+          this.pillSuppressed = false;
           this.reveal();
-          if (t.direction === "in") Sound.play("attach");
+          if (t.direction === "in") this.ping("attach");
         } else if (before.state === "active" && t.state === "done") {
           this.flashState("finished", 2200);
-          Sound.play("finish");
+          this.ping("finish");
           this.engine.triggerEmote("proud");
           this.reveal();
         } else if (before.state !== "error" && t.state === "error") {
+          this.pillSuppressed = false;
           this.flashState("error", 3200);
-          Sound.play("error");
+          this.ping("error");
           this.reveal();
         }
       }
@@ -199,6 +223,11 @@ export class Island {
       if (State.mode === "expanded") this.animateGeometry(false);
     }
     State.notify();
+  }
+
+  /** A sound for something that happened in the background — never inside a full-screen app. */
+  private ping(name: Parameters<typeof Sound.play>[0]) {
+    if (!this.quiet) Sound.play(name);
   }
 
   private flashState(st: "finished" | "error", ms: number) {
@@ -252,9 +281,7 @@ export class Island {
   }
 
   collapse() {
-    State.isPinned = false;
-    this.fsm.pinned = false;
-    this.fsm.forcePetit();
+    this.closeBar();
   }
 
   /** Open straight to a view (tray click, drag over, a notice). */
@@ -272,41 +299,94 @@ export class Island {
     this.quiet = q;
     if (q) {
       State.fileDragOver = false;
+      this.hintActive = false;
       this.fsm.forceHidden();
     }
+    State.notify();
   }
 
-  /** Explicit request (tray, hotkey, Tandem started again, full-screen gesture). */
-  summon() {
+  /** Ctrl+Alt+T / Ctrl+Alt+U (and the tray entries). */
+  hotkey(what: "bar" | "pill") {
     this.quiet = false;
-    this.alert("home");
+    if (what === "bar") {
+      // The control bar: opens, or closes again if it is already up.
+      if (this.fsm.state === "home" && State.mode === "expanded") this.closeBar();
+      else this.alert("home");
+      return;
+    }
+    // The transfer bar: a toggle, independent of whether a transfer is running.
+    if (this.fsm.state === "petit") {
+      this.pillPinned = false;
+      this.pillSuppressed = true;
+      this.fsm.forceHidden();
+    } else {
+      this.pillSuppressed = false;
+      this.pillPinned = true;
+      this.fsm.forcePetit();
+    }
+    State.notify();
   }
 
-  /** Something happened: peek out of hiding for a moment. */
+  private closeBar() {
+    State.isPinned = false;
+    this.fsm.pinned = false;
+    this.fsm.forceIdle();
+  }
+
+  /** Something happened: bring the transfer pill out for a moment. */
   reveal() {
-    if (this.quiet) return;
+    if (this.quiet || this.pillSuppressed) return;
     this.fsm.reveal();
   }
 
-  /** Cursor rested against the top edge near the middle: show the pill. */
-  wake() {
-    if (this.quiet) return;
-    this.fsm.reveal();
-  }
-
-  /** A file drag started in Explorer / on the desktop: open the drop view right away. */
+  /** Space was pressed while holding a file (true), or the drag ended (false). */
   dragHint(on: boolean) {
     if (this.quiet) return;
-    this.onDragDrop({ type: on ? "enter" : "leave" });
+    if (on) {
+      this.hintActive = true;
+      this.cancelDropClose();
+      this.onDragDrop({ type: "enter" });
+      return;
+    }
+    this.hintActive = false;
+    // The drag is over. If it ended on the drop view the drop event is on its way:
+    // give it a moment, then close whatever is still open — dropping the file back
+    // where it came from simply closes the bar again.
+    this.scheduleDropClose(350);
   }
 
-  private showNote(msg: string, ms = 2600) {
+  /** A short message in the bar (also used by the Rust side). */
+  note(msg: string) {
+    this.showNote(msg, 3200);
+  }
+
+  private scheduleDropClose(ms: number) {
+    this.cancelDropClose();
+    this.dropCloseTimer = window.setTimeout(() => {
+      this.dropCloseTimer = null;
+      if (performance.now() - this.lastDropAt < 1200) return;
+      if (State.fileDragOver) {
+        State.fileDragOver = false;
+        this.engine.animateMorph(0);
+      }
+      if (State.view === "drop" && this.fsm.state === "home") this.closeBar();
+    }, ms);
+  }
+
+  private cancelDropClose() {
+    if (this.dropCloseTimer != null) window.clearTimeout(this.dropCloseTimer);
+    this.dropCloseTimer = null;
+  }
+
+  private showNote(msg: string, ms = 2600, then: "close" | "home" = "close") {
     State.notice = msg;
     this.alert("note");
     if (this.noteTimer != null) window.clearTimeout(this.noteTimer);
     this.noteTimer = window.setTimeout(() => {
       this.noteTimer = null;
-      if (State.view === "note") this.setView("home");
+      if (State.view !== "note") return;
+      if (then === "home") this.setView("home");
+      else this.closeBar();
     }, ms);
   }
 
@@ -316,6 +396,7 @@ export class Island {
     switch (e.type) {
       case "enter":
       case "over": {
+        this.cancelDropClose();
         if (State.fileDragOver) return;
         State.fileDragOver = true;
         this.engine.animateMorph(1); // Mochi turns into a box
@@ -326,16 +407,20 @@ export class Island {
         if (!State.fileDragOver) return;
         State.fileDragOver = false;
         this.engine.animateMorph(0);
-        // Stay open: the drag session may still be alive; the FSM closes us later.
         State.notify();
+        // Dragged off the bar without Space: close it again shortly. With Space the
+        // bar stays until the button is released (see dragHint).
+        if (!this.hintActive) this.scheduleDropClose(500);
         break;
       }
       case "drop": {
+        this.lastDropAt = performance.now();
+        this.cancelDropClose();
         State.fileDragOver = false;
         const dropped = e.drop;
         if (!dropped?.count) {
           this.engine.animateMorph(0);
-          this.setView("home");
+          this.closeBar();
           return;
         }
         if (!State.connected) {
@@ -352,16 +437,27 @@ export class Island {
 
   /** Mochi eats the file(s); the transfer itself runs in Rust. */
   private swallow(dropped: Dropped) {
-    dropped.send().catch(() => {
-      Sound.play("error");
-      this.showNote("Couldn't read that file.");
-    });
+    State.staging++;
+    this.pillSuppressed = false;
+    dropped
+      .send()
+      .catch(() => {
+        Sound.play("error");
+        this.showNote("Couldn't read that file.");
+      })
+      .finally(() => {
+        State.staging = Math.max(0, State.staging - 1);
+        State.notify();
+      });
     this.engine.gulp();
     Sound.play("approve");
     this.engine.triggerEmote("happy");
     this.engine.animateMorph(0);
-    this.setView("home");
     this.ensureRunning();
+    // Let the gulp play, then shrink to the small bar with the progress.
+    window.setTimeout(() => {
+      if (State.view === "drop" && this.fsm.state === "home") this.closeBar();
+    }, 750);
   }
 
   // ── Geometry ────────────────────────────────────────────────────────────────
@@ -397,7 +493,8 @@ export class Island {
     this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
     this.compactLabel.style.top = `${hh / 2 - 9}px`;
 
-    const rect = { x: (PANEL_W - w) / 2, y: 0, w, h: hh };
+    // A retracted island takes no mouse at all: nothing at the top of the screen is covered.
+    const rect = hh < 1 ? { x: 0, y: 0, w: 0, h: 0 } : { x: (PANEL_W - w) / 2, y: 0, w, h: hh };
     const p = this.pushedRect;
     if (Math.abs(p.x - rect.x) > 0.5 || Math.abs(p.w - rect.w) > 0.5 || Math.abs(p.h - rect.h) > 0.5) {
       this.pushedRect = rect;
@@ -434,11 +531,6 @@ export class Island {
   // ── Input ───────────────────────────────────────────────────────────────────
 
   private wireInput() {
-    this.wakeStrip.addEventListener("mouseenter", () => {
-      Sound.resume();
-      if (State.mode === "hidden") this.fsm.mouseEntered();
-    });
-
     this.islandEl.addEventListener("mousedown", (e) => {
       Sound.resume();
       State.lastActivity = performance.now();
@@ -475,7 +567,8 @@ export class Island {
 
     if (inIsland && !this.wasInIsland) {
       if (this.fsm.state === "coucou") this.greeting.hover();
-      this.fsm.mouseEntered();
+      // Hovering the line never opens anything: only the hotkeys, a transfer or a drop do.
+      if (this.fsm.state !== "hidden") this.fsm.mouseEntered();
     }
     if (!inIsland && this.wasInIsland) this.fsm.mouseLeft();
     this.wasInIsland = inIsland;
@@ -535,7 +628,7 @@ export class Island {
     State.stateOverride = "dizzy";
     this.engine.setState("dizzy");
     Sound.play("dizzy");
-    this.showNote("Whoa — easy! I'm dizzy.", 3300);
+    this.showNote("Whoa — easy! I'm dizzy.", 3300, "home");
     if (this.confusedRecovery != null) window.clearTimeout(this.confusedRecovery);
     this.confusedRecovery = window.setTimeout(() => {
       this.confusedRecovery = null;
@@ -688,6 +781,7 @@ export class Island {
     const s = State.snap;
     if (!s) return "";
     const active = State.activeTransfers[0];
+    if (!active && State.staging > 0) return "↑ Preparing…";
     if (active && active.total) {
       const pct = Math.min(100, Math.round((active.bytes / active.total) * 100));
       return `${active.direction === "out" ? "↑" : "↓"} ${pct}%  ${active.name}`;
@@ -718,6 +812,18 @@ export class Island {
       view.el.classList.toggle("on", on);
       if (on) view.sync();
     }
+
+    // The line: the only thing on screen while the bar is at rest. Its colour tells the
+    // state at a glance.
+    const sn = State.snap;
+    const lineState = State.activeTransfers.length || State.staging
+      ? "busy"
+      : sn?.control === "remote" ? "remote"
+      : sn?.control === "controlled" ? "controlled"
+      : sn?.control === "local" ? "local"
+      : "off";
+    this.lineEl.dataset.s = lineState;
+    this.lineEl.style.opacity = State.mode === "hidden" && !this.quiet ? "1" : "0";
 
     this.compactLabel.textContent = this.compactText();
     this.compactLabel.style.opacity = State.mode === "compact" ? "1" : "0";

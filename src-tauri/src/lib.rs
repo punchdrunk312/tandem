@@ -15,12 +15,17 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 mod island;
+mod shellmenu;
 use island::{IslandRect, PollGate};
 
 struct Shared {
     gate: Arc<PollGate>,
     ui: std::sync::Mutex<UiOptions>,
     ui_path: PathBuf,
+    /// Paths from the Explorer "Send with Tandem" entry, collected for a moment so a
+    /// multi-selection goes out as one transfer.
+    send_queue: std::sync::Mutex<Vec<PathBuf>>,
+    send_armed: std::sync::atomic::AtomicBool,
 }
 
 /// Top-bar preferences (kept in `ui.json`, separate from the pairing data).
@@ -448,6 +453,22 @@ fn set_island_rect(sh: State<'_, Shared>, x: f64, y: f64, width: f64, height: f6
     });
 }
 
+/// The page closed the bar: a full-screen app gets its screen back at once.
+#[tauri::command]
+fn end_reveal(sh: State<'_, Shared>) {
+    island::end_reveal(&sh.gate);
+}
+
+#[tauri::command]
+fn shell_menu_get() -> bool {
+    shellmenu::is_on()
+}
+
+#[tauri::command]
+fn shell_menu_set(on: bool) -> R {
+    shellmenu::set(on)
+}
+
 #[tauri::command]
 fn reposition(app: AppHandle, sh: State<'_, Shared>) {
     let c = sh.gate.collapsed.load(std::sync::atomic::Ordering::Relaxed);
@@ -468,16 +489,82 @@ fn quit_app(app: AppHandle) {
 
 // ------------------------------------------------------------------ shell
 
-/// Bring the top bar back (tray, hotkey, starting Tandem again). If the bar is switched
-/// off in the settings there is nothing to summon: open the settings window instead.
-fn summon_island(app: &AppHandle) {
-    let sh = app.state::<Shared>();
+/// A hotkey / tray entry for the bar. `what` is "bar" (control bar, Ctrl+Alt+T) or
+/// "pill" (transfer bar, Ctrl+Alt+U). If the bar is switched off in the settings there is
+/// nothing to show: the control bar's key opens the settings window instead.
+fn bar_hotkey(app: &AppHandle, what: &'static str) {
+    let Some(sh) = app.try_state::<Shared>() else {
+        return;
+    };
     let enabled = sh.ui.lock().unwrap().enabled;
     if enabled {
-        island::summon(app, &sh.gate);
-    } else {
+        island::hotkey(app, &sh.gate, what);
+    } else if what == "bar" {
         show_main(app);
     }
+}
+
+/// Paths after each `--send` on a command line (Explorer's "Send with Tandem").
+fn send_args<I: IntoIterator<Item = String>>(args: I) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--send" {
+            if let Some(p) = it.next() {
+                out.push(PathBuf::from(p));
+            }
+        }
+    }
+    out
+}
+
+/// Collects `--send` paths for a moment (Explorer starts one process per selected item),
+/// then sends them together. `patience` is how long to wait for a connection first —
+/// Tandem may have just been started by the right-click itself.
+fn queue_sends(app: &AppHandle, paths: Vec<PathBuf>, patience: Duration) {
+    use std::sync::atomic::Ordering::AcqRel;
+    if paths.is_empty() {
+        return;
+    }
+    let Some(sh) = app.try_state::<Shared>() else {
+        return;
+    };
+    sh.send_queue.lock().unwrap().extend(paths);
+    if sh.send_armed.swap(true, AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        let connected = |app: &AppHandle| {
+            app.try_state::<AppState>()
+                .map(|st| st.node.snapshot().paired.iter().any(|p| p.connected))
+                .unwrap_or(false)
+        };
+        let t0 = std::time::Instant::now();
+        while !connected(&app) && t0.elapsed() < patience {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let Some(sh) = app.try_state::<Shared>() else {
+            return;
+        };
+        let paths = std::mem::take(&mut *sh.send_queue.lock().unwrap());
+        sh.send_armed
+            .store(false, std::sync::atomic::Ordering::Release);
+        if paths.is_empty() {
+            return;
+        }
+        if connected(&app) {
+            app.state::<AppState>().node.send_files(paths);
+        } else {
+            let _ = app.emit_to(
+                island::WINDOW_LABEL,
+                "note",
+                "Not connected — open Tandem on both computers first.",
+            );
+            island::hotkey(&app, &sh.gate, "bar");
+        }
+    });
 }
 
 fn show_main(app: &AppHandle) {
@@ -502,38 +589,28 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-/// The thin drop strip that appears along the screen edge facing the other computer
-/// while a file is being dragged towards it. Hidden and click-through otherwise.
-fn create_edge_window(app: &tauri::App) -> tauri::Result<()> {
-    let w = WebviewWindowBuilder::new(app, island::EDGE_LABEL, WebviewUrl::App("edge.html".into()))
-        .title("Tandem edge")
-        .inner_size(72.0, 300.0)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .focused(false)
-        .visible(false)
-        .disable_drag_drop_handler()
-        .build()?;
-    island::make_non_activating(&w);
-    let _ = w.set_ignore_cursor_events(true);
-    Ok(())
-}
-
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Starting Tandem again brings the bar back.
-            summon_island(app)
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Explorer's "Send with Tandem" lands here; starting Tandem a second time
+            // by hand brings the control bar up.
+            let sends = send_args(args);
+            if sends.is_empty() {
+                bar_hotkey(app, "bar");
+            } else {
+                queue_sends(app, sends, Duration::ZERO);
+            }
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        summon_island(app);
+                .with_handler(|app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    match shortcut.key {
+                        Code::KeyT => bar_hotkey(app, "bar"),
+                        Code::KeyU => bar_hotkey(app, "pill"),
+                        _ => {}
                     }
                 })
                 .build(),
@@ -572,28 +649,12 @@ pub fn run() {
             // Push state to the UI, at most ~12 times a second.
             let mut rx = node.subscribe();
             let handle = app.handle().clone();
-            let gate2 = gate.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     if rx.changed().await.is_err() {
                         break;
                     }
                     let s = rx.borrow_and_update().clone();
-                    // Which screen edge leads to the other computer (drag-to-edge strip).
-                    let edge = s
-                        .paired
-                        .iter()
-                        .find(|p| p.connected)
-                        .map(|p| match p.side {
-                            Edge::Left => 1,
-                            Edge::Right => 2,
-                            Edge::Top => 3,
-                            Edge::Bottom => 4,
-                        })
-                        .unwrap_or(0);
-                    gate2
-                        .peer_edge
-                        .store(edge, std::sync::atomic::Ordering::Relaxed);
                     let _ = handle.emit("snapshot", &s);
                     tokio::time::sleep(Duration::from_millis(80)).await;
                 }
@@ -610,6 +671,8 @@ pub fn run() {
                 gate: gate.clone(),
                 ui: std::sync::Mutex::new(ui.clone()),
                 ui_path,
+                send_queue: std::sync::Mutex::new(Vec::new()),
+                send_armed: std::sync::atomic::AtomicBool::new(false),
             });
             gate.hide_fullscreen
                 .store(ui.hide_fullscreen, std::sync::atomic::Ordering::Relaxed);
@@ -617,7 +680,6 @@ pub fn run() {
                 .store(ui.monitor_cursor, std::sync::atomic::Ordering::Relaxed);
 
             create_main_window(app)?;
-            create_edge_window(app)?;
 
             // Island: borderless, transparent, never takes focus.
             if let Some(win) = island::window(app.handle()) {
@@ -641,32 +703,50 @@ pub fn run() {
             gate.set_active(ui.enabled);
             island::spawn_cursor_poll(app.handle().clone(), gate);
 
-            // Ctrl+Alt+T: bring the top bar back from anywhere.
-            if let Err(e) = app.global_shortcut().register(Shortcut::new(
-                Some(Modifiers::CONTROL | Modifiers::ALT),
-                Code::KeyT,
-            )) {
-                log_line(app.handle(), &format!("hotkey not registered: {e}"));
+            // Ctrl+Alt+T opens / closes the control bar, Ctrl+Alt+U the transfer bar.
+            for (key, label) in [(Code::KeyT, "T"), (Code::KeyU, "U")] {
+                if let Err(e) = app.global_shortcut().register(Shortcut::new(
+                    Some(Modifiers::CONTROL | Modifiers::ALT),
+                    key,
+                )) {
+                    log_line(
+                        app.handle(),
+                        &format!("hotkey Ctrl+Alt+{label} not registered: {e}"),
+                    );
+                }
             }
+
+            // Keep the right-click entry pointing at this copy of the program.
+            if shellmenu::is_on() {
+                let _ = shellmenu::set(true);
+            }
+            // Started by "Send with Tandem" itself: send once the connection is up.
+            queue_sends(
+                app.handle(),
+                send_args(std::env::args()),
+                Duration::from_secs(12),
+            );
 
             // Tray.
             let open = MenuItem::with_id(app, "open", "Pair / settings…", true, None::<&str>)?;
-            let bar = MenuItem::with_id(
+            let bar = MenuItem::with_id(app, "bar", "Top bar  (Ctrl+Alt+T)", true, None::<&str>)?;
+            let pill = MenuItem::with_id(
                 app,
-                "bar",
-                "Show the top bar  (Ctrl+Alt+T)",
+                "pill",
+                "Transfer bar  (Ctrl+Alt+U)",
                 true,
                 None::<&str>,
             )?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&bar, &open, &quit])?;
+            let menu = Menu::with_items(app, &[&bar, &pill, &open, &quit])?;
             let mut tray = TrayIconBuilder::new()
                 .tooltip("Tandem")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
                     "open" => show_main(app),
-                    "bar" => summon_island(app),
+                    "bar" => bar_hotkey(app, "bar"),
+                    "pill" => bar_hotkey(app, "pill"),
                     "quit" => {
                         app.state::<AppState>().node.disconnect();
                         app.exit(0);
@@ -680,7 +760,7 @@ pub fn run() {
                         ..
                     } = ev
                     {
-                        summon_island(tray.app_handle());
+                        bar_hotkey(tray.app_handle(), "bar");
                     }
                 });
             if let Some(icon) = app.default_window_icon() {
@@ -730,6 +810,9 @@ pub fn run() {
             ui_set,
             set_collapsed,
             set_island_rect,
+            end_reveal,
+            shell_menu_get,
+            shell_menu_set,
             reposition,
             open_main_window,
             quit_app,

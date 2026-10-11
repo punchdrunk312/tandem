@@ -11,7 +11,11 @@ export class IslandStateMachine {
   /** home → petit delay, seconds. */
   homeToPetitDelay = 15;
   /** petit → hidden delay, seconds. */
-  petitToHiddenDelay = 12;
+  petitToHiddenDelay = 4;
+  /** Where a closing panel lands: the transfer pill if one is wanted, otherwise the line. */
+  idleTarget: () => "petit" | "hidden" = () => "hidden";
+  /** True while the pill has to stay up (a transfer is running, or the user pinned it). */
+  petitHold: () => boolean = () => false;
   /** coucou → petit once the greeting animation ends (no hover). */
   greetAutoCollapseDelay = 0.6;
   /** coucou → petit while the mouse hovers the greeting. */
@@ -60,7 +64,7 @@ export class IslandStateMachine {
         break;
       case "coucou":
         this.clear("greetCollapse");
-        this.transition("petit");
+        this.transition(this.idleTarget());
         break;
     }
   }
@@ -97,6 +101,12 @@ export class IslandStateMachine {
     this.transition("petit");
   }
 
+  /** Close whatever is open and fall back to the pill (if wanted) or the line. */
+  forceIdle() {
+    this.cancelTimers();
+    this.transition(this.idleTarget());
+  }
+
   forceHidden() {
     this.cancelTimers();
     this.transition("hidden");
@@ -108,7 +118,9 @@ export class IslandStateMachine {
     this.clear("petitHide");
     this.petitHide = window.setTimeout(() => {
       this.petitHide = null;
-      if (this.state === "petit") this.transition("hidden");
+      if (this.state !== "petit") return;
+      if (this.petitHold()) this.schedulePetitHide();
+      else this.transition("hidden");
     }, this.petitToHiddenDelay * 1000);
   }
 
@@ -117,7 +129,7 @@ export class IslandStateMachine {
     if (this.pinned) return;
     this.homeCollapse = window.setTimeout(() => {
       this.homeCollapse = null;
-      if (this.state === "home") this.transition("petit");
+      if (this.state === "home") this.transition(this.idleTarget());
     }, this.homeToPetitDelay * 1000);
   }
 
@@ -125,7 +137,7 @@ export class IslandStateMachine {
     this.clear("greetCollapse");
     this.greetCollapse = window.setTimeout(() => {
       this.greetCollapse = null;
-      if (this.state === "coucou") this.transition("petit");
+      if (this.state === "coucou") this.transition(this.idleTarget());
     }, delay * 1000);
   }
 
