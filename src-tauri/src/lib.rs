@@ -17,6 +17,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 mod elevate;
 mod island;
 mod shellmenu;
+#[cfg(windows)]
+mod sound;
 use island::{IslandRect, PollGate};
 
 struct Shared {
@@ -414,6 +416,49 @@ fn stage_finish(
     Ok(())
 }
 
+/// Sounds the island asked us to play, as 16-bit mono 44.1 kHz samples.
+static SOUNDS: std::sync::Mutex<Vec<(String, Vec<i16>)>> = std::sync::Mutex::new(Vec::new());
+
+/// The island hands over one rendered sound (raw little-endian i16 body, name in a header).
+#[tauri::command]
+fn sound_register(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected raw bytes".into());
+    };
+    let name = request
+        .headers()
+        .get("x-sound")
+        .and_then(|v| v.to_str().ok())
+        .ok_or("missing sound name")?
+        .to_string();
+    let pcm: Vec<i16> = bytes
+        .chunks_exact(2)
+        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let mut all = SOUNDS.lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|(n, _)| *n != name);
+    all.push((name, pcm));
+    Ok(())
+}
+
+/// Plays a registered sound through Windows (a new sound replaces the one still playing).
+#[tauri::command]
+fn sound_play(name: String, volume: f32) {
+    #[cfg(windows)]
+    {
+        let pcm = {
+            let all = SOUNDS.lock().unwrap_or_else(|e| e.into_inner());
+            match all.iter().find(|(n, _)| *n == name) {
+                Some((_, p)) => p.clone(),
+                None => return,
+            }
+        };
+        sound::play(&pcm, volume.clamp(0.0, 1.0));
+    }
+    #[cfg(not(windows))]
+    let _ = (name, volume);
+}
+
 /// Debug trail for the island's page (JS errors, launch) — `tandem.log` in the config folder.
 #[tauri::command]
 fn log_js(app: AppHandle, msg: String) {
@@ -554,7 +599,7 @@ fn quit_app(app: AppHandle) {
 
 // ------------------------------------------------------------------ shell
 
-/// A hotkey / tray entry for the bar. `what` is "bar" (control bar, Ctrl+Alt+T) or
+/// A hotkey / tray entry for the bar. `what` is "bar" (control bar, Ctrl+Alt+Z) or
 /// "pill" (transfer bar, Ctrl+Alt+U). If the bar is switched off in the settings there is
 /// nothing to show: the control bar's key opens the settings window instead.
 fn bar_hotkey(app: &AppHandle, what: &'static str) {
@@ -640,6 +685,10 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// Keep in sync with `additionalBrowserArgs` in tauri.conf.json.
+#[cfg(windows)]
+const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required";
+
 /// The pairing / settings window: created hidden, hides instead of closing.
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("settings.html".into()))
@@ -651,6 +700,11 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .resizable(true)
         .visible(false)
         .disable_drag_drop_handler();
+    // Every window of the app shares one WebView2 environment, so it must get the same
+    // browser arguments as the island (see tauri.conf.json). The autoplay flag lets the
+    // island play its sounds without the user having clicked inside it first.
+    #[cfg(windows)]
+    let b = b.additional_browser_args(WEBVIEW_ARGS);
     b.build()?;
     Ok(())
 }
@@ -676,7 +730,7 @@ pub fn run() {
                         return;
                     }
                     match shortcut.key {
-                        Code::KeyT => bar_hotkey(app, "bar"),
+                        Code::KeyZ => bar_hotkey(app, "bar"),
                         Code::KeyU => bar_hotkey(app, "pill"),
                         _ => {}
                     }
@@ -779,8 +833,8 @@ pub fn run() {
             gate.set_active(ui.enabled);
             island::spawn_cursor_poll(app.handle().clone(), gate);
 
-            // Ctrl+Alt+T opens / closes the control bar, Ctrl+Alt+U the transfer bar.
-            for (key, label) in [(Code::KeyT, "T"), (Code::KeyU, "U")] {
+            // Ctrl+Alt+Z opens / closes the control bar, Ctrl+Alt+U the transfer bar.
+            for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
                 if let Err(e) = app.global_shortcut().register(Shortcut::new(
                     Some(Modifiers::CONTROL | Modifiers::ALT),
                     key,
@@ -805,7 +859,7 @@ pub fn run() {
 
             // Tray.
             let open = MenuItem::with_id(app, "open", "Pair / settings…", true, None::<&str>)?;
-            let bar = MenuItem::with_id(app, "bar", "Top bar  (Ctrl+Alt+T)", true, None::<&str>)?;
+            let bar = MenuItem::with_id(app, "bar", "Top bar  (Ctrl+Alt+Z)", true, None::<&str>)?;
             let pill = MenuItem::with_id(
                 app,
                 "pill",
@@ -861,6 +915,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            sound_register,
+            sound_play,
             snapshot,
             connect,
             connect_known,

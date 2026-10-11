@@ -138,7 +138,7 @@ function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
 const side = h("aside", { class: "side" },
   h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-name" }, "Tandem")),
   statusEl, nav,
-  h("div", { class: "side-foot" }, h("kbd", {}, "Ctrl+Alt+T"), h("span", {}, "control bar")));
+  h("div", { class: "side-foot" }, h("kbd", {}, "Ctrl+Alt+Z"), h("span", {}, "control bar")));
 app.append(side, content);
 side.querySelector(".brand-logo")!.innerHTML = logoSvg; // static, trusted markup
 go(page);
@@ -494,7 +494,7 @@ function renderTopBar() {
       setting("Collapse after", "How long the bar stays open when you leave it alone.",
         seg([[5, "5 s"], [15, "15 s"], [30, "30 s"], [60, "1 min"]] as const, is.autoCloseInterval as 5 | 15 | 30 | 60, (sec) => { saveIsland({ autoCloseInterval: sec }); renderTopBar(); })),
       h("h2", { style: "margin-top:22px" }, "Shortcuts"),
-      setting("Control bar", null, h("kbd", {}, "Ctrl+Alt+T")),
+      setting("Control bar", null, h("kbd", {}, "Ctrl+Alt+Z")),
       setting("Transfer bar", "Open or close the small transfer bar any time.", h("kbd", {}, "Ctrl+Alt+U")),
       setting("Explorer right-click menu", "Adds “Send with Tandem” to files and folders.", switchEl(shellMenu, (v) => {
         void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });

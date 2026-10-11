@@ -67,7 +67,7 @@ clicks and never pops up by itself; its colour shows the state (grey: not connec
 green: connected, teal: you are controlling the other PC, amber: it is controlling you,
 pulsing teal: a transfer is running).
 
-- **Ctrl+Alt+T** opens the control bar (Bob, status, which side the other PC is on, Jump /
+- **Ctrl+Alt+Z** opens the control bar (Bob, status, which side the other PC is on, Jump /
   Disconnect). Press it again to close. It also closes by itself after a while.
 - **Ctrl+Alt+U** opens or closes the small transfer bar (progress of what is being sent or
   received). It appears by itself while a transfer runs; close it by hand with the same key.

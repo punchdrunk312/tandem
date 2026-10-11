@@ -2,6 +2,9 @@
 // list of notes (with optional pitch glide) or a noise sweep, rendered once into an
 // AudioBuffer when the island starts. Default volume 0.12, slider range 0–0.2.
 
+import { invoke } from "@tauri-apps/api/core";
+import { IS_TAURI } from "../bridge";
+
 export const SOUND_NAMES = [
   "peek", "open", "close", "hover", "blip", "slap", "annoyed", "dizzy", "greet",
   "work", "finish", "error", "approval", "question", "approve", "gulp", "tick",
@@ -52,6 +55,8 @@ const SPECS: Record<SoundName, Spec> = {
 };
 
 const RATE = 44100;
+/** The slider tops out at 0.2; the sounds are normalised, so scale it up to a comfortable level. */
+const MASTER_BOOST = 3;
 
 function wave(kind: Wave, ph: number): number {
   const f = ph - Math.floor(ph);
@@ -102,7 +107,11 @@ function render(spec: Spec): Float32Array {
       out[i0 + i] += y * vol * Math.min(1, i / (0.004 * RATE)) * Math.pow(1 - u, 1.4);
     }
   }
-  for (let i = 0; i < out.length; i++) out[i] = Math.max(-1, Math.min(1, out[i]));
+  // Every sound is brought to the same peak, so the volume slider means the same for all.
+  let peak = 0;
+  for (let i = 0; i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]));
+  const gain = peak > 0 ? 0.9 / peak : 1;
+  for (let i = 0; i < out.length; i++) out[i] = Math.max(-1, Math.min(1, out[i] * gain));
   return out;
 }
 
@@ -114,18 +123,21 @@ class SoundEngine {
   private master: GainNode | null = null;
   private buffers = new Map<string, AudioBuffer>();
   private loading: Promise<void> | null = null;
+  /** True once Windows itself plays the sounds (no WebView audio involved). */
+  private native = false;
   private idleTimer: number | null = null;
 
   /** Creates the context and decodes every WAV. Safe to call more than once. */
   preload(): Promise<void> {
     if (this.loading) return this.loading;
     this.loading = (async () => {
+      if (IS_TAURI && (await this.registerNative())) return;
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!Ctor) return;
       const ctx = new Ctor({ sampleRate: RATE });
       this.ctx = ctx;
       const master = ctx.createGain();
-      master.gain.value = this.volume;
+      master.gain.value = this.volume * MASTER_BOOST;
       master.connect(ctx.destination);
       this.master = master;
       for (const name of SOUND_NAMES) {
@@ -136,6 +148,23 @@ class SoundEngine {
       }
     })();
     return this.loading;
+  }
+
+  /** Hands every rendered sound to the Rust side, which plays them with the OS. */
+  private async registerNative(): Promise<boolean> {
+    try {
+      for (const name of SOUND_NAMES) {
+        const data = render(SPECS[name]);
+        const pcm = new Int16Array(data.length);
+        for (let i = 0; i < data.length; i++) pcm[i] = Math.round(data[i] * 32767);
+        await invoke("sound_register", pcm.buffer, { headers: { "x-sound": name } });
+      }
+      this.native = true;
+      return true;
+    } catch (err) {
+      console.error("[tandem] native sound unavailable", err);
+      return false;
+    }
   }
 
   /** WebView2 can hand us a suspended context; call after any user input. */
@@ -165,7 +194,7 @@ class SoundEngine {
 
   setVolume(v: number) {
     this.volume = Math.max(0, Math.min(0.2, v));
-    if (this.master) this.master.gain.value = this.volume;
+    if (this.master) this.master.gain.value = this.volume * MASTER_BOOST;
   }
 
   setEnabled(on: boolean) {
@@ -174,6 +203,10 @@ class SoundEngine {
 
   play(name: SoundName | string) {
     if (!this.enabled) return;
+    if (this.native) {
+      invoke("sound_play", { name, volume: Math.min(1, this.volume * MASTER_BOOST) }).catch(() => {});
+      return;
+    }
     const ctx = this.ctx;
     const master = this.master;
     const buf = this.buffers.get(name);

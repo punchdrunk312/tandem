@@ -305,7 +305,7 @@ export class Island {
     State.notify();
   }
 
-  /** Ctrl+Alt+T / Ctrl+Alt+U (and the tray entries). */
+  /** Ctrl+Alt+Z / Ctrl+Alt+U (and the tray entries). */
   hotkey(what: "bar" | "pill") {
     this.quiet = false;
     if (what === "bar") {
@@ -764,6 +764,7 @@ export class Island {
 
     this.engine.bodyColor = null;
     this.engine.particleOverhang = BOT_OVERHANG;
+    this.engine.ambient = State.mode === "expanded";
     this.engine.lookX = this.lookX();
     this.engine.lookY = this.lookY();
     if (this.engine.morph > 0.3) {

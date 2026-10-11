@@ -260,6 +260,17 @@ pub fn apply_geometry(app: &AppHandle, pref: &str, collapsed: bool) {
     let x = mp.x + (ms.width as i32 - pw as i32) / 2;
     let y = mp.y;
 
+    // Same place as last time: nothing to do (each call costs a visible layout pass).
+    static LAST: Mutex<Option<(i32, i32, u32, u32)>> = Mutex::new(None);
+    let placed = (x, y, pw, ph);
+    {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some(placed) {
+            return;
+        }
+        *last = Some(placed);
+    }
+
     let _ = win.set_size(PhysicalSize::new(pw, ph));
     let _ = win.set_position(PhysicalPosition::new(x, y));
     // Moving across displays can rescale the window: re-assert the physical size.
@@ -290,14 +301,15 @@ pub fn now_ms() -> u64 {
 /// How long a hotkey keeps the bar available inside a full-screen app.
 const REVEAL_MS: u64 = 10_000;
 
-/// A hotkey was pressed: `what` is "bar" (Ctrl+Alt+T, the control bar) or "pill"
+/// A hotkey was pressed: `what` is "bar" (Ctrl+Alt+Z, the control bar) or "pill"
 /// (Ctrl+Alt+U, the transfer bar). The page decides what to show or hide; this makes
 /// sure the window is in place, on top and allowed to show even in a full-screen app.
 pub fn hotkey(app: &AppHandle, gate: &PollGate, what: &'static str) {
     gate.reveal_until_ms
         .store(now_ms() + REVEAL_MS, Ordering::Relaxed);
     if let Some(win) = window(app) {
-        apply_geometry(app, gate.pref(), gate.collapsed.load(Ordering::Relaxed));
+        // Always the display the user is on, whatever the "follow cursor" setting says.
+        apply_geometry(app, "cursor", gate.collapsed.load(Ordering::Relaxed));
         gate.forget_ignore_state();
         sys::make_non_activating(&win);
         sys::show_no_activate(&win);
