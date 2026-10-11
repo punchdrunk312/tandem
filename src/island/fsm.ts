@@ -1,7 +1,7 @@
 // Island open/close FSM — port of IslandStateMachine.swift.
 // No DOM, no Tauri: it only reports transitions.
 
-export type FsmState = "hidden" | "petit" | "home" | "coucou";
+export type FsmState = "hidden" | "petit" | "home" | "hello";
 
 export class IslandStateMachine {
   state: FsmState = "hidden";
@@ -16,9 +16,9 @@ export class IslandStateMachine {
   idleTarget: () => "petit" | "hidden" = () => "hidden";
   /** True while the pill has to stay up (a transfer is running, or the user pinned it). */
   petitHold: () => boolean = () => false;
-  /** coucou → petit once the greeting animation ends (no hover). */
+  /** hello → petit once the greeting animation ends (no hover). */
   greetAutoCollapseDelay = 0.6;
-  /** coucou → petit while the mouse hovers the greeting. */
+  /** hello → petit while the mouse hovers the greeting. */
   greetHoverCollapseDelay = 10;
   /** An alert waiting for an answer stays open, even when the mouse leaves. */
   pinned = false;
@@ -31,7 +31,7 @@ export class IslandStateMachine {
 
   launch() {
     this.cancelTimers();
-    this.transition("coucou");
+    this.transition("hello");
   }
 
   mouseEntered() {
@@ -46,7 +46,7 @@ export class IslandStateMachine {
       case "home":
         this.clear("homeCollapse");
         break;
-      case "coucou":
+      case "hello":
         this.scheduleGreetCollapse(this.greetHoverCollapseDelay);
         break;
     }
@@ -62,7 +62,7 @@ export class IslandStateMachine {
       case "home":
         this.scheduleHomeCollapse();
         break;
-      case "coucou":
+      case "hello":
         this.clear("greetCollapse");
         this.transition(this.idleTarget());
         break;
@@ -77,7 +77,7 @@ export class IslandStateMachine {
 
   /** Greeting animation finished (T.end). Doesn't override a running hover timer. */
   greetComplete() {
-    if (this.state !== "coucou") return;
+    if (this.state !== "hello") return;
     if (this.greetCollapse == null) this.scheduleGreetCollapse(this.greetAutoCollapseDelay);
   }
 
@@ -137,7 +137,7 @@ export class IslandStateMachine {
     this.clear("greetCollapse");
     this.greetCollapse = window.setTimeout(() => {
       this.greetCollapse = null;
-      if (this.state === "coucou") this.transition(this.idleTarget());
+      if (this.state === "hello") this.transition(this.idleTarget());
     }, delay * 1000);
   }
 

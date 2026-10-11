@@ -1,14 +1,16 @@
-// Mochi — direct port of NotchBuddy/Sources/App/BotEngine.swift to Canvas 2D.
-// Same constants, same tweens, same easings, same particles. The only intentional
-// difference is the `happy`/`wink` eye arc, which follows the prototype
-// (design/prototype/notch-buddy.html, the visual source of truth) — the Swift
-// arc angles produce a different shape.
+// Bob — Tandem's own mascot, drawn entirely in code (no image files).
+//
+// A rounded teal cube with an amber twin tucked behind him (the two squares of the
+// Tandem logo), a little antenna whose bulb shows what is going on, big glossy eyes
+// that follow the cursor, and a mouth that changes with his mood.
+//
+// The animation plumbing (tweens, look-at, blink, particles) is the generic part of
+// Coucou's MIT-licensed engine. Everything you can see — shape, colours, face,
+// hands, badges — is original to Tandem.
 
 import { Ease, lerp, type EaseFn } from "../core/anim";
 import { Sound } from "../core/sound";
 import type { BotEmoteName, BotStateName } from "../core/layout";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 export type EyeShape =
   | "pill" | "wide" | "dot" | "line" | "flat" | "happy" | "closed"
@@ -42,6 +44,7 @@ interface BotStateCfg {
   color: RGB;
   tint: number;
   eye: EyeShape;
+  mouth: MouthShape;
   badge: Badge | null;
   bounces: boolean;
   scans: boolean;
@@ -52,25 +55,24 @@ interface BotStateCfg {
   tilt: number;
 }
 
+type MouthShape = "smile" | "grin" | "flat" | "o" | "wavy" | "tiny" | "hmm";
+
 interface Particle {
   type: "heart" | "star" | "spark" | "sweat" | "z";
   x: number; y: number; vx: number; vy: number;
   age: number; life: number; rot: number; size: number;
 }
 
-// ── Constants (MochiConst / PISTES.mochi) ─────────────────────────────────────
+// ── Look ──────────────────────────────────────────────────────────────────────
 
-const EYE_W = 0.25;
-const EYE_H = 0.27;
-const EYE_SP = 0.37;
-const EYE_P = -0.12;
-const BASE_TOP: RGB = [0.929, 0.929, 0.937]; // #EDEDEF
-const BASE_BOTTOM: RGB = [0.769, 0.773, 0.792]; // #C4C5CA
-const INK = "rgb(26,20,18)"; // #1A1412
-const MINI_INK = "rgb(16,19,26)"; // #10131A
+const TEAL_TOP: RGB = [0.45, 0.93, 0.85]; // light, top-left
+const TEAL_BOTTOM: RGB = [0.08, 0.72, 0.64]; // deep, bottom-right
+const AMBER: RGB = [0.98, 0.75, 0.14];
+const AMBER_DEEP: RGB = [0.93, 0.55, 0.08];
+const INK = "rgb(10,28,34)";
 
 const C = {
-  idle: [0.902, 0.914, 0.933] as RGB,
+  idle: [0.18, 0.83, 0.75] as RGB,
   working: [0.231, 0.62, 1] as RGB,
   thinking: [0.545, 0.361, 0.965] as RGB,
   searching: [0.388, 0.396, 0.949] as RGB,
@@ -89,20 +91,20 @@ const base = {
 };
 
 export const BOT_STATES: Record<BotStateName, BotStateCfg> = {
-  idle: { ...base, color: C.idle, tint: 0, eye: "pill", badge: null },
-  working: { ...base, color: C.working, tint: 0.72, eye: "pill", badge: { kind: "dots", color: C.working } },
-  thinking: { ...base, color: C.thinking, tint: 0.72, eye: "pill", badge: { kind: "dots", color: C.thinking }, look: [0.55, 0.55] },
-  searching: { ...base, color: C.searching, tint: 0.72, eye: "pill", badge: { kind: "dots", color: C.searching }, scans: true },
-  approval: { ...base, color: C.approval, tint: 0.78, eye: "wide", badge: { kind: "bang", color: C.approval }, bounces: true },
-  question: { ...base, color: C.question, tint: 0.75, eye: "pill", badge: { kind: "question", color: C.question }, tilt: 0.17 },
-  error: { ...base, color: C.error, tint: 0.78, eye: "flat", badge: { kind: "dot", color: C.error } },
-  finished: { ...base, color: C.finished, tint: 0.35, eye: "happy", badge: { kind: "dot", color: C.finished } },
-  ratelimit: { ...base, color: C.ratelimit, tint: 0.72, eye: "tired", badge: { kind: "dot", color: C.ratelimit }, sweat: true },
-  sleeping: { ...base, color: C.sleeping, tint: 0.32, eye: "closed", badge: null, breathes: true, zz: true },
-  dizzy: { ...base, color: C.dizzy, tint: 0.7, eye: "spiral", badge: null },
+  idle: { ...base, color: C.idle, tint: 0, eye: "pill", mouth: "smile", badge: null },
+  working: { ...base, color: C.working, tint: 0.5, eye: "pill", mouth: "smile", badge: { kind: "dots", color: C.working } },
+  thinking: { ...base, color: C.thinking, tint: 0.5, eye: "pill", mouth: "hmm", badge: { kind: "dots", color: C.thinking }, look: [0.55, 0.55] },
+  searching: { ...base, color: C.searching, tint: 0.5, eye: "pill", mouth: "tiny", badge: { kind: "dots", color: C.searching }, scans: true },
+  approval: { ...base, color: C.approval, tint: 0.55, eye: "wide", mouth: "o", badge: { kind: "bang", color: C.approval }, bounces: true },
+  question: { ...base, color: C.question, tint: 0.5, eye: "pill", mouth: "hmm", badge: { kind: "question", color: C.question }, tilt: 0.17 },
+  error: { ...base, color: C.error, tint: 0.6, eye: "flat", mouth: "flat", badge: { kind: "dot", color: C.error } },
+  finished: { ...base, color: C.finished, tint: 0.2, eye: "happy", mouth: "grin", badge: { kind: "dot", color: C.finished } },
+  ratelimit: { ...base, color: C.ratelimit, tint: 0.5, eye: "tired", mouth: "wavy", badge: { kind: "dot", color: C.ratelimit }, sweat: true },
+  sleeping: { ...base, color: C.sleeping, tint: 0.45, eye: "closed", mouth: "tiny", badge: null, breathes: true, zz: true },
+  dizzy: { ...base, color: C.dizzy, tint: 0.5, eye: "spiral", mouth: "wavy", badge: null },
 };
 
-/** State → sound, as in BotStateCfg.sound. */
+/** State → sound. */
 export const STATE_SOUND: Partial<Record<BotStateName, string>> = {
   working: "work", thinking: "think", searching: "search", approval: "approval",
   question: "question", error: "error", finished: "finish", ratelimit: "rate",
@@ -164,9 +166,9 @@ const FONT = `system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif`;
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
-export class BotEngine {
+export class Bob {
   isMini = false;
-  /** Solid body colour for mini bots / integration pills (null = Mochi gradient). */
+  /** Optional solid body colour (unused by Tandem; null = Bob's own teal). */
   bodyColor: RGB | null = null;
 
   // Animated state (BotEngine `s`)
@@ -319,7 +321,7 @@ export class BotEngine {
     this.anim("roll", [[Math.PI * 2 * turns, durationMs, Ease.inOut]], () => { this.roll = 0; });
   }
 
-  /** Peek wave — the "coucou". Timings from BotEngine.greet(). */
+  /** Peek wave (hello). */
   greet() {
     const t = now();
     const tok = ++this.greetToken;
@@ -634,197 +636,220 @@ export class BotEngine {
     }
   }
 
+
   // ── Draw ────────────────────────────────────────────────────────────────────
 
-  /**
-   * Draws hands, body, blush, eyes, mouth, badge and particles into a canvas of
-   * `w`×`h` CSS pixels (the caller has already applied the DPR transform).
-   */
+  /** Draws Bob into a canvas of `W`×`H` CSS pixels (the caller applied the DPR transform). */
   draw(x: CanvasRenderingContext2D, W: number, H: number) {
     const R = W * 0.3;
-    const rx = R * 1.14;
-    const ry = R * 0.88;
-    const cx = W / 2 + this.ox * R;
-    const cy = H / 2 + this.particleOverhang / 2 + this.oy * R + R * 0.06;
+    this.drawAt(x, W / 2 + this.ox * R, H / 2 + this.particleOverhang / 2 + this.oy * R + R * 0.06, R);
+  }
 
-    this.drawHandsBehind(x, R, rx, ry, cx, cy);
+  /** Draws Bob centred on (cx, cy) with body half-size ≈ R. */
+  drawAt(x: CanvasRenderingContext2D, cx: number, cy: number, R: number) {
+    const m = this.morph;
+    const hw = lerp(R * 1.0, R * 1.2, m);
+    const hh = lerp(R * 0.96, R * 0.88, m);
+    const rad = lerp(R * 0.52, R * 0.3, m);
+
+    this.drawHands(x, R, hw, hh, cx, cy);
 
     x.save();
     x.translate(cx, cy);
     if (this.tilt !== 0) x.rotate(this.tilt);
     x.scale(this.sx, this.sy);
 
-    const body = this.bodyPath(rx, ry, R);
-    this.drawBody(x, body, R, rx, ry);
-
-    const blushVal = Math.max(this.blush, this.tint * 0.5) * (1 - this.morph);
-    if (blushVal > 0.01) {
+    // The amber twin peeks out behind him (hidden once he turns into the box).
+    if (m < 0.9) {
       x.save();
-      x.clip(body);
-      const yOffset = Math.sin(this.yaw) * rx * 0.8;
-      x.fillStyle = `rgba(255,120,150,${0.5 * blushVal})`;
-      for (const sd of [-1, 1]) {
-        x.beginPath();
-        x.ellipse(sd * rx * 0.55 + yOffset, ry * 0.2, R * 0.17, R * 0.1, 0, 0, Math.PI * 2);
-        x.fill();
-      }
+      x.globalAlpha = 1 - m;
+      x.translate(R * 0.17, R * 0.15);
+      x.rotate(0.07);
+      roundRectPath(x, -hw * 0.97, -hh * 0.97, hw * 1.94, hh * 1.94, rad);
+      const tg = x.createLinearGradient(-hw, -hh, hw, hh);
+      tg.addColorStop(0, rgba(AMBER));
+      tg.addColorStop(1, rgba(AMBER_DEEP));
+      x.fillStyle = tg;
+      x.fill();
       x.restore();
     }
 
-    this.drawEyes(x, body, R, rx, ry);
-    if (this.morph > 0.05) this.drawMouth(x, body, R);
+    this.drawAntenna(x, R, hh, rad);
+
+    const body = new Path2D();
+    pathRoundRect(body, -hw, -hh, hw * 2, hh * 2, rad);
+    this.drawBody(x, body, R, hw, hh);
+
+    // Cheeks
+    const blushVal = Math.max(this.blush, this.tint * 0.25) * (1 - m);
+    const cheekA = 0.16 + 0.5 * blushVal;
+    x.save();
+    x.clip(body);
+    x.fillStyle = `rgba(255,120,140,${cheekA})`;
+    const slide = Math.sin(this.yaw) * hw * 0.35;
+    for (const sd of [-1, 1]) {
+      x.beginPath();
+      x.ellipse(sd * hw * 0.62 + slide, hh * 0.3, R * 0.15, R * 0.09, 0, 0, Math.PI * 2);
+      x.fill();
+    }
+    x.restore();
+
+    this.drawEyes(x, body, R, hw, hh);
+    if (m > 0.05) this.drawSlot(x, body, R, hh);
+    else this.drawMouth(x, R, hh);
 
     x.restore();
 
-    if (this.badge && this.badgeS > 0.01 && this.morph < 0.25) {
-      this.drawBadge(x, this.badge, R, cx, cy);
-    }
+    if (this.badge && this.badgeS > 0.01 && m < 0.25) this.drawBadge(x, this.badge, R, cx, cy);
     this.drawParticles(x, R, cx, cy);
   }
 
-  private bodyPath(rx: number, ry: number, R: number): Path2D {
-    const n = 72;
-    const expN = 2.0 / 2.7;
-    const tw = R * 1.0;
-    const th = R * 0.94;
-    const tr = R * 0.42;
-    const p = new Path2D();
-    const m = this.morph;
-    for (let i = 0; i <= n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const ca = Math.cos(a);
-      const sa = Math.sin(a);
-      const px0 = rx * (ca >= 0 ? Math.pow(ca, expN) : -Math.pow(-ca, expN));
-      const py0 = ry * (sa >= 0 ? Math.pow(sa, expN) : -Math.pow(-sa, expN));
-      let px = px0;
-      let py = py0;
-      if (m >= 0.005) {
-        const rr = rrPoint(ca, sa, tw, th, tr);
-        px = lerp(px0, rr.x, m);
-        py = lerp(py0, rr.y, m);
-      }
-      if (i === 0) p.moveTo(px, py);
-      else p.lineTo(px, py);
-    }
-    p.closePath();
-    return p;
-  }
-
-  private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
-    if (this.bodyColor) {
-      // Mini bots: flat solid fill — no gradient, no reflection, no highlight
-      x.fillStyle = rgba(this.bodyColor, 1);
-      x.fill(body);
-      return;
-    }
-    const g = x.createLinearGradient(rx * 0.7, -ry * 0.85, -rx * 0.8, ry * 0.9);
-    g.addColorStop(0, rgba(BASE_TOP));
-    g.addColorStop(1, rgba(BASE_BOTTOM));
+  private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, hw: number, hh: number) {
+    const g = x.createLinearGradient(-hw * 0.8, -hh, hw * 0.8, hh);
+    const tint = this.tint * (1 - this.morph);
+    g.addColorStop(0, rgba(mix3(TEAL_TOP, this.col, tint * 0.4)));
+    g.addColorStop(1, rgba(mix3(TEAL_BOTTOM, this.col, tint * 0.55)));
     x.fillStyle = g;
     x.fill(body);
 
-    const effectiveTint = this.tint * (1 - this.morph);
-    if (effectiveTint > 0.01) {
-      const tg = x.createLinearGradient(0, ry, 0, -ry);
-      tg.addColorStop(0, rgba(this.col, 0.72 * effectiveTint));
-      tg.addColorStop(1, rgba(this.col, 0));
-      x.fillStyle = tg;
-      x.fill(body);
-    }
-
-    const sh = x.createRadialGradient(0, 0, R * 0.15, 0, 0, R * 1.25);
-    sh.addColorStop(0, "rgba(0,0,0,0)");
-    sh.addColorStop(0.6, "rgba(0,0,0,0)");
-    sh.addColorStop(1, "rgba(0,0,0,0.2)");
+    // Soft inner shade at the bottom, glossy highlight at the top-left.
+    const sh = x.createLinearGradient(0, hh * 0.2, 0, hh);
+    sh.addColorStop(0, "rgba(0,40,45,0)");
+    sh.addColorStop(1, "rgba(0,40,45,0.28)");
     x.fillStyle = sh;
     x.fill(body);
 
-    const hl = x.createRadialGradient(rx * 0.34, -ry * 0.46, 0, rx * 0.34, -ry * 0.46, R * 0.42);
-    hl.addColorStop(0, "rgba(255,255,255,0.55)");
+    x.save();
+    x.clip(body);
+    const hl = x.createRadialGradient(-hw * 0.4, -hh * 0.55, 0, -hw * 0.4, -hh * 0.55, R * 0.7);
+    hl.addColorStop(0, "rgba(255,255,255,0.6)");
     hl.addColorStop(1, "rgba(255,255,255,0)");
     x.fillStyle = hl;
-    x.fill(body);
+    x.fillRect(-hw, -hh, hw * 2, hh * 2);
+    x.restore();
+
+    x.lineWidth = Math.max(1, R * 0.03);
+    x.strokeStyle = "rgba(255,255,255,0.22)";
+    x.stroke(body);
   }
 
-  private drawEyes(x: CanvasRenderingContext2D, body: Path2D, R: number, rx: number, ry: number) {
+  /** Antenna: a short stalk and a bulb that glows in the state's colour. */
+  private drawAntenna(x: CanvasRenderingContext2D, R: number, hh: number, rad: number) {
+    const a = 1 - this.morph;
+    if (a < 0.05 || R < 12) return;
+    const t = now();
+    const sway = Math.sin(t * 2.2) * 0.04 + this.yaw * 0.12;
+    const len = R * 0.34;
+    const topY = -hh + rad * 0.12;
+    const bx = Math.sin(sway) * len;
+    const by = topY - Math.cos(sway) * len;
+
+    x.save();
+    x.globalAlpha = a;
+    x.strokeStyle = rgba(mix3(TEAL_BOTTOM, [0, 0.15, 0.2], 0.35));
+    x.lineWidth = Math.max(1.5, R * 0.06);
+    x.lineCap = "round";
+    x.beginPath();
+    x.moveTo(0, topY + R * 0.04);
+    x.quadraticCurveTo(bx * 0.2, topY - len * 0.6, bx, by);
+    x.stroke();
+
+    const pulse = this.cfg.bounces || this.cfg.sweat ? 0.5 + 0.5 * Math.sin(t * 6) : 0.5 + 0.5 * Math.sin(t * 2);
+    const br = R * 0.11;
+    const glow = x.createRadialGradient(bx, by, 0, bx, by, br * (2.6 + pulse));
+    glow.addColorStop(0, rgba(this.col, 0.55));
+    glow.addColorStop(1, rgba(this.col, 0));
+    x.fillStyle = glow;
+    x.beginPath();
+    x.arc(bx, by, br * (2.6 + pulse), 0, Math.PI * 2);
+    x.fill();
+    x.fillStyle = rgba(mix3(this.col, [1, 1, 1], 0.15));
+    x.beginPath();
+    x.arc(bx, by, br, 0, Math.PI * 2);
+    x.fill();
+    x.fillStyle = "rgba(255,255,255,0.8)";
+    x.beginPath();
+    x.arc(bx - br * 0.3, by - br * 0.3, br * 0.32, 0, Math.PI * 2);
+    x.fill();
+    x.restore();
+  }
+
+  private drawEyes(x: CanvasRenderingContext2D, body: Path2D, R: number, hw: number, hh: number) {
     let shape: EyeShape = this.eyeOverride ?? this.cfg.eye;
     if (this.morph > 0.5) {
       if (this.isChewing) shape = "happy";
       else if (this.slotHTarget > 0.05 || this.slotH > 0.1) shape = "cup";
     }
-
     x.save();
     x.clip(body);
-    const ink = this.isMini ? MINI_INK : INK;
-    x.fillStyle = ink;
-    x.strokeStyle = ink;
-
+    x.fillStyle = INK;
+    x.strokeStyle = INK;
+    const lift = this.morph * hh * 0.1;
     for (const sd of [-1, 1]) {
-      const eyeYaw = sd * EYE_SP + this.yaw;
-      let eyePitch = EYE_P + this.pitch + this.roll;
-      eyePitch = (((eyePitch + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-      const cp = Math.cos(eyePitch);
-      if (Math.cos(eyeYaw) * cp <= 0.04) continue;
-
-      const ex = Math.sin(eyeYaw) * cp * rx;
-      const ey = -Math.sin(eyePitch) * ry + (this.morph > 0 ? ry * 0.14 * this.morph : 0);
-      const fx = lerp(Math.max(0.18, Math.cos(eyeYaw)), 1, this.morph * 0.7);
-      const fy = lerp(Math.max(0.18, cp), 1, this.morph * 0.7);
-      const eyeMult = this.isMini ? 1.9 : 1.0;
-      const ew = R * EYE_W * this.es * eyeMult;
-      const eh = R * EYE_H * this.es * eyeMult;
-
+      const ex = sd * hw * 0.4 + this.yaw * hw * 0.42 + Math.sin(this.roll) * hw * 0.2;
+      const ey = -hh * 0.1 + this.pitch * hh * 0.55 + lift;
+      // Eyes squeeze a little as they look sideways, like they sit on a curved face.
+      const fx = 1 - Math.min(0.28, Math.abs(this.yaw) * 0.35);
       x.save();
       x.translate(ex, ey);
-      x.scale(fx, fy);
-      this.drawEyeShape(x, shape, ew, eh, sd, ink);
+      x.scale(fx, 1);
+      this.drawEyeShape(x, shape, R * 0.19 * this.es, R * 0.27 * this.es, sd);
       x.restore();
     }
     x.restore();
   }
 
-  private drawEyeShape(
-    x: CanvasRenderingContext2D, shape: EyeShape,
-    w: number, h: number, sd: number, ink: string,
-  ) {
+  private drawEyeShape(x: CanvasRenderingContext2D, shape: EyeShape, w: number, h: number, sd: number) {
     const t = now();
-    switch (shape) {
-      case "wide":
-        this.drawEyeShape(x, "pill", w * 1.16, h * 1.12, sd, ink);
-        break;
-      case "pill": {
-        const hh = Math.max(h * this.open, w * 0.3);
-        roundRectPath(x, -w / 2, -hh / 2, w, hh, Math.min(w / 2, hh / 2));
-        x.fill();
-        break;
-      }
-      case "dot":
+    const arc = (up: boolean) => {
+      x.lineWidth = w * 0.42;
+      x.lineCap = "round";
+      x.beginPath();
+      if (up) x.arc(0, h * 0.22, w * 0.78, Math.PI * 1.1, Math.PI * 1.9);
+      else x.arc(0, -h * 0.12, w * 0.78, Math.PI * 0.1, Math.PI * 0.9);
+      x.stroke();
+    };
+    const glossy = (ew: number, eh: number) => {
+      const hh = Math.max(eh * this.open, ew * 0.35);
+      x.beginPath();
+      x.ellipse(0, 0, ew, hh, 0, 0, Math.PI * 2);
+      x.fill();
+      if (hh > ew * 0.7) {
+        x.fillStyle = "rgba(255,255,255,0.92)";
         x.beginPath();
-        x.arc(0, 0, w * 0.45, 0, Math.PI * 2);
+        x.arc(-ew * 0.32, -hh * 0.36, ew * 0.34, 0, Math.PI * 2);
         x.fill();
+        x.beginPath();
+        x.arc(ew * 0.34, hh * 0.3, ew * 0.15, 0, Math.PI * 2);
+        x.fill();
+        x.fillStyle = INK;
+      }
+    };
+    switch (shape) {
+      case "pill":
+        glossy(w * 0.62, h * 0.9);
+        break;
+      case "wide":
+        glossy(w * 0.75, h * 1.05);
+        break;
+      case "dot":
+        glossy(w * 0.62, w * 0.62);
         break;
       case "line":
-        x.rotate(-sd * 0.2);
-        roundRectPath(x, -w * 0.78, -w * 0.21, w * 1.56, w * 0.42, w * 0.21);
+        x.rotate(-sd * 0.22);
+        roundRectPath(x, -w * 0.8, -w * 0.18, w * 1.6, w * 0.36, w * 0.18);
         x.fill();
         break;
       case "flat":
-        roundRectPath(x, -w * 0.72, -w * 0.2, w * 1.44, w * 0.4, w * 0.2);
+        x.rotate(sd * 0.16);
+        roundRectPath(x, -w * 0.78, -w * 0.17, w * 1.56, w * 0.34, w * 0.17);
         x.fill();
         break;
       case "happy":
-        x.lineWidth = w * 0.5;
-        x.lineCap = "round";
-        x.beginPath();
-        x.arc(0, h * 0.18, w * 0.82, Math.PI * 1.12, Math.PI * 1.88);
-        x.stroke();
+        arc(true);
         break;
       case "closed":
-        x.lineWidth = w * 0.36;
-        x.lineCap = "round";
-        x.beginPath();
-        x.arc(0, -h * 0.08, w * 0.78, Math.PI * 0.15, Math.PI * 0.85);
-        x.stroke();
+        arc(false);
         break;
       case "spiral": {
         x.lineWidth = w * 0.22;
@@ -843,220 +868,202 @@ export class BotEngine {
       }
       case "heart":
         x.fillStyle = "#FF4D6D";
-        heartPath(x, w * 1.2);
+        heartPath(x, w * 1.15);
         x.fill();
-        x.fillStyle = ink;
+        x.fillStyle = INK;
         break;
       case "star":
-        x.fillStyle = "#F7B32B";
+        x.fillStyle = "#FFC933";
         x.rotate(t * 1.5 * sd);
         starPath(x, w * 1.05, w * 0.46);
         x.fill();
-        x.fillStyle = ink;
+        x.fillStyle = INK;
         break;
-      case "tired":
-        roundRectPath(x, -w / 2, -h * 0.02, w, h * 0.38, w / 2);
-        x.fill();
-        roundRectPath(x, -w * 0.62, -h * 0.1, w * 1.24, w * 0.22, w * 0.11);
-        x.fill();
-        break;
-      case "wink":
-        if (sd < 0) {
-          const hh = Math.max(h * this.open, w * 0.3);
-          roundRectPath(x, -w / 2, -hh / 2, w, hh, Math.min(w / 2, hh / 2));
-          x.fill();
-        } else {
-          x.lineWidth = w * 0.5;
-          x.lineCap = "round";
-          x.beginPath();
-          x.arc(0, h * 0.18, w * 0.82, Math.PI * 1.12, Math.PI * 1.88);
-          x.stroke();
-        }
-        break;
-      case "cup": {
-        // Flat top, rounded bottom corners (U shape) — used while the box is open
-        const hh = Math.max(h * this.open, w * 0.3);
-        const cr = Math.min(w / 2, hh / 2);
+      case "tired": {
+        // Heavy-lidded: only the lower half of the eye shows, under a flat lid line.
         x.beginPath();
-        x.moveTo(-w / 2, -hh / 2);
-        x.lineTo(w / 2, -hh / 2);
-        x.lineTo(w / 2, hh / 2 - cr);
-        x.quadraticCurveTo(w / 2, hh / 2, w / 2 - cr, hh / 2);
-        x.lineTo(-w / 2 + cr, hh / 2);
-        x.quadraticCurveTo(-w / 2, hh / 2, -w / 2, hh / 2 - cr);
+        x.ellipse(0, 0, w * 0.62, h * 0.62, 0, 0, Math.PI);
         x.closePath();
         x.fill();
         break;
       }
+      case "wink":
+        if (sd < 0) glossy(w * 0.62, h * 0.9);
+        else arc(true);
+        break;
+      case "cup": {
+        const hh = Math.max(h * this.open * 0.9, w * 0.35);
+        x.beginPath();
+        x.ellipse(0, 0, w * 0.62, hh, 0, 0, Math.PI * 2);
+        x.fill();
+        break;
+      }
     }
   }
 
-  /** Mailbox slot: dark pill cut into the box face, with rim and lip highlights. */
-  private drawMouth(x: CanvasRenderingContext2D, body: Path2D, R: number) {
-    const m = this.morph;
-    const hW = R * 1.8 * m;
-    const hH = this.slotH * R * m;
-    const hX = -hW / 2;
-    const boxTop = -R * (0.88 + 0.06 * m);
-    const hY = boxTop + R * 0.08 * m;
+  /** Mouth for the normal (cube) body. */
+  private drawMouth(x: CanvasRenderingContext2D, R: number, hh: number) {
+    let shape: MouthShape = this.cfg.mouth;
+    const eye = this.eyeOverride;
+    if (eye === "happy" || eye === "heart" || eye === "star") shape = "grin";
+    else if (eye === "dot") shape = "o";
+    else if (eye === "line") shape = "flat";
+    else if (eye === "tired" || eye === "closed") shape = "tiny";
+    else if (eye === "wink") shape = "smile";
 
+    const y = hh * 0.42 + this.pitch * hh * 0.15;
+    const mx = this.yaw * R * 0.3;
     x.save();
-    x.clip(body);
-
-    x.strokeStyle = `rgba(255,255,255,${0.55 * m})`;
-    x.lineWidth = 1;
+    x.translate(mx, y);
+    x.strokeStyle = INK;
+    x.fillStyle = INK;
     x.lineCap = "round";
-    x.beginPath();
-    x.moveTo(-R * 0.9 * m, boxTop + 1);
-    x.lineTo(R * 0.9 * m, boxTop + 1);
-    x.stroke();
-
-    if (hH > 0.8) {
-      const hR = Math.min(hW / 2, hH / 2);
-      const g = x.createLinearGradient(0, hY, 0, hY + hH);
-      g.addColorStop(0, "rgb(7,8,10)");
-      g.addColorStop(1, "rgb(16,19,26)");
-      roundRectPath(x, hX, hY, hW, hH, hR);
-      x.fillStyle = g;
-      x.fill();
-      if (hH > 4) {
-        const lipR = Math.min(hR, (hW - 2) / 2);
-        x.strokeStyle = `rgba(255,255,255,${0.28 * m})`;
+    x.lineJoin = "round";
+    x.lineWidth = Math.max(1.4, R * 0.07);
+    const w = R * 0.26;
+    switch (shape) {
+      case "smile":
         x.beginPath();
-        x.moveTo(hX + lipR, hY + hH - 0.5);
-        x.lineTo(hX + hW - lipR, hY + hH - 0.5);
+        x.moveTo(-w, 0);
+        x.quadraticCurveTo(0, R * 0.2, w, 0);
         x.stroke();
+        break;
+      case "grin":
+        x.beginPath();
+        x.moveTo(-w * 1.15, -R * 0.02);
+        x.quadraticCurveTo(0, R * 0.32, w * 1.15, -R * 0.02);
+        x.closePath();
+        x.fill();
+        x.fillStyle = "rgba(255,120,140,0.9)";
+        x.beginPath();
+        x.ellipse(0, R * 0.12, w * 0.5, R * 0.06, 0, 0, Math.PI * 2);
+        x.fill();
+        break;
+      case "flat":
+        x.beginPath();
+        x.moveTo(-w * 0.8, R * 0.04);
+        x.lineTo(w * 0.8, R * 0.04);
+        x.stroke();
+        break;
+      case "o":
+        x.beginPath();
+        x.ellipse(0, R * 0.05, R * 0.09, R * 0.12, 0, 0, Math.PI * 2);
+        x.fill();
+        break;
+      case "wavy": {
+        x.beginPath();
+        const t = now();
+        for (let i = 0; i <= 12; i++) {
+          const u = i / 12;
+          const px = -w + u * w * 2;
+          const py = Math.sin(u * Math.PI * 3 + t * 6) * R * 0.04;
+          if (i === 0) x.moveTo(px, py);
+          else x.lineTo(px, py);
+        }
+        x.stroke();
+        break;
       }
+      case "tiny":
+        x.beginPath();
+        x.moveTo(-w * 0.4, 0);
+        x.quadraticCurveTo(0, R * 0.07, w * 0.4, 0);
+        x.stroke();
+        break;
+      case "hmm":
+        x.beginPath();
+        x.moveTo(-w * 0.8, R * 0.05);
+        x.quadraticCurveTo(-w * 0.1, -R * 0.02, w * 0.8, R * 0.06);
+        x.stroke();
+        break;
     }
     x.restore();
   }
 
-  /** Hands sit behind the body — drawn before it, in world coordinates. */
-  private drawHandsBehind(
-    x: CanvasRenderingContext2D,
-    R: number, rx: number, ry: number, cx: number, cy: number,
-  ) {
-    if (this.hands <= 0.01 || this.isMini) return;
-    if (R <= 14) return; // meaningless at compact/peek sizes
+  /** The cube's big "eating" mouth: a dark slot with an amber rim, used for drops. */
+  private drawSlot(x: CanvasRenderingContext2D, body: Path2D, R: number, hh: number) {
+    const m = this.morph;
+    const w = R * 1.55 * m;
+    const h = Math.max(R * 0.1, this.slotH * R * 1.1) * m;
+    const y = hh * 0.2;
+    x.save();
+    x.clip(body);
+    const r = Math.min(w / 2, h / 2);
+    roundRectPath(x, -w / 2, y, w, h, r);
+    const g = x.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, "rgb(6,18,22)");
+    g.addColorStop(1, "rgb(14,40,46)");
+    x.fillStyle = g;
+    x.fill();
+    x.lineWidth = Math.max(1.2, R * 0.05);
+    x.strokeStyle = `rgba(251,191,36,${0.9 * m})`;
+    x.stroke();
+    x.restore();
+  }
 
+  /** Little round hands, in the amber of the twin; they wave during the greeting. */
+  private drawHands(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, cx: number, cy: number) {
+    if (this.hands <= 0.01 || R <= 14) return;
     const n = now();
-    const bodyH = 2 * ry;
-    const hew = 0.3 * ry * this.hands;
-    const heh = 0.26 * ry * this.hands;
-    const hwB = rx * this.sx;
-    const hhB = ry * this.sy;
-    const isWaving = n >= this.waveStart && this.waveStart > 0 && n < this.waveUntil;
-
+    const r = R * 0.2 * this.hands;
+    const waving = this.waveStart > 0 && n >= this.waveStart && n < this.waveUntil;
+    const cosT = Math.cos(this.tilt);
+    const sinT = Math.sin(this.tilt);
     for (const sd of [-1, 1]) {
-      let localX: number;
-      let localY: number;
-      let handRot = 0;
-
-      if (sd > 0 && isWaving) {
+      let lx = sd * hw * this.sx * 1.04;
+      let ly = hh * this.sy * 0.45;
+      if (sd > 0 && waving) {
         const wt = n - this.waveStart;
-        const rise = Math.min(1, wt / 0.18);
-        const riseEased = 1 - Math.pow(1 - rise, 3);
-        const restX = hwB * 1.08;
-        const restY = hhB * 0.7;
-        const oscX = Math.cos(13 * wt) * 0.06 * bodyH;
-        const oscY = -Math.sin(13 * wt) * 0.14 * bodyH;
-        const waveX = hwB * 1.1 + oscX;
-        const waveY = -hhB * 0.15 + oscY;
-        localX = restX + (waveX - restX) * riseEased;
-        localY = restY + (waveY - restY) * riseEased;
-        handRot = (-0.5 + Math.sin(13 * wt) * 0.35) * riseEased;
-      } else if (sd < 0 && isWaving) {
-        const wt = n - this.waveStart;
-        localX = -hwB * 1.08;
-        localY = hhB * 0.7 + Math.sin(6 * wt) * 0.04 * bodyH;
-      } else {
-        localX = sd * hwB * 1.08;
-        localY = hhB * 0.7;
+        const rise = 1 - Math.pow(1 - Math.min(1, wt / 0.18), 3);
+        lx += (hw * 0.18 + Math.cos(13 * wt) * R * 0.1) * rise;
+        ly += (-hh * 1.15 + Math.sin(13 * wt) * R * 0.2) * rise;
       }
-
-      const cosT = Math.cos(this.tilt);
-      const sinT = Math.sin(this.tilt);
-      const worldX = cx + cosT * localX - sinT * localY;
-      const worldY = cy + sinT * localX + cosT * localY;
-
-      x.save();
-      x.translate(worldX, worldY);
-      if (handRot !== 0) x.rotate(handRot);
-      const g = x.createLinearGradient(hew * 0.7, -heh * 0.85, -hew * 0.8, heh * 0.9);
-      if (this.bodyColor) {
-        g.addColorStop(0, rgba(mix3(this.bodyColor, [1, 1, 1], 0.35)));
-        g.addColorStop(1, rgba(this.bodyColor));
-      } else {
-        g.addColorStop(0, rgba(BASE_TOP));
-        g.addColorStop(1, rgba(BASE_BOTTOM));
-      }
+      const wx = cx + cosT * lx - sinT * ly;
+      const wy = cy + sinT * lx + cosT * ly;
+      const g = x.createRadialGradient(wx - r * 0.3, wy - r * 0.3, 0, wx, wy, r * 1.1);
+      g.addColorStop(0, rgba(mix3(AMBER, [1, 1, 1], 0.4)));
+      g.addColorStop(1, rgba(AMBER_DEEP));
       x.beginPath();
-      x.ellipse(0, 0, hew, heh, 0, 0, Math.PI * 2);
+      x.arc(wx, wy, r, 0, Math.PI * 2);
       x.fillStyle = g;
       x.fill();
-      x.strokeStyle = "rgba(0,0,0,0.08)";
-      x.lineWidth = 1;
-      x.stroke();
-      x.restore();
     }
   }
 
   private drawBadge(x: CanvasRenderingContext2D, badge: Badge, R: number, cx: number, cy: number) {
-    const bs = this.badgeS * (this.isMini ? 1.25 : 1);
-    const bx = cx - R * 0.72 * this.sx;
-    const by = cy - R * 0.72 * this.sy;
+    const bs = this.badgeS;
+    const bx = cx - R * 0.78 * this.sx;
+    const by = cy - R * 0.78 * this.sy;
     const t = now();
-
     x.save();
     x.translate(bx, by);
     x.scale(bs, bs);
     const col = rgba(badge.color);
-
     if (badge.kind === "dots") {
-      if (this.isMini) {
-        const phase = (t * 2.4) % 1;
-        const dotR = R * 0.22 * (1 + 0.25 * Math.sin(phase * Math.PI * 2));
-        x.fillStyle = "#000";
+      const pw = R * 0.74;
+      const ph = R * 0.38;
+      roundRectPath(x, -pw / 2, -ph / 2, pw, ph, ph * 0.38);
+      x.fillStyle = col;
+      x.fill();
+      for (let i = 0; i < 3; i++) {
+        const phase = (((t * 2.4 - i * 0.22) % 1) + 1) % 1;
+        const dotR = R * 0.055 * (1 + 0.4 * Math.max(0, Math.sin(phase * Math.PI * 2)));
+        x.fillStyle = "#fff";
         x.beginPath();
-        x.arc(0, 0, R * 0.2, 0, Math.PI * 2);
+        x.arc((i - 1) * R * 0.18, 0, dotR, 0, Math.PI * 2);
         x.fill();
-        x.fillStyle = col;
-        x.beginPath();
-        x.arc(0, 0, dotR, 0, Math.PI * 2);
-        x.fill();
-      } else {
-        const pw = R * 0.72;
-        const ph = R * 0.36;
-        roundRectPath(x, -pw / 2, -ph / 2, pw, ph, ph / 2);
-        x.fillStyle = col;
-        x.fill();
-        for (let i = 0; i < 3; i++) {
-          const phase = (((t * 2.4 - i * 0.22) % 1) + 1) % 1;
-          const dotR = R * 0.055 * (1 + 0.4 * Math.max(0, Math.sin(phase * Math.PI * 2)));
-          x.fillStyle = "#fff";
-          x.beginPath();
-          x.arc((i - 1) * R * 0.18, 0, dotR, 0, Math.PI * 2);
-          x.fill();
-        }
       }
     } else if (badge.kind === "bang" || badge.kind === "question") {
-      x.fillStyle = "#000";
-      x.beginPath();
-      x.arc(0, 0, R * 0.3, 0, Math.PI * 2);
-      x.fill();
+      const s = R * 0.5;
+      roundRectPath(x, -s / 2, -s / 2, s, s, s * 0.34);
       x.fillStyle = col;
-      x.beginPath();
-      x.arc(0, 0, R * 0.23, 0, Math.PI * 2);
       x.fill();
-      if (!this.isMini) {
-        x.fillStyle = "#fff";
-        x.font = `900 ${R * 0.32}px ${FONT}`;
-        x.textAlign = "center";
-        x.textBaseline = "middle";
-        x.fillText(badge.kind === "bang" ? "!" : "?", 0, R * 0.02);
-      }
+      x.fillStyle = "#fff";
+      x.font = `900 ${R * 0.32}px ${FONT}`;
+      x.textAlign = "center";
+      x.textBaseline = "middle";
+      x.fillText(badge.kind === "bang" ? "!" : "?", 0, R * 0.02);
     } else {
-      x.fillStyle = "#000";
+      x.fillStyle = "#06141a";
       x.beginPath();
       x.arc(0, 0, R * 0.2, 0, Math.PI * 2);
       x.fill();
@@ -1076,7 +1083,6 @@ export class BotEngine {
       const px = cx + (p.x + p.vx * p.age) * R * 1.3;
       const py = cy + (p.y + p.vy * p.age) * R * 1.3;
       const sz = R * p.size * (1 + k * 0.4);
-
       x.save();
       x.translate(px, py);
       x.globalAlpha = Math.min(1, Math.max(0, a));
@@ -1089,7 +1095,7 @@ export class BotEngine {
           break;
         case "star":
           x.rotate(p.rot + p.age * 2);
-          x.fillStyle = "#F7B32B";
+          x.fillStyle = "#FFC933";
           starPath(x, sz, sz * 0.45);
           x.fill();
           break;
@@ -1108,7 +1114,7 @@ export class BotEngine {
           x.fill();
           break;
         case "z":
-          x.fillStyle = "rgb(209,219,235)";
+          x.fillStyle = "rgb(190,235,230)";
           x.font = `700 ${sz * 1.9}px ${FONT}`;
           x.textAlign = "center";
           x.textBaseline = "middle";
@@ -1120,37 +1126,12 @@ export class BotEngine {
   }
 }
 
-/** Ray → rounded-rect boundary intersection, for the mailbox morph. */
-function rrPoint(ca: number, sa: number, W: number, H: number, cr: number): { x: number; y: number } {
-  const eps = 1e-6;
-  const kx = ca >= 0 ? 1 : -1;
-  const ky = sa >= 0 ? 1 : -1;
-  const cx = kx * (W - cr);
-  const cy = ky * (H - cr);
-
-  const dot = ca * cx + sa * cy;
-  const disc = dot * dot - (cx * cx + cy * cy - cr * cr);
-  if (disc >= 0) {
-    const t = dot + Math.sqrt(disc);
-    if (t > eps) {
-      const px = ca * t;
-      const py = sa * t;
-      if (Math.abs(px) >= W - cr - eps && Math.abs(py) >= H - cr - eps) return { x: px, y: py };
-    }
-  }
-  if (Math.abs(sa) > eps) {
-    const t = (ky * H) / sa;
-    if (t > eps) {
-      const px = ca * t;
-      if (Math.abs(px) <= W - cr + eps) return { x: px, y: ky * H };
-    }
-  }
-  if (Math.abs(ca) > eps) {
-    const t = (kx * W) / ca;
-    if (t > eps) {
-      const py = sa * t;
-      if (Math.abs(py) <= H - cr + eps) return { x: kx * W, y: py };
-    }
-  }
-  return { x: kx * W, y: ky * H };
+function pathRoundRect(p: Path2D, X: number, Y: number, W: number, H: number, R: number) {
+  const r = Math.max(0, Math.min(R, W / 2, H / 2));
+  p.moveTo(X + r, Y);
+  p.arcTo(X + W, Y, X + W, Y + H, r);
+  p.arcTo(X + W, Y + H, X, Y + H, r);
+  p.arcTo(X, Y + H, X, Y, r);
+  p.arcTo(X, Y, X + W, Y, r);
+  p.closePath();
 }

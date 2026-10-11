@@ -1,6 +1,6 @@
-// The island: DOM shell, sizing animation, Mochi placement, mouse handling and
+// The island: DOM shell, sizing animation, Bob placement, mouse handling and
 // drag-and-drop. Adapted from Coucou's island controller, with Tandem's status,
-// actions and "drop a file on Mochi to send it" in place of the Claude views.
+// actions and "drop a file on Bob to send it" in place of the Claude views.
 
 import { call, fire, IS_TAURI, onDragDrop, type DragDropPayload, type Dropped } from "../bridge";
 import { Spring, Tracked } from "../core/anim";
@@ -10,8 +10,8 @@ import {
   type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { BotEngine } from "../mochi/engine";
-import { Greeting } from "../mochi/greeting";
+import { Bob } from "../bob/bob";
+import { Greeting } from "../bob/hello";
 import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
@@ -47,7 +47,7 @@ export class Island {
   private botCy = new Spring(16);
   private botSize = new Spring(10);
 
-  private engine = new BotEngine();
+  private engine = new Bob();
   private greeting = new Greeting();
 
   private running = false;
@@ -144,7 +144,7 @@ export class Island {
     this.fsm.onTransition = (from, to) => {
       switch (to) {
         case "hidden":
-          if (from === "coucou") {
+          if (from === "hello") {
             this.greeting.interrupt();
             State.view = State.defaultView();
           }
@@ -153,17 +153,17 @@ export class Island {
           fire("end_reveal");
           break;
         case "petit":
-          if (from === "coucou") this.greeting.interrupt();
+          if (from === "hello") this.greeting.interrupt();
           else if (from === "hidden") Sound.play("peek");
           this.setMode("compact");
-          if (from === "coucou") State.view = State.defaultView();
+          if (from === "hello") State.view = State.defaultView();
           if (!this.wasInIsland) this.fsm.mouseLeft();
           break;
         case "home":
           this.expand(State.defaultView());
           if (!this.wasInIsland) this.fsm.mouseLeft();
           break;
-        case "coucou":
+        case "hello":
           this.expand("greeting");
           this.greeting.start();
           break;
@@ -405,7 +405,7 @@ export class Island {
         }
         if (State.fileDragOver) return;
         State.fileDragOver = true;
-        this.engine.animateMorph(1); // Mochi turns into a box
+        this.engine.animateMorph(1); // Bob turns into a box
         this.alert("drop");
         break;
       }
@@ -450,7 +450,7 @@ export class Island {
     }
   }
 
-  /** Mochi eats the file(s); the transfer itself runs in Rust. */
+  /** Bob eats the file(s); the transfer itself runs in Rust. */
   private swallow(dropped: Dropped, target?: string) {
     State.staging++;
     this.pillSuppressed = false;
@@ -581,7 +581,7 @@ export class Island {
       y >= rect.y - HIT_MARGIN && y <= rect.y + rect.h + HIT_MARGIN;
 
     if (inIsland && !this.wasInIsland) {
-      if (this.fsm.state === "coucou") this.greeting.hover();
+      if (this.fsm.state === "hello") this.greeting.hover();
       // Hovering the line never opens anything: only the hotkeys, a transfer or a drop do.
       if (this.fsm.state !== "hidden") this.fsm.mouseEntered();
     }
@@ -663,7 +663,7 @@ export class Island {
     requestAnimationFrame(this.frame);
   }
 
-  /** Minimum ms between drawn frames. A busy Mochi in a corner doesn't need 60 fps —
+  /** Minimum ms between drawn frames. A busy Bob in a corner doesn't need 60 fps —
    *  and on a slower PC the animation must never compete with the mouse. */
   private frameBudget(): number {
     if (State.mode === "hidden") return 0; // only geometry settling, already cheap

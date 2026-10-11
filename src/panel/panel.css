@@ -1,4 +1,4 @@
-/* Tandem panel — pure black, Coucou-style. */
+/* Tandem settings window. */
 :root {
   color-scheme: dark;
   --bg: #000;
@@ -216,3 +216,4 @@ kbd { font: 12px var(--mono); background: var(--surface-3); border: 1px solid va
   .set { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+.set button { white-space: nowrap; flex: none; }

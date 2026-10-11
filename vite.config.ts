@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 
-// Two pages: the island (index.html — Mochi at the top of the screen) and the
+// Two pages: the island (index.html — Bob at the top of the screen) and the
 // pairing/settings window (settings.html).
 export default defineConfig({
   clearScreen: false,

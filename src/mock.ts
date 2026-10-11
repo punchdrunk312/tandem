@@ -20,6 +20,7 @@ const base: Snapshot = {
     game_mode: true,
     switch_delay_ms: 0,
   error: null,
+  notice: null,
 };
 let state: Snapshot = { ...base };
 if (scenario === "pair") {
@@ -71,6 +72,8 @@ export function onEvent(name: string, cb: (p: unknown) => void) {
 };
 
 let shellMenuOn = false;
+let elevated = false;
+let elevatedAutostart = false;
 
 export async function call(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   console.log("[mock]", cmd, args);
@@ -85,6 +88,14 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
     }
     case "autostart_get":
       return true;
+    case "elevation_state":
+      return { elevated: elevated, autostart: elevatedAutostart };
+    case "restart_elevated":
+      elevated = true;
+      return;
+    case "elevated_autostart_set":
+      elevatedAutostart = !!args?.on;
+      return;
     case "shell_menu_get":
       return shellMenuOn;
     case "shell_menu_set":

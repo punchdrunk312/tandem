@@ -22,6 +22,7 @@ use windows::Win32::Media::timeBeginPeriod;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
+use windows::Win32::System::StationsAndDesktops::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
@@ -29,6 +30,18 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 static SINK: OnceLock<UnboundedSender<CaptureEvent>> = OnceLock::new();
 static CAPTURING: AtomicBool = AtomicBool::new(false);
+
+/// Flips the capture flag and, when it really changed, tells the cursor thread to hide
+/// or show the pointer. Returns the previous value.
+fn set_capturing(on: bool) -> bool {
+    let was = CAPTURING.swap(on, Relaxed);
+    if was != on {
+        if let Some(tx) = CURSOR_TX.get() {
+            let _ = tx.send(on);
+        }
+    }
+    was
+}
 /// Edges that lead to a connected computer, one bit each (see `EDGE_*`). 0 = none.
 static EDGES: AtomicU8 = AtomicU8::new(0);
 /// The edge bit the cursor is currently pushing against (0 = none).
@@ -306,7 +319,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             _ => (Edge::Bottom, fx),
         };
         reset_move();
-        CAPTURING.store(true, Relaxed);
+        set_capturing(true);
         let (cx, cy) = s.center();
         unsafe {
             let _ = SetCursorPos(cx, cy);
@@ -406,7 +419,7 @@ fn key_inner(msg: u32, k: &KbdLl) -> bool {
     let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
     if k.vk == HOTKEY_VK {
         if down {
-            if CAPTURING.swap(false, Relaxed) {
+            if set_capturing(false) {
                 // Emergency exit: give the mouse back *here*, synchronously.
                 let (cx, cy) = vscreen().center();
                 unsafe {
@@ -438,6 +451,110 @@ unsafe extern "system" fn sink_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         return LRESULT(0);
     }
     DefWindowProcW(hwnd, msg, wp, lp)
+}
+
+// ------------------------------------------------------------------ hidden cursor
+
+/// While the other computer is being driven, the pointer on this one is parked in the
+/// middle of the screen. A parked pointer looks like a stuck mouse, so it is hidden by
+/// swapping every system cursor for a blank one, and put back when control returns.
+/// The work happens on its own thread: the mouse hook must never wait.
+static CURSOR_TX: OnceLock<std::sync::mpsc::Sender<bool>> = OnceLock::new();
+
+/// Every standard cursor shape (OCR_NORMAL, IBEAM, WAIT, CROSS, UP, SIZENWSE, SIZENESW,
+/// SIZEWE, SIZENS, SIZEALL, NO, HAND, APPSTARTING).
+const CURSOR_IDS: [u32; 13] = [
+    32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650,
+];
+
+/// Puts the user's own cursor scheme back. Safe to call any time; also called at startup
+/// so a crash while the pointer was hidden can never leave it invisible.
+pub fn restore_cursors() {
+    unsafe {
+        let _ = SystemParametersInfoW(
+            SPI_SETCURSORS,
+            0,
+            None,
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        );
+    }
+}
+
+fn hide_cursors() {
+    unsafe {
+        let hinst = GetModuleHandleW(None).ok().map(|h| HINSTANCE(h.0));
+        // A 32x32 monochrome cursor: AND mask all ones, XOR mask all zeros = transparent.
+        let and_plane = [0xFFu8; 32 * 32 / 8];
+        let xor_plane = [0u8; 32 * 32 / 8];
+        for id in CURSOR_IDS {
+            // SetSystemCursor takes ownership of the handle, so each shape needs its own.
+            if let Ok(c) = CreateCursor(
+                hinst,
+                0,
+                0,
+                32,
+                32,
+                and_plane.as_ptr() as *const _,
+                xor_plane.as_ptr() as *const _,
+            ) {
+                let _ = SetSystemCursor(c, SYSTEM_CURSOR_ID(id));
+            }
+        }
+    }
+}
+
+fn cursor_thread(rx: std::sync::mpsc::Receiver<bool>) {
+    restore_cursors();
+    let mut hidden = false;
+    while let Ok(mut want) = rx.recv() {
+        // Only the latest wish matters.
+        while let Ok(w) = rx.try_recv() {
+            want = w;
+        }
+        if want && !hidden {
+            hide_cursors();
+            hidden = true;
+        } else if !want && hidden {
+            restore_cursors();
+            hidden = false;
+        }
+    }
+    if hidden {
+        restore_cursors();
+    }
+}
+
+// ------------------------------------------------------------------ protected screens
+
+/// True while Windows shows a screen no ordinary program may type into: the UAC admin
+/// prompt, the lock screen, Ctrl+Alt+Del. The input desktop can't even be opened then.
+fn input_desktop_blocked() -> bool {
+    unsafe {
+        match OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_SWITCHDESKTOP) {
+            Ok(h) => {
+                let _ = CloseDesktop(h);
+                false
+            }
+            Err(_) => true,
+        }
+    }
+}
+
+fn desktop_watcher_thread() {
+    let mut blocked = false;
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let now = input_desktop_blocked();
+        if now && !blocked {
+            // Anyone who was driving gives the keyboard and mouse back.
+            if CAPTURING.load(Relaxed) {
+                // Hooks don't see the protected screen, so stop swallowing here too.
+                set_capturing(false);
+            }
+            emit(CaptureEvent::InputBlocked);
+        }
+        blocked = now;
+    }
 }
 
 fn hook_thread() {
@@ -637,11 +754,11 @@ impl Platform for WinPlatform {
             let _ = SetCursorPos(cx, cy);
         }
         AT_EDGE.store(0, Relaxed);
-        CAPTURING.store(true, Relaxed);
+        set_capturing(true);
     }
 
     fn end_capture(&self, x: i32, y: i32) {
-        CAPTURING.store(false, Relaxed);
+        set_capturing(false);
         AT_EDGE.store(0, Relaxed);
         unsafe {
             let _ = SetCursorPos(x, y);
@@ -823,6 +940,15 @@ impl Platform for WinPlatform {
             let _ = std::thread::Builder::new()
                 .name("tandem-flush".into())
                 .spawn(flusher_thread);
+            let (tx, rx) = std::sync::mpsc::channel();
+            if CURSOR_TX.set(tx).is_ok() {
+                let _ = std::thread::Builder::new()
+                    .name("tandem-cursor".into())
+                    .spawn(move || cursor_thread(rx));
+            }
+            let _ = std::thread::Builder::new()
+                .name("tandem-desktop".into())
+                .spawn(desktop_watcher_thread);
         }
     }
 }

@@ -61,8 +61,17 @@ async fn pair(a: &Side, b: &Side) {
     })
     .await;
     until("layout synced", || {
-        a.plat.st.lock().unwrap().active_edge.is_some()
-            && b.plat.st.lock().unwrap().active_edge.is_some()
+        // The listener first picks a default side, then adopts the opposite of the
+        // dialler's announcement. Wait for the two to agree, not just to exist.
+        let ea = a.plat.st.lock().unwrap().active_edge;
+        let eb = b.plat.st.lock().unwrap().active_edge;
+        matches!(
+            (ea, eb),
+            (Some(Edge::Left), Some(Edge::Right))
+                | (Some(Edge::Right), Some(Edge::Left))
+                | (Some(Edge::Top), Some(Edge::Bottom))
+                | (Some(Edge::Bottom), Some(Edge::Top))
+        )
     })
     .await;
 }
@@ -508,4 +517,35 @@ async fn a_fifth_computer_is_turned_away() {
     until("late told off", || hub.node.snapshot().error.is_some()).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(connected_names(&hub).len(), 4);
+}
+
+#[tokio::test]
+async fn a_protected_screen_hands_control_back() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+
+    // B drives A, then Windows on A switches to the admin-prompt screen.
+    b.plat.user_push_edge(Edge::Right, 0.5);
+    until("A controlled", || a.node.snapshot().control == "controlled").await;
+    a.plat.emit(CaptureEvent::InputBlocked);
+    until("A is local again", || a.node.snapshot().control == "local").await;
+    until("B got its mouse back", || {
+        b.node.snapshot().control == "local"
+    })
+    .await;
+    assert!(
+        a.node.snapshot().notice.is_some(),
+        "A explains what happened"
+    );
+
+    // And the other way round: B is driving, B's own screen goes protected.
+    b.plat.user_push_edge(Edge::Right, 0.5);
+    until("A controlled again", || {
+        a.node.snapshot().control == "controlled"
+    })
+    .await;
+    b.plat.emit(CaptureEvent::InputBlocked);
+    until("B local", || b.node.snapshot().control == "local").await;
+    until("A local", || a.node.snapshot().control == "local").await;
 }

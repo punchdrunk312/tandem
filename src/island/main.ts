@@ -1,4 +1,4 @@
-// Island entry: Mochi at the top of the screen.
+// Island entry: Bob at the top of the screen.
 
 import "./island.css";
 import { IS_TAURI, fire, onEvent, onSnapshot } from "../bridge";

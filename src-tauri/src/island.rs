@@ -508,7 +508,7 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                 }
 
                 // The page only needs the cursor while the panel is open and the cursor is
-                // near it (Mochi's eyes follow it, hover timers need to know when it left).
+                // near it (Bob's eyes follow it, hover timers need to know when it left).
                 let near = !collapsed
                     && !quiet
                     && (-220.0..=w + 220.0).contains(&x)

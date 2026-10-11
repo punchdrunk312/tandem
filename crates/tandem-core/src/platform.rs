@@ -41,6 +41,9 @@ pub enum CaptureEvent {
     HotkeyEngage,
     /// The system clipboard changed.
     ClipboardChanged,
+    /// Windows switched to a protected screen (an admin prompt, the lock screen) that
+    /// no program can type into. Whoever has the keyboard must hand it back.
+    InputBlocked,
 }
 
 pub trait Platform: Send + Sync + 'static {

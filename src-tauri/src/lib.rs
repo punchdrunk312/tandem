@@ -14,6 +14,7 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+mod elevate;
 mod island;
 mod shellmenu;
 use island::{IslandRect, PollGate};
@@ -483,6 +484,46 @@ fn end_reveal(sh: State<'_, Shared>) {
     island::end_reveal(&sh.gate);
 }
 
+#[derive(serde::Serialize)]
+struct ElevState {
+    /// This copy of Tandem is running as administrator.
+    elevated: bool,
+    /// Tandem starts as administrator when Windows starts.
+    autostart: bool,
+}
+
+#[tauri::command]
+fn elevation_state() -> ElevState {
+    ElevState {
+        elevated: elevate::is_elevated(),
+        autostart: elevate::autostart_is_on(),
+    }
+}
+
+/// Asks Windows once, then starts an elevated copy and quits this one.
+#[tauri::command]
+async fn restart_elevated(app: AppHandle) -> R {
+    if elevate::is_elevated() {
+        return Ok(());
+    }
+    // `Start-Process -Verb RunAs` blocks until the user answers the UAC question.
+    tauri::async_runtime::spawn_blocking(elevate::spawn_elevated_copy)
+        .await
+        .map_err(|e| e.to_string())??;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+fn elevated_autostart_set(app: AppHandle, on: bool) -> R {
+    elevate::autostart_set(on)?;
+    if on {
+        // Two copies starting at logon would fight over the single-instance lock.
+        let _ = app.autolaunch().disable();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn shell_menu_get() -> bool {
     shellmenu::is_on()
@@ -615,6 +656,8 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    // Started by "Restart as administrator": let the old copy quit first.
+    elevate::wait_for_parent();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Explorer's "Send with Tandem" lands here; starting Tandem a second time
@@ -675,12 +718,20 @@ pub fn run() {
             let mut rx = node.subscribe();
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                let mut last_notice: Option<String> = None;
                 loop {
                     if rx.changed().await.is_err() {
                         break;
                     }
                     let s = rx.borrow_and_update().clone();
                     let _ = handle.emit("snapshot", &s);
+                    // A new notice ("control came back because…") also shows on the bar.
+                    if s.notice != last_notice {
+                        if let Some(n) = &s.notice {
+                            let _ = handle.emit_to(island::WINDOW_LABEL, "note", n);
+                        }
+                        last_notice = s.notice.clone();
+                    }
                     tokio::time::sleep(Duration::from_millis(80)).await;
                 }
             });
@@ -838,10 +889,20 @@ pub fn run() {
             end_reveal,
             shell_menu_get,
             shell_menu_set,
+            elevation_state,
+            restart_elevated,
+            elevated_autostart_set,
             reposition,
             open_main_window,
             quit_app,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Tandem");
+        .build(tauri::generate_context!())
+        .expect("error while building Tandem")
+        .run(|_app, event| {
+            // Never leave the pointer hidden behind us.
+            if let tauri::RunEvent::Exit = event {
+                #[cfg(windows)]
+                tandem_core::win::restore_cursors();
+            }
+        });
 }

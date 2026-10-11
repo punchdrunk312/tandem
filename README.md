@@ -60,14 +60,14 @@ On non-Windows systems the input layer is an in-memory stand-in, so pairing,
 clipboard and file transfer can be developed and tested anywhere
 (`npm run dev` in a browser even uses a mocked backend: `#offline`, `#connected`, `#remote`, `#controlled`).
 
-## The top bar (Mochi)
+## The top bar (Bob)
 
 At rest the bar is **one thin line** at the top centre of your main screen. It takes no
 clicks and never pops up by itself; its colour shows the state (grey: not connected,
 green: connected, teal: you are controlling the other PC, amber: it is controlling you,
 pulsing teal: a transfer is running).
 
-- **Ctrl+Alt+T** opens the control bar (Mochi, status, which side the other PC is on, Jump /
+- **Ctrl+Alt+T** opens the control bar (Bob, status, which side the other PC is on, Jump /
   Disconnect). Press it again to close. It also closes by itself after a while.
 - **Ctrl+Alt+U** opens or closes the small transfer bar (progress of what is being sent or
   received). It appears by itself while a transfer runs; close it by hand with the same key.
@@ -81,8 +81,8 @@ pulsing teal: a transfer is running).
   goes away again when you close it.
 - No AI features — those were removed from the Coucou code.
 
-Mochi and the island come from Coucou and are for private use only; do not publish
-this repo or ship it under Coucou's name or assets.
+Bob, the sounds and the animations are original and made in code. Parts of the island
+code are adapted from Coucou (MIT) — see THIRD-PARTY-NOTICES.md.
 
 ## Newer features
 
@@ -141,3 +141,17 @@ One PC is the hub. Up to **4 other PCs** can connect to it, one per side of its 
 - A copied-files clipboard (Ctrl+C / Ctrl+V) is not relayed between two spokes. Send those through the hub.
 - A 5th computer is turned away.
 - Same network only (Windows only). Internet relay and macOS/Linux ports are not built yet.
+
+## Hidden pointer, admin windows
+
+- While you drive another computer, the pointer on this one is hidden (it would otherwise sit
+  stuck in the middle of the screen) and comes back when control returns. If Tandem ever
+  crashes while it is hidden, it restores your cursors on the next start.
+- Windows ignores a normal program's mouse and keyboard in windows that run as administrator.
+  Settings → *Admin windows* has **Restart as administrator** (one question from Windows) and
+  **Always start as administrator**. Do this on the computer you control. Trade-off: in
+  administrator mode you can't drag files from Explorer onto Tandem, and the right-click
+  "Send with Tandem" won't reach it.
+- The dimmed UAC prompt and the lock screen can't be controlled by any program. When one
+  appears, Tandem hands the mouse and keyboard back automatically so you can answer it on that
+  computer.

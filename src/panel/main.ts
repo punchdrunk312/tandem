@@ -1,6 +1,6 @@
 import "./panel.css";
 import { call, onFileDrop, onSnapshot } from "./api";
-import type { Side, Snapshot, UiOptions } from "../types";
+import type { ElevState, Side, Snapshot, UiOptions } from "../types";
 
 // ---------------------------------------------------------------- tiny DOM helper
 // Everything that comes from the network (computer names, file names, errors)
@@ -63,6 +63,7 @@ const layout = h("section", { class: "card" });
 const files = h("section", { class: "card" });
 const settings = h("section", { class: "card" });
 const paired = h("section", { class: "card" });
+const admin = h("section", { class: "card" });
 const topbar = h("section", { class: "card" });
 const veil = h("div", { id: "veil" });
 document.body.append(veil);
@@ -122,7 +123,7 @@ for (const pg of PAGES) {
 const bodyOf = (id: PageId) => (PAGES.find((x) => x.id === id) as unknown as { body: HTMLElement }).body;
 bodyOf("computers").append(stage, layout);
 bodyOf("files").append(files);
-bodyOf("settings").append(settings, paired);
+bodyOf("settings").append(settings, admin, paired);
 bodyOf("bar").append(topbar);
 
 function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
@@ -414,6 +415,50 @@ function renderSettings(s: Snapshot) {
   ]);
 }
 
+// ---------------------------------------------------------------- administrator mode
+let elev: ElevState = { elevated: false, autostart: false };
+let elevBusy = "";
+let elevError = "";
+function renderAdmin() {
+  update(admin, "admin", [elev, elevBusy, elevError], () => {
+    const restart = h("button", { class: "primary", disabled: elev.elevated || !!elevBusy, onclick: async () => {
+      elevBusy = "Waiting for Windows…";
+      elevError = "";
+      keys.admin = "";
+      renderAdmin();
+      try {
+        await call("restart_elevated");
+        // The app quits on success, so reaching this line means it didn't restart.
+      } catch (e) {
+        elevError = String(e);
+      }
+      elevBusy = "";
+      elevState();
+    } }, elev.elevated ? "Running as administrator" : elevBusy || "Restart as administrator");
+    return [
+      h("h2", {}, "Admin windows"),
+      setting("Control admin windows", "Installers, setup wizards and “Run as administrator” apps ignore the mouse and keyboard unless Tandem runs as administrator too. Do this on the computer you control.", restart),
+      setting("Always start as administrator", elev.elevated ? "Starts with Windows without asking each time." : "Restart as administrator first.",
+        switchEl(elev.autostart, async (on) => {
+          try {
+            elevError = "";
+            await call("elevated_autostart_set", { on });
+          } catch (e) {
+            elevError = String(e);
+          }
+          elevState();
+        })),
+      ...(elevError ? [h("div", { class: "err", role: "alert" }, elevError)] : []),
+      h("div", { class: "note" }, h("span", {}, elev.elevated
+        ? "In administrator mode, Windows doesn't let you drag files from Explorer onto Tandem, and “Send with Tandem” won't reach it. Use “Choose files…” or copy and paste instead."
+        : "The dimmed “Do you want to allow…” screen can never be controlled by any program. When it appears, Tandem hands the mouse and keyboard back so you can answer it on that computer.")),
+    ];
+  });
+}
+function elevState() {
+  void call<ElevState>("elevation_state").then((v) => { if (v) { elev = v; renderAdmin(); } }).catch(() => {});
+}
+
 // ---------------------------------------------------------------- top bar settings
 // Rust-side options live in ui.json; sound options are the island's own localStorage
 // entry (same origin, so the island picks changes up through the `storage` event).
@@ -466,6 +511,7 @@ function render(s: Snapshot) {
   renderLayout(s);
   renderFiles(s);
   renderSettings(s);
+  renderAdmin();
   renderTopBar();
 }
 
@@ -475,6 +521,7 @@ onFileDrop(
   (over) => { dropOver = over; showVeil(over); if (snap) renderFiles(snap); },
 );
 void call<UiOptions>("ui_get").then((v) => { if (v) { ui = v; renderTopBar(); } }).catch(() => {});
+elevState();
 void call<boolean>("shell_menu_get").then((v) => { shellMenu = !!v; renderTopBar(); }).catch(() => {});
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });
 void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });

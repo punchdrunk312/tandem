@@ -29,6 +29,13 @@ export interface Snapshot {
   game_mode: boolean;
   switch_delay_ms: number;
   error: string | null;
+  /** A short message that clears itself, e.g. why control came back. */
+  notice: string | null;
+}
+
+export interface ElevState {
+  elevated: boolean;
+  autostart: boolean;
 }
 
 export interface UiOptions {

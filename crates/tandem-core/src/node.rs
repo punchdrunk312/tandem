@@ -151,6 +151,8 @@ pub struct Snapshot {
     pub game_mode: bool,
     pub switch_delay_ms: u32,
     pub error: Option<String>,
+    /// A short, self-clearing message for the user ("control came back because…").
+    pub notice: Option<String>,
 }
 
 // ---------------------------------------------------------------- shared state
@@ -167,6 +169,7 @@ struct Status {
     /// Every connected computer, in a stable order (by name).
     connected: Vec<PeerBrief>,
     error: Option<String>,
+    notice: Option<(String, Instant)>,
 }
 
 struct Shared {
@@ -293,6 +296,7 @@ impl Shared {
             game_mode: per.game_mode,
             switch_delay_ms: per.switch_delay_ms,
             error: st.error.clone(),
+            notice: st.notice.as_ref().map(|(m, _)| m.clone()),
         }
     }
 
@@ -1067,6 +1071,16 @@ impl Actor {
         self.dialing
             .retain(|_, t| t.elapsed() <= Duration::from_secs(20));
         self.no_auto.retain(|_, t| Instant::now() < *t);
+        {
+            let mut st = self.sh.status.lock().unwrap();
+            if st
+                .notice
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() > Duration::from_secs(12))
+            {
+                st.notice = None;
+            }
+        }
         self.auto_connect();
         self.sh.publish(); // lets "nearby" entries expire
     }
@@ -1333,7 +1347,39 @@ impl Actor {
             }
             CaptureEvent::HotkeyEngage => self.engage(None),
             CaptureEvent::ClipboardChanged => self.on_clipboard_changed(),
+            CaptureEvent::InputBlocked => self.on_input_blocked(),
         }
+    }
+
+    /// A protected Windows screen (admin prompt, lock screen) took the input desktop.
+    /// Nobody can type into it from here, so whichever side was driving gives the
+    /// keyboard and mouse back instead of leaving the user with a dead cursor.
+    fn on_input_blocked(&mut self) {
+        match self.control.clone() {
+            Control::Controlled { peer, .. } => {
+                self.sh.platform.release_all();
+                self.set_control(Control::Local);
+                self.send_to(&peer, Msg::Leave { frac: 0.5 });
+                self.notify(
+                    "Windows is showing a protected screen (like an admin prompt). \
+                     Use this computer's own mouse and keyboard for it.",
+                );
+            }
+            Control::Remote { peer, .. } => {
+                let (x, y) = self.center();
+                self.sh.platform.end_capture(x, y);
+                self.set_control(Control::Local);
+                self.send_to(&peer, Msg::Release);
+                self.notify("Windows is showing a protected screen here, so control came back.");
+            }
+            Control::Local => {}
+        }
+    }
+
+    /// Shows a short message in the UI; it clears itself after a few seconds.
+    fn notify(&mut self, msg: &str) {
+        self.sh.status.lock().unwrap().notice = Some((msg.to_string(), Instant::now()));
+        self.sh.publish();
     }
 
     /// The computer a bare "jump" goes to: the one used last, else the first by name.
