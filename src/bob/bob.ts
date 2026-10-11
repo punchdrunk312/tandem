@@ -58,7 +58,7 @@ interface BotStateCfg {
 type MouthShape = "smile" | "grin" | "flat" | "o" | "wavy" | "tiny" | "hmm";
 
 interface Particle {
-  type: "heart" | "star" | "spark" | "sweat" | "z";
+  type: "heart" | "star" | "spark" | "sweat" | "z" | "note";
   x: number; y: number; vx: number; vy: number;
   age: number; life: number; rot: number; size: number;
 }
@@ -205,8 +205,20 @@ export class Bob {
   private locks = new Set<PropKey>();
   private particles: Particle[] = [];
 
+  /** Where the cursor is, −1…1. Positive Y means *up* (the island already flips it). */
   lookX = 0;
   lookY = 0;
+
+  // Life: eye saccades, antenna springs, idle behaviours
+  private sacX = 0; private sacY = 0; private sacTX = 0; private sacTY = 0; private sacNext = 0;
+  private antA = 0; private antV = 0; private antS = 1; private antSV = 0;
+  private prevOx = 0; private prevOy = 0;
+  private nextIdle = now() + 3;
+  /** True while the bar is open and someone can see him: only then does he fidget and
+   *  breathe. When it is false nothing animates by itself, so a closed bar costs nothing. */
+  ambient = true;
+  mouthOverride: MouthShape | null = null;
+  mouthUntil = 0;
 
   lastTime = now();
   private t0 = now() - Math.random() * 5;
@@ -306,6 +318,7 @@ export class Bob {
     this.slapTimes.push(t);
     Sound.play("slap");
     this.squash();
+    this.kick(-14);
     if (this.slapTimes.length >= 3) {
       this.slapTimes = [];
       this.onDizzy?.();
@@ -391,6 +404,7 @@ export class Bob {
         ]);
         this.emit("heart", 4);
         this.anim("oy", [[-0.1, 160, Ease.out], [0, 300, Ease.back]]);
+        this.kick(10);
         break;
       case "surprised":
         this.anim("oy", [[-0.3, 140, Ease.out], [0, 380, Ease.back]]);
@@ -417,6 +431,7 @@ export class Bob {
         break;
       case "happy":
         this.anim("blush", [[0.6, 200, Ease.out], [0, 600, Ease.inOut]]);
+        this.hop(0.22);
         break;
       case "annoyed":
         this.eyeOverride = "line";
@@ -457,6 +472,7 @@ export class Bob {
   /** True while anything is still moving — lets the island stop its RAF loop. */
   get busy(): boolean {
     return (
+      this.ambient ||
       this.tweens.size > 0 ||
       this.particles.length > 0 ||
       this.cfg.bounces || this.cfg.scans || this.cfg.breathes || this.cfg.zz || this.cfg.sweat ||
@@ -546,6 +562,11 @@ export class Bob {
     const kGen = 1 - Math.pow(0.0008, dt);
     if (!this.locks.has("oy")) this.oy += (bounce - this.oy) * kGen;
 
+    // Small body language per state.
+    if (this.state === "working") this.tgTilt = Math.sin(t * 6) * 0.025;
+    else if (this.state === "thinking") this.tgTilt = Math.sin(t * 1.4) * 0.05 + 0.03;
+    else if (this.state === "approval") this.tgTilt = Math.sin(t * 5.2) * 0.04;
+
     if (this.cfg.breathes) {
       const amp = this.isMini ? 0.07 : 0.035;
       this.tgSy = 1 + Math.sin(t * 1.8) * amp;
@@ -554,8 +575,10 @@ export class Bob {
       this.tgSy = 1 + Math.sin(t * 2.2) * 0.04;
       this.tgSx = 1 - Math.sin(t * 2.2) * 0.02;
     } else {
-      this.tgSy = 1;
-      this.tgSx = 1;
+      // A slow breath, so he is never perfectly still.
+      const b = this.ambient ? Math.sin(t * 1.7) : 0;
+      this.tgSy = 1 + b * 0.014;
+      this.tgSx = 1 - b * 0.008;
     }
 
     if (this.isMini && n > this.miniNextBehavior) this.doMiniBehaviorLoop();
@@ -569,6 +592,37 @@ export class Bob {
     if (!this.locks.has("es")) this.es += (this.tgEs - this.es) * kGen;
 
     this.col = mix3(this.col, this.colT, 1 - Math.pow(0.002, dt));
+
+    // Eyes never sit perfectly still: tiny, lazy glances.
+    if (n > this.sacNext) {
+      this.sacTX = (Math.random() - 0.5) * 0.28;
+      this.sacTY = (Math.random() - 0.5) * 0.2;
+      this.sacNext = n + 0.5 + Math.random() * 1.7;
+    }
+    const kSac = 1 - Math.pow(0.0004, dt);
+    this.sacX += (this.sacTX - this.sacX) * kSac;
+    this.sacY += (this.sacTY - this.sacY) * kSac;
+
+    // Antenna: two springs. It leans against the body's motion and stretches when he jumps.
+    if (dt > 0) {
+      const vx = (this.ox - this.prevOx) / dt;
+      const vy = (this.oy - this.prevOy) / dt;
+      this.prevOx = this.ox;
+      this.prevOy = this.oy;
+      const aTarget = -this.tilt * 1.1 + this.yaw * 0.08;
+      const accA = -140 * (this.antA - aTarget) - 8 * this.antV - vx * 2.2;
+      this.antV += accA * dt;
+      this.antA += this.antV * dt;
+      const sTarget = 1;
+      const accS = -170 * (this.antS - sTarget) - 9 * this.antSV + vy * 1.6;
+      this.antSV += accS * dt;
+      this.antS = Math.max(0.35, Math.min(1.7, this.antS + this.antSV * dt));
+    }
+
+    if (n > this.nextIdle) this.idleAct(n);
+    if (!this.ambient) { this.sacTX = 0; this.sacTY = 0; }
+
+    if (this.mouthOverride && n > this.mouthUntil) this.mouthOverride = null;
 
     if (n > this.nextBlink) {
       if (this.state !== "sleeping" && this.state !== "dizzy") {
@@ -600,6 +654,64 @@ export class Bob {
     this.slotH = Math.max(0, this.slotH + this.slotHVel * dt);
 
     this.lastTime = n;
+  }
+
+  /** Kicks the antenna so it wobbles. */
+  kick(v: number) {
+    this.antV += v;
+  }
+
+  /** A little hop. */
+  hop(height = 0.28) {
+    if (this.locks.has("oy")) return;
+    this.anim("oy", [[-height, 150, Ease.out], [0.03, 190, Ease.inOut], [0, 150, Ease.back]]);
+    this.anim("sy", [[0.86, 70, Ease.out], [1.14, 140, Ease.out], [0.92, 150, Ease.inOut], [1, 170, Ease.back]]);
+    this.anim("sx", [[1.12, 70, Ease.out], [0.92, 140, Ease.out], [1.05, 150, Ease.inOut], [1, 170, Ease.back]]);
+    this.kick(6);
+  }
+
+  /** Something to do every few seconds while nothing else is going on. */
+  private idleAct(n: number) {
+    this.nextIdle = n + 4 + Math.random() * 5;
+    const calm =
+      this.ambient && this.state === "idle" && !this.isMini && this.morph < 0.05 && this.hands < 0.05 &&
+      !this.eyeOverride && this.locks.size === 0;
+    if (!calm) return;
+    const r = Math.random();
+    if (r < 0.26) {
+      this.hop();
+    } else if (r < 0.46) {
+      // Looks around the room.
+      this.anim("yaw", [[-0.85, 300, Ease.inOut], [-0.85, 260, Ease.lin], [0.85, 520, Ease.inOut], [0.85, 260, Ease.lin], [0, 360, Ease.inOut]]);
+      this.anim("pitch", [[0.12, 400, Ease.inOut], [-0.05, 700, Ease.inOut], [0, 400, Ease.inOut]]);
+    } else if (r < 0.60) {
+      this.anim("tilt", [[0.13, 90, Ease.out], [-0.12, 140, Ease.inOut], [0.08, 120, Ease.inOut], [-0.04, 110, Ease.inOut], [0, 130, Ease.out]]);
+      this.kick(-8);
+    } else if (r < 0.70) {
+      // A stretch.
+      this.anim("sy", [[1.13, 420, Ease.inOut], [1, 420, Ease.inOut]]);
+      this.anim("sx", [[0.93, 420, Ease.inOut], [1, 420, Ease.inOut]]);
+      this.mouthOverride = "o";
+      this.mouthUntil = n + 0.8;
+    } else if (r < 0.80) {
+      this.blink();
+      setTimeout(() => this.blink(), 210);
+    } else if (r < 0.88) {
+      this.triggerEmote("wink", 1.1);
+    } else if (r < 0.95) {
+      // Whistles a tune.
+      this.mouthOverride = "o";
+      this.mouthUntil = n + 1.6;
+      this.anim("tilt", [[0.05, 300, Ease.inOut], [-0.05, 500, Ease.inOut], [0, 400, Ease.inOut]]);
+      this.emit("note", 3);
+    } else {
+      // A tiny shiver, as if he heard something.
+      this.anim("ox", [[0.03, 40, Ease.out], [-0.03, 60, Ease.inOut], [0.025, 60, Ease.inOut], [-0.015, 60, Ease.inOut], [0, 80, Ease.out]]);
+      this.eyeOverride = "dot";
+      this.eyeOverrideUntil = n + 0.6;
+      this.mouthOverride = "o";
+      this.mouthUntil = n + 0.6;
+    }
   }
 
   private doMiniBehaviorLoop() {
@@ -655,16 +767,20 @@ export class Bob {
     this.drawHands(x, R, hw, hh, cx, cy);
 
     x.save();
-    x.translate(cx, cy);
-    if (this.tilt !== 0) x.rotate(this.tilt);
+    // He leans a little towards whatever he is looking at.
+    x.translate(cx + this.yaw * R * 0.05, cy - this.pitch * R * 0.03);
+    const lean = this.tilt + this.yaw * 0.05;
+    if (lean !== 0) x.rotate(lean);
     x.scale(this.sx, this.sy);
+
+    if (m < 0.9) this.drawFeet(x, R, hw, hh, 1 - m);
 
     // The amber twin peeks out behind him (hidden once he turns into the box).
     if (m < 0.9) {
       x.save();
       x.globalAlpha = 1 - m;
-      x.translate(R * 0.17, R * 0.15);
-      x.rotate(0.07);
+      x.translate(R * 0.13, R * 0.12);
+      x.rotate(0.05);
       roundRectPath(x, -hw * 0.97, -hh * 0.97, hw * 1.94, hh * 1.94, rad);
       const tg = x.createLinearGradient(-hw, -hh, hw, hh);
       tg.addColorStop(0, rgba(AMBER));
@@ -733,13 +849,31 @@ export class Bob {
     x.stroke(body);
   }
 
+  /** Two stubby feet, so he stands instead of floating. */
+  private drawFeet(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, a: number) {
+    if (R < 12 || a < 0.05) return;
+    x.save();
+    x.globalAlpha = a;
+    const g = x.createLinearGradient(0, hh * 0.9, 0, hh * 1.25);
+    g.addColorStop(0, rgba(mix3(TEAL_BOTTOM, [0, 0.1, 0.15], 0.25)));
+    g.addColorStop(1, rgba(mix3(TEAL_BOTTOM, [0, 0.1, 0.15], 0.55)));
+    x.fillStyle = g;
+    const lift = Math.max(0, -this.oy) * R * 0.5; // feet tuck up a little in a hop
+    for (const sd of [-1, 1]) {
+      x.beginPath();
+      x.ellipse(sd * hw * 0.42, hh * 1.02 - lift * 0.3, R * 0.27, R * 0.15, 0, 0, Math.PI * 2);
+      x.fill();
+    }
+    x.restore();
+  }
+
   /** Antenna: a short stalk and a bulb that glows in the state's colour. */
   private drawAntenna(x: CanvasRenderingContext2D, R: number, hh: number, rad: number) {
     const a = 1 - this.morph;
     if (a < 0.05 || R < 12) return;
     const t = now();
-    const sway = Math.sin(t * 2.2) * 0.04 + this.yaw * 0.12;
-    const len = R * 0.34;
+    const sway = Math.sin(t * 2.2) * 0.04 + this.antA;
+    const len = R * 0.34 * this.antS;
     const topY = -hh + rad * 0.12;
     const bx = Math.sin(sway) * len;
     const by = topY - Math.cos(sway) * len;
@@ -786,14 +920,14 @@ export class Bob {
     x.strokeStyle = INK;
     const lift = this.morph * hh * 0.1;
     for (const sd of [-1, 1]) {
-      const ex = sd * hw * 0.4 + this.yaw * hw * 0.42 + Math.sin(this.roll) * hw * 0.2;
-      const ey = -hh * 0.1 + this.pitch * hh * 0.55 + lift;
+      const ex = sd * hw * 0.35 + this.yaw * hw * 0.46 + this.sacX * hw * 0.25 + Math.sin(this.roll) * hw * 0.2;
+      const ey = hh * 0.02 - this.pitch * hh * 0.5 + this.sacY * hh * 0.2 + lift;
       // Eyes squeeze a little as they look sideways, like they sit on a curved face.
       const fx = 1 - Math.min(0.28, Math.abs(this.yaw) * 0.35);
       x.save();
       x.translate(ex, ey);
       x.scale(fx, 1);
-      this.drawEyeShape(x, shape, R * 0.19 * this.es, R * 0.27 * this.es, sd);
+      this.drawEyeShape(x, shape, R * 0.21 * this.es, R * 0.3 * this.es, sd);
       x.restore();
     }
     x.restore();
@@ -827,10 +961,10 @@ export class Bob {
     };
     switch (shape) {
       case "pill":
-        glossy(w * 0.62, h * 0.9);
+        glossy(w * 0.8, h * 0.86);
         break;
       case "wide":
-        glossy(w * 0.75, h * 1.05);
+        glossy(w * 0.92, h * 1.0);
         break;
       case "dot":
         glossy(w * 0.62, w * 0.62);
@@ -905,14 +1039,16 @@ export class Bob {
   private drawMouth(x: CanvasRenderingContext2D, R: number, hh: number) {
     let shape: MouthShape = this.cfg.mouth;
     const eye = this.eyeOverride;
+    const forced = this.mouthOverride;
     if (eye === "happy" || eye === "heart" || eye === "star") shape = "grin";
     else if (eye === "dot") shape = "o";
     else if (eye === "line") shape = "flat";
     else if (eye === "tired" || eye === "closed") shape = "tiny";
     else if (eye === "wink") shape = "smile";
+    if (forced) shape = forced;
 
-    const y = hh * 0.42 + this.pitch * hh * 0.15;
-    const mx = this.yaw * R * 0.3;
+    const y = hh * 0.47 - this.pitch * hh * 0.12;
+    const mx = this.yaw * R * 0.34;
     x.save();
     x.translate(mx, y);
     x.strokeStyle = INK;
@@ -1112,6 +1248,14 @@ export class Bob {
           x.quadraticCurveTo(sz * 0.8, sz * 0.2, 0, sz * 0.6);
           x.quadraticCurveTo(-sz * 0.8, sz * 0.2, 0, -sz);
           x.fill();
+          break;
+        case "note":
+          x.rotate(Math.sin(p.age * 5) * 0.25);
+          x.fillStyle = p.rot > 3 ? "#FBBF24" : "#5EEAD4";
+          x.font = `700 ${sz * 2.4}px ${FONT}`;
+          x.textAlign = "center";
+          x.textBaseline = "middle";
+          x.fillText("♪", 0, 0);
           break;
         case "z":
           x.fillStyle = "rgb(190,235,230)";
