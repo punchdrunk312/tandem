@@ -764,6 +764,15 @@ export class Bob {
     const hh = lerp(R * 0.96, R * 0.88, m);
     const rad = lerp(R * 0.52, R * 0.3, m);
 
+    // A soft glow around him, in the colour of his mood.
+    if (R >= 16) {
+      const gl = x.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 2.1);
+      gl.addColorStop(0, rgba(this.col, 0.2 * (1 - m * 0.6)));
+      gl.addColorStop(1, rgba(this.col, 0));
+      x.fillStyle = gl;
+      x.fillRect(cx - R * 2.2, cy - R * 2.2, R * 4.4, R * 4.4);
+    }
+
     this.drawHands(x, R, hw, hh, cx, cy);
 
     x.save();
@@ -781,12 +790,28 @@ export class Bob {
       x.globalAlpha = 1 - m;
       x.translate(R * 0.13, R * 0.12);
       x.rotate(0.05);
-      roundRectPath(x, -hw * 0.97, -hh * 0.97, hw * 1.94, hh * 1.94, rad);
+      const tw = new Path2D();
+      pathRoundRect(tw, -hw * 0.97, -hh * 0.97, hw * 1.94, hh * 1.94, rad);
       const tg = x.createLinearGradient(-hw, -hh, hw, hh);
-      tg.addColorStop(0, rgba(AMBER));
+      tg.addColorStop(0, "#ffdf6b");
+      tg.addColorStop(0.55, rgba(AMBER));
       tg.addColorStop(1, rgba(AMBER_DEEP));
       x.fillStyle = tg;
-      x.fill();
+      x.fill(tw);
+      x.save();
+      x.clip(tw);
+      // Gloss on the twin, and the body's shadow falling across it.
+      const tgl = x.createRadialGradient(hw * 0.5, -hh * 0.5, 0, hw * 0.5, -hh * 0.5, R * 0.8);
+      tgl.addColorStop(0, "rgba(255,255,255,0.4)");
+      tgl.addColorStop(1, "rgba(255,255,255,0)");
+      x.fillStyle = tgl;
+      x.fillRect(-hw, -hh, hw * 2, hh * 2);
+      const tsh = x.createLinearGradient(-hw, 0, hw * 0.2, 0);
+      tsh.addColorStop(0, "rgba(120,50,0,0.38)");
+      tsh.addColorStop(1, "rgba(120,50,0,0)");
+      x.fillStyle = tsh;
+      x.fillRect(-hw, -hh, hw * 2, hh * 2);
+      x.restore();
       x.restore();
     }
 
@@ -796,16 +821,21 @@ export class Bob {
     pathRoundRect(body, -hw, -hh, hw * 2, hh * 2, rad);
     this.drawBody(x, body, R, hw, hh);
 
-    // Cheeks
+    // Cheeks: soft, glowing blush.
     const blushVal = Math.max(this.blush, this.tint * 0.25) * (1 - m);
-    const cheekA = 0.16 + 0.5 * blushVal;
+    const cheekA = 0.28 + 0.5 * blushVal;
     x.save();
     x.clip(body);
-    x.fillStyle = `rgba(255,120,140,${cheekA})`;
     const slide = Math.sin(this.yaw) * hw * 0.35;
     for (const sd of [-1, 1]) {
+      const bx = sd * hw * 0.64 + slide;
+      const by = hh * 0.34;
+      const cg = x.createRadialGradient(bx, by, 0, bx, by, R * 0.24);
+      cg.addColorStop(0, `rgba(255,105,140,${cheekA})`);
+      cg.addColorStop(1, "rgba(255,105,140,0)");
+      x.fillStyle = cg;
       x.beginPath();
-      x.ellipse(sd * hw * 0.62 + slide, hh * 0.3, R * 0.15, R * 0.09, 0, 0, Math.PI * 2);
+      x.ellipse(bx, by, R * 0.24, R * 0.16, 0, 0, Math.PI * 2);
       x.fill();
     }
     x.restore();
@@ -821,31 +851,68 @@ export class Bob {
   }
 
   private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, hw: number, hh: number) {
-    const g = x.createLinearGradient(-hw * 0.8, -hh, hw * 0.8, hh);
     const tint = this.tint * (1 - this.morph);
-    g.addColorStop(0, rgba(mix3(TEAL_TOP, this.col, tint * 0.4)));
-    g.addColorStop(1, rgba(mix3(TEAL_BOTTOM, this.col, tint * 0.55)));
+    const top = mix3(TEAL_TOP, this.col, tint * 0.4);
+    const bottom = mix3(TEAL_BOTTOM, this.col, tint * 0.55);
+    const mid = mix3(top, bottom, 0.5);
+
+    // Base, with a soft shadow cast onto the twin behind him.
+    const g = x.createLinearGradient(-hw * 0.85, -hh, hw * 0.85, hh);
+    g.addColorStop(0, rgba(top));
+    g.addColorStop(0.5, rgba(mid));
+    g.addColorStop(1, rgba(bottom));
+    x.save();
+    if (R >= 14) {
+      x.shadowColor = "rgba(0,35,45,0.4)";
+      x.shadowBlur = R * 0.3;
+      x.shadowOffsetX = -R * 0.04;
+      x.shadowOffsetY = R * 0.07;
+    }
     x.fillStyle = g;
     x.fill(body);
-
-    // Soft inner shade at the bottom, glossy highlight at the top-left.
-    const sh = x.createLinearGradient(0, hh * 0.2, 0, hh);
-    sh.addColorStop(0, "rgba(0,40,45,0)");
-    sh.addColorStop(1, "rgba(0,40,45,0.28)");
-    x.fillStyle = sh;
-    x.fill(body);
+    x.restore();
 
     x.save();
     x.clip(body);
-    const hl = x.createRadialGradient(-hw * 0.4, -hh * 0.55, 0, -hw * 0.4, -hh * 0.55, R * 0.7);
-    hl.addColorStop(0, "rgba(255,255,255,0.6)");
-    hl.addColorStop(1, "rgba(255,255,255,0)");
-    x.fillStyle = hl;
+
+    // Light bouncing up from below, shade in the top-right corner.
+    const bounce = x.createRadialGradient(0, hh * 1.05, 0, 0, hh * 1.05, hw * 1.15);
+    bounce.addColorStop(0, "rgba(170,255,235,0.42)");
+    bounce.addColorStop(1, "rgba(170,255,235,0)");
+    x.fillStyle = bounce;
     x.fillRect(-hw, -hh, hw * 2, hh * 2);
+    const shade = x.createRadialGradient(hw * 0.95, -hh * 0.95, 0, hw * 0.95, -hh * 0.95, R * 1.1);
+    shade.addColorStop(0, "rgba(0,70,80,0.26)");
+    shade.addColorStop(1, "rgba(0,70,80,0)");
+    x.fillStyle = shade;
+    x.fillRect(-hw, -hh, hw * 2, hh * 2);
+
+    // Glossy window-light on the top-left: a soft streak and a bright spot.
+    x.save();
+    x.translate(-hw * 0.42, -hh * 0.58);
+    x.rotate(-0.55);
+    const streak = x.createLinearGradient(0, -R * 0.12, 0, R * 0.12);
+    streak.addColorStop(0, "rgba(255,255,255,0.0)");
+    streak.addColorStop(0.5, "rgba(255,255,255,0.6)");
+    streak.addColorStop(1, "rgba(255,255,255,0.0)");
+    x.fillStyle = streak;
+    x.beginPath();
+    x.ellipse(0, 0, R * 0.34, R * 0.1, 0, 0, Math.PI * 2);
+    x.fill();
+    x.restore();
+    x.fillStyle = "rgba(255,255,255,0.75)";
+    x.beginPath();
+    x.arc(-hw * 0.74, -hh * 0.3, R * 0.045, 0, Math.PI * 2);
+    x.fill();
     x.restore();
 
-    x.lineWidth = Math.max(1, R * 0.03);
-    x.strokeStyle = "rgba(255,255,255,0.22)";
+    // Rim light: bright on the lit side, a cool edge on the far side.
+    const rim = x.createLinearGradient(-hw, -hh, hw, hh);
+    rim.addColorStop(0, "rgba(255,255,255,0.7)");
+    rim.addColorStop(0.45, "rgba(255,255,255,0.08)");
+    rim.addColorStop(1, "rgba(120,255,235,0.4)");
+    x.lineWidth = Math.max(1, R * 0.035);
+    x.strokeStyle = rim;
     x.stroke(body);
   }
 
@@ -897,13 +964,20 @@ export class Bob {
     x.beginPath();
     x.arc(bx, by, br * (2.6 + pulse), 0, Math.PI * 2);
     x.fill();
-    x.fillStyle = rgba(mix3(this.col, [1, 1, 1], 0.15));
+    const bg = x.createRadialGradient(bx - br * 0.3, by - br * 0.35, 0, bx, by, br * 1.1);
+    bg.addColorStop(0, rgba(mix3(this.col, [1, 1, 1], 0.85)));
+    bg.addColorStop(0.5, rgba(this.col));
+    bg.addColorStop(1, rgba(mix3(this.col, [0, 0.1, 0.15], 0.35)));
+    x.fillStyle = bg;
     x.beginPath();
     x.arc(bx, by, br, 0, Math.PI * 2);
     x.fill();
-    x.fillStyle = "rgba(255,255,255,0.8)";
+    x.lineWidth = Math.max(1, br * 0.2);
+    x.strokeStyle = "rgba(255,255,255,0.45)";
+    x.stroke();
+    x.fillStyle = "rgba(255,255,255,0.85)";
     x.beginPath();
-    x.arc(bx - br * 0.3, by - br * 0.3, br * 0.32, 0, Math.PI * 2);
+    x.ellipse(bx - br * 0.32, by - br * 0.38, br * 0.28, br * 0.18, -0.6, 0, Math.PI * 2);
     x.fill();
     x.restore();
   }
@@ -924,6 +998,7 @@ export class Bob {
       const ey = hh * 0.02 - this.pitch * hh * 0.5 + this.sacY * hh * 0.2 + lift;
       // Eyes squeeze a little as they look sideways, like they sit on a curved face.
       const fx = 1 - Math.min(0.28, Math.abs(this.yaw) * 0.35);
+      x.fillStyle = INK;
       x.save();
       x.translate(ex, ey);
       x.scale(fx, 1);
@@ -945,16 +1020,34 @@ export class Bob {
     };
     const glossy = (ew: number, eh: number) => {
       const hh = Math.max(eh * this.open, ew * 0.35);
+      // Deep navy, a little lighter towards the bottom like a glass bead.
+      const eg = x.createLinearGradient(0, -hh, 0, hh);
+      eg.addColorStop(0, "#06121b");
+      eg.addColorStop(0.6, "#0d2b3a");
+      eg.addColorStop(1, "#14495a");
+      x.fillStyle = eg;
       x.beginPath();
       x.ellipse(0, 0, ew, hh, 0, 0, Math.PI * 2);
       x.fill();
       if (hh > ew * 0.7) {
-        x.fillStyle = "rgba(255,255,255,0.92)";
+        x.save();
         x.beginPath();
-        x.arc(-ew * 0.32, -hh * 0.36, ew * 0.34, 0, Math.PI * 2);
+        x.ellipse(0, 0, ew, hh, 0, 0, Math.PI * 2);
+        x.clip();
+        // Teal light reflected in the lower part of the eye.
+        const rg = x.createRadialGradient(0, hh * 0.85, 0, 0, hh * 0.85, ew * 1.25);
+        rg.addColorStop(0, "rgba(94,234,212,0.6)");
+        rg.addColorStop(1, "rgba(94,234,212,0)");
+        x.fillStyle = rg;
+        x.fillRect(-ew, -hh, ew * 2, hh * 2);
+        x.restore();
+        x.fillStyle = "rgba(255,255,255,0.96)";
+        x.beginPath();
+        x.ellipse(-ew * 0.3, -hh * 0.38, ew * 0.36, ew * 0.4, -0.4, 0, Math.PI * 2);
         x.fill();
+        x.fillStyle = "rgba(255,255,255,0.7)";
         x.beginPath();
-        x.arc(ew * 0.34, hh * 0.3, ew * 0.15, 0, Math.PI * 2);
+        x.arc(ew * 0.36, hh * 0.32, ew * 0.16, 0, Math.PI * 2);
         x.fill();
         x.fillStyle = INK;
       }
