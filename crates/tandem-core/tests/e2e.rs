@@ -61,8 +61,17 @@ async fn pair(a: &Side, b: &Side) {
     })
     .await;
     until("layout synced", || {
-        a.plat.st.lock().unwrap().active_edge.is_some()
-            && b.plat.st.lock().unwrap().active_edge.is_some()
+        // The listener first picks a default side, then adopts the opposite of the
+        // dialler's announcement. Wait for the two to agree, not just to exist.
+        let ea = a.plat.st.lock().unwrap().active_edge;
+        let eb = b.plat.st.lock().unwrap().active_edge;
+        matches!(
+            (ea, eb),
+            (Some(Edge::Left), Some(Edge::Right))
+                | (Some(Edge::Right), Some(Edge::Left))
+                | (Some(Edge::Top), Some(Edge::Bottom))
+                | (Some(Edge::Bottom), Some(Edge::Top))
+        )
     })
     .await;
 }
