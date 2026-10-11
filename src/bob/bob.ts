@@ -217,6 +217,8 @@ export class Bob {
   /** True while the bar is open and someone can see him: only then does he fidget and
    *  breathe. When it is false nothing animates by itself, so a closed bar costs nothing. */
   ambient = true;
+  /** Eyebrows: [left y, left tilt, right y, right tilt, opacity], eased towards a pose. */
+  private brow = [0, 0, 0, 0, 0];
   mouthOverride: MouthShape | null = null;
   mouthUntil = 0;
 
@@ -619,6 +621,10 @@ export class Bob {
       this.antS = Math.max(0.35, Math.min(1.7, this.antS + this.antSV * dt));
     }
 
+    const bt = this.browTarget();
+    const kb = 1 - Math.pow(0.0006, dt);
+    for (let i = 0; i < 5; i++) this.brow[i] += (bt[i] - this.brow[i]) * kb;
+
     if (n > this.nextIdle) this.idleAct(n);
     if (!this.ambient) { this.sacTX = 0; this.sacTY = 0; }
 
@@ -654,6 +660,26 @@ export class Bob {
     this.slotH = Math.max(0, this.slotH + this.slotHVel * dt);
 
     this.lastTime = n;
+  }
+
+  /** The eyebrow pose for the current mood. y is in units of R (up is positive). */
+  private browTarget(): number[] {
+    const eye = this.eyeOverride ?? this.cfg.eye;
+    if (this.morph > 0.4) return [0.1, -0.08, 0.1, 0.08, 0.7];
+    switch (eye) {
+      case "closed": case "spiral": case "heart": case "star": case "cup":
+        return [0, 0, 0, 0, 0];
+      case "happy": return [0.17, -0.12, 0.17, 0.12, 0.85];
+      case "wide": case "dot": return [0.26, -0.06, 0.26, 0.06, 0.9];
+      case "flat": case "line": return [-0.02, 0.5, -0.02, -0.5, 0.9];
+      case "tired": return [0.03, -0.32, 0.03, 0.32, 0.85];
+      case "wink": return [0.06, -0.1, 0.22, 0.1, 0.85];
+      default:
+        if (this.state === "thinking") return [0.03, 0, 0.22, -0.22, 0.85];
+        if (this.state === "question") return [0.0, 0.18, 0.24, -0.28, 0.85];
+        if (this.state === "working") return [0.05, 0.12, 0.05, -0.12, 0.8];
+        return [0.07, -0.1, 0.07, 0.1, 0.7];
+    }
   }
 
   /** Kicks the antenna so it wobbles. */
@@ -819,6 +845,20 @@ export class Bob {
 
     const body = new Path2D();
     pathRoundRect(body, -hw, -hh, hw * 2, hh * 2, rad);
+    if (m < 0.9) this.drawArms(x, R, hw, hh, 1 - m);
+
+    // Thickness: a darker copy just below the body, so he is a chunky toy and not a sticker.
+    if (R >= 14) {
+      x.save();
+      x.translate(0, R * 0.08 * (1 - m));
+      const ex = x.createLinearGradient(0, 0, 0, hh);
+      ex.addColorStop(0, rgba(mix3(TEAL_BOTTOM, [0, 0.12, 0.18], 0.35)));
+      ex.addColorStop(1, rgba(mix3(TEAL_BOTTOM, [0, 0.12, 0.18], 0.6)));
+      x.fillStyle = ex;
+      x.fill(body);
+      x.restore();
+    }
+
     this.drawBody(x, body, R, hw, hh);
 
     // Cheeks: soft, glowing blush.
@@ -875,6 +915,14 @@ export class Bob {
     x.save();
     x.clip(body);
 
+    // Volume: puffy in the middle, darker towards the edges.
+    const puff = x.createRadialGradient(-hw * 0.18, -hh * 0.25, R * 0.1, 0, 0, R * 1.35);
+    puff.addColorStop(0, "rgba(255,255,255,0.16)");
+    puff.addColorStop(0.55, "rgba(255,255,255,0)");
+    puff.addColorStop(1, "rgba(0,55,65,0.32)");
+    x.fillStyle = puff;
+    x.fillRect(-hw, -hh, hw * 2, hh * 2);
+
     // Light bouncing up from below, shade in the top-right corner.
     const bounce = x.createRadialGradient(0, hh * 1.05, 0, 0, hh * 1.05, hw * 1.15);
     bounce.addColorStop(0, "rgba(170,255,235,0.42)");
@@ -914,6 +962,30 @@ export class Bob {
     x.lineWidth = Math.max(1, R * 0.035);
     x.strokeStyle = rim;
     x.stroke(body);
+  }
+
+  /** Little arms that swing with him; hidden while the amber hands wave. */
+  private drawArms(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, a: number) {
+    const k = a * (1 - Math.min(1, this.hands * 3));
+    if (R < 14 || k < 0.05) return;
+    const t = now();
+    x.save();
+    x.globalAlpha = k;
+    for (const sd of [-1, 1]) {
+      const swing = Math.sin(t * 1.7 + (sd > 0 ? 0.6 : 0)) * 0.05 + this.tilt * -1.4 + this.antV * 0.002 * sd + Math.max(0, -this.oy) * 1.8 * sd;
+      x.save();
+      x.translate(sd * hw * 0.96, hh * 0.22);
+      x.rotate(sd * (0.42 + swing));
+      const g = x.createLinearGradient(-R * 0.18, 0, R * 0.18, 0);
+      g.addColorStop(0, rgba(mix3(TEAL_TOP, TEAL_BOTTOM, 0.35)));
+      g.addColorStop(1, rgba(mix3(TEAL_BOTTOM, [0, 0.12, 0.18], 0.3)));
+      x.fillStyle = g;
+      x.beginPath();
+      x.ellipse(0, R * 0.16, R * 0.17, R * 0.27, 0, 0, Math.PI * 2);
+      x.fill();
+      x.restore();
+    }
+    x.restore();
   }
 
   /** Two stubby feet, so he stands instead of floating. */
@@ -994,16 +1066,35 @@ export class Bob {
     x.strokeStyle = INK;
     const lift = this.morph * hh * 0.1;
     for (const sd of [-1, 1]) {
-      const ex = sd * hw * 0.35 + this.yaw * hw * 0.46 + this.sacX * hw * 0.25 + Math.sin(this.roll) * hw * 0.2;
-      const ey = hh * 0.02 - this.pitch * hh * 0.5 + this.sacY * hh * 0.2 + lift;
+      const ex = sd * hw * 0.34 + this.yaw * hw * 0.46 + this.sacX * hw * 0.25 + Math.sin(this.roll) * hw * 0.2;
+      const ey = hh * 0.06 - this.pitch * hh * 0.5 + this.sacY * hh * 0.2 + lift;
       // Eyes squeeze a little as they look sideways, like they sit on a curved face.
       const fx = 1 - Math.min(0.28, Math.abs(this.yaw) * 0.35);
       x.fillStyle = INK;
       x.save();
       x.translate(ex, ey);
       x.scale(fx, 1);
-      this.drawEyeShape(x, shape, R * 0.21 * this.es, R * 0.3 * this.es, sd);
+      this.drawEyeShape(x, shape, R * 0.25 * this.es, R * 0.34 * this.es, sd);
       x.restore();
+
+      // Eyebrows: this is most of what makes him look alive.
+      const bo = this.brow[4];
+      if (bo > 0.02) {
+        const by = sd < 0 ? this.brow[0] : this.brow[2];
+        const br = sd < 0 ? this.brow[1] : this.brow[3];
+        x.save();
+        x.globalAlpha = bo;
+        x.translate(ex, ey - R * 0.4 * this.es - by * R);
+        x.rotate(br);
+        x.strokeStyle = "rgba(10,28,34,0.9)";
+        x.lineWidth = Math.max(1.4, R * 0.07);
+        x.lineCap = "round";
+        x.beginPath();
+        x.moveTo(-R * 0.15, R * 0.02);
+        x.quadraticCurveTo(0, -R * 0.06, R * 0.15, R * 0.02);
+        x.stroke();
+        x.restore();
+      }
     }
     x.restore();
   }
