@@ -8,7 +8,7 @@ use tandem_core::node::*;
 use tandem_core::proto::{Edge, DEFAULT_TCP_PORT, DISCOVERY_PORT};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, Theme, WindowEvent};
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
@@ -603,8 +603,9 @@ fn show_main(app: &AppHandle) {
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("settings.html".into()))
         .title("Tandem")
-        .inner_size(460.0, 780.0)
-        .min_inner_size(400.0, 560.0)
+        .theme(Some(Theme::Dark))
+        .inner_size(900.0, 660.0)
+        .min_inner_size(640.0, 520.0)
         .center()
         .resizable(true)
         .visible(false)

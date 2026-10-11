@@ -57,15 +57,90 @@ let addOpen = false;
 const keys: Record<string, string> = {};
 
 const app = document.getElementById("app")!;
-const header = h("header");
+const statusEl = h("div", { class: "status" });
 const stage = h("section", { class: "card" });
 const layout = h("section", { class: "card" });
 const files = h("section", { class: "card" });
 const settings = h("section", { class: "card" });
+const paired = h("section", { class: "card" });
 const topbar = h("section", { class: "card" });
 const veil = h("div", { id: "veil" });
 document.body.append(veil);
-app.append(header, stage, layout, files, settings, topbar);
+
+const ICONS = {
+  computers: "M3 5h13v9H3zM8 18h3M9.5 14v4M19 8v10M16 18h6",
+  files: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
+  settings: "M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6",
+  bar: "M3 4h18v5H3zM7 14h10M9 18h6",
+} as const;
+function ico(d: string, size = 18): SVGElement {
+  const n = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  n.setAttribute("viewBox", "0 0 24 24");
+  n.setAttribute("width", String(size));
+  n.setAttribute("height", String(size));
+  n.setAttribute("fill", "none");
+  n.setAttribute("stroke", "currentColor");
+  n.setAttribute("stroke-width", "1.7");
+  n.setAttribute("stroke-linecap", "round");
+  n.setAttribute("stroke-linejoin", "round");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  n.append(path);
+  return n;
+}
+
+type PageId = "computers" | "files" | "settings" | "bar";
+const PAGES: { id: PageId; label: string; title: string; sub: string; icon: string }[] = [
+  { id: "computers", label: "Computers", title: "Computers", sub: "Pair computers and arrange them around this one.", icon: ICONS.computers },
+  { id: "files", label: "Files", title: "Files", sub: "Send files and folders to your other computers.", icon: ICONS.files },
+  { id: "settings", label: "Settings", title: "Settings", sub: "How Tandem behaves on this computer.", icon: ICONS.settings },
+  { id: "bar", label: "Top bar", title: "Top bar", sub: "The thin line at the top of your screen.", icon: ICONS.bar },
+];
+let page: PageId = "computers";
+try {
+  const saved = sessionStorage.getItem("tandem.page") as PageId | null;
+  if (saved && PAGES.some((x) => x.id === saved)) page = saved;
+} catch { /* storage unavailable */ }
+
+const navBadge = new Map<PageId, HTMLElement>();
+const indicator = h("i", { class: "nav-ind" });
+const navBtns = PAGES.map((pg, i) => {
+  const badge = h("span", { class: "badge", hidden: true });
+  navBadge.set(pg.id, badge);
+  return h("button", { class: "nav-item", "data-page": pg.id, onclick: () => go(pg.id, i) }, ico(pg.icon), h("span", {}, pg.label), badge);
+});
+const nav = h("nav", { class: "nav" }, indicator, ...navBtns);
+const pageEls = new Map<PageId, HTMLElement>();
+const content = h("main", { class: "content" });
+for (const pg of PAGES) {
+  const body = h("div", { class: "page-body" });
+  const el = h("div", { class: "page", "data-page": pg.id }, h("div", { class: "page-head" }, h("h1", {}, pg.title), h("p", {}, pg.sub)), body);
+  pageEls.set(pg.id, el);
+  content.append(el);
+  (pg as unknown as { body: HTMLElement }).body = body;
+}
+const bodyOf = (id: PageId) => (PAGES.find((x) => x.id === id) as unknown as { body: HTMLElement }).body;
+bodyOf("computers").append(stage, layout);
+bodyOf("files").append(files);
+bodyOf("settings").append(settings, paired);
+bodyOf("bar").append(topbar);
+
+function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
+  page = id;
+  try { sessionStorage.setItem("tandem.page", id); } catch { /* storage unavailable */ }
+  indicator.style.transform = `translateY(${idx * 46}px)`;
+  navBtns.forEach((b, i) => b.classList.toggle("on", i === idx));
+  for (const [pid, el] of pageEls) el.classList.toggle("on", pid === id);
+  content.scrollTo({ top: 0 });
+}
+
+const side = h("aside", { class: "side" },
+  h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-name" }, "Tandem")),
+  statusEl, nav,
+  h("div", { class: "side-foot" }, h("kbd", {}, "Ctrl+Alt+T"), h("span", {}, "control bar")));
+app.append(side, content);
+side.querySelector(".brand-logo")!.innerHTML = logoSvg; // static, trusted markup
+go(page);
 
 /** Who the next send goes to, in words. */
 function sendLabel(s: Snapshot): string {
@@ -106,11 +181,19 @@ function renderHeader(s: Snapshot) {
     : s.control === "controlled" ? `${ctl} is controlling`
     : live.length > 1 ? `Connected to ${live.length} computers`
     : `Connected to ${s.connected?.name}`;
-  update(header, "header", [text, on, isLive], () => {
-    const logo = h("span");
-    logo.innerHTML = logoSvg; // static, trusted markup
-    return [logo.firstElementChild as Node, h("h1", {}, "Tandem"), h("div", { class: `pill${on ? " on" : ""}${isLive ? " live" : ""}` }, h("span", { class: "dot" }), h("span", {}, text))];
-  });
+  const sub =
+    s.control === "offline" ? (s.paired.length ? "Waiting for your computers" : "Pair a computer to start")
+    : s.control === "remote" ? "Your keyboard and mouse are over there"
+    : s.control === "controlled" ? "Move to the edge to take back"
+    : "Push through an edge to jump";
+  update(statusEl, "header", [text, sub, on, isLive], () => [
+    h("div", { class: `s-dot${on ? " on" : ""}${isLive ? " live" : ""}` }),
+    h("div", { class: "s-text" }, h("div", { class: "s-title" }, text), h("div", { class: "s-sub" }, sub)),
+  ]);
+  const active = s.transfers.filter((t) => t.state === "active").length;
+  const fb = navBadge.get("files")!;
+  fb.hidden = active === 0;
+  fb.textContent = String(active);
 }
 
 /** Pairing: this computer's code, who is nearby, manual IP. */
@@ -289,38 +372,46 @@ function renderFiles(s: Snapshot) {
   }
 }
 
+/** One setting: title and hint on the left, the control on the right. */
+function setting(title: string, hint: string | null, control: Node): HTMLElement {
+  return h("div", { class: "set" }, h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), hint ? h("div", { class: "set-hint" }, hint) : null), control);
+}
+function switchEl(on: boolean, change: (v: boolean) => void): HTMLElement {
+  const input = h("input", { type: "checkbox", checked: on, onchange: (e: Event) => change((e.target as HTMLInputElement).checked) });
+  return h("label", { class: "switch" }, input, h("i"));
+}
+function seg<T extends string | number>(opts: readonly (readonly [T, string])[], value: T, change: (v: T) => void): HTMLElement {
+  const box = h("div", { class: "seg", role: "radiogroup" });
+  for (const [v, label] of opts) {
+    box.append(h("button", { class: v === value ? "on" : "", role: "radio", "aria-checked": String(v === value), onclick: () => change(v) }, label));
+  }
+  return box;
+}
+
 let autostart = false;
 function renderSettings(s: Snapshot) {
-  update(settings, "settings", [s.device_name, s.clipboard_sync, s.game_mode, s.switch_delay_ms, autostart, s.paired.map((p) => [p.id, p.name])], () => {
-    const name = h("input", { type: "text", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
-    const out: Node[] = [
-      h("h2", {}, "Settings"),
-      h("div", { class: "stack" },
-        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "This computer's name (shown to others, applies after restart)"), name),
-        h("label", { class: "toggle" }, h("span", {}, "Share clipboard (text, images, copied files)"),
-          h("input", { type: "checkbox", checked: s.clipboard_sync, onchange: (e: Event) => call("set_clipboard_sync", { on: (e.target as HTMLInputElement).checked }) })),
-        h("label", { class: "toggle" }, h("span", {}, "Game mode — don't switch computers while a full-screen app is open"),
-          h("input", { type: "checkbox", checked: s.game_mode, onchange: (e: Event) => call("set_game_mode", { on: (e.target as HTMLInputElement).checked }) })),
-        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Hold at the screen edge before switching"),
-          (() => {
-            const sel = h("select", { onchange: (e: Event) => call("set_switch_delay", { ms: Number((e.target as HTMLSelectElement).value) }) });
-            for (const [ms, label] of [[0, "Instant"], [250, "¼ second"], [500, "½ second"], [1000, "1 second"]] as const) {
-              sel.append(h("option", { value: String(ms), selected: s.switch_delay_ms === ms }, label));
-            }
-            return sel;
-          })()),
-        h("label", { class: "toggle" }, h("span", {}, "Start Tandem with Windows"),
-          h("input", { type: "checkbox", checked: autostart, onchange: async (e: Event) => { const on = (e.target as HTMLInputElement).checked; await call("autostart_set", { on }); autostart = on; } })),
-        h("p", { class: "muted" }, h("kbd", {}, "Scroll Lock"), " jumps to the other computer — and brings your mouse straight back if anything feels stuck.")),
+  update(settings, "settings", [s.device_name, s.clipboard_sync, s.game_mode, s.switch_delay_ms, autostart], () => {
+    const name = h("input", { type: "text", class: "name-in", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
+    return [
+      h("h2", {}, "General"),
+      setting("Computer name", "Shown to your other computers. Applies after a restart.", name),
+      setting("Share clipboard", "Text, images and copied files follow you between computers.", switchEl(s.clipboard_sync, (v) => call("set_clipboard_sync", { on: v }))),
+      setting("Game mode", "Don't switch computers while a full-screen app is open.", switchEl(s.game_mode, (v) => call("set_game_mode", { on: v }))),
+      setting("Edge delay", "How long to hold at the screen edge before switching.",
+        seg([[0, "Instant"], [250, "¼ s"], [500, "½ s"], [1000, "1 s"]] as const, s.switch_delay_ms as 0 | 250 | 500 | 1000, (ms) => call("set_switch_delay", { ms }))),
+      setting("Start with Windows", null, switchEl(autostart, async (on) => { await call("autostart_set", { on }); autostart = on; })),
+      h("div", { class: "note" }, h("kbd", {}, "Scroll Lock"), h("span", {}, " jumps to the other computer and brings your mouse straight back if anything feels stuck.")),
     ];
-    if (s.paired.length) {
-      out.push(h("div", { class: "sep" }), h("div", { class: "muted", style: "margin-bottom:6px" }, "Paired computers"));
-      for (const p of s.paired) {
-        out.push(h("div", { class: "row", style: "padding:4px 0" }, h("span", { class: "grow" }, p.name), h("button", { class: "danger", onclick: () => call("forget", { id: p.id }) }, "Forget")));
-      }
-    }
-    return out;
   });
+  paired.hidden = s.paired.length === 0;
+  update(paired, "paired", s.paired.map((p) => [p.id, p.name, p.connected]), () => [
+    h("h2", {}, "Paired computers"),
+    ...s.paired.map((p) =>
+      h("div", { class: "peer" },
+        h("span", { class: `p-dot${p.connected ? " on" : ""}` }),
+        h("div", { class: "grow" }, h("div", { class: "name" }, p.name), h("small", {}, p.connected ? "connected" : "not connected")),
+        h("button", { class: "danger", onclick: () => call("forget", { id: p.id }) }, "Forget"))),
+  ]);
 }
 
 // ---------------------------------------------------------------- top bar settings
@@ -349,34 +440,21 @@ function renderTopBar() {
       ui = { ...ui, ...patch };
       void call("ui_set", { opts: ui });
     };
-    const toggle = (label: string, on: boolean, change: (v: boolean) => void) =>
-      h("label", { class: "toggle" }, h("span", {}, label),
-        h("input", { type: "checkbox", checked: on, onchange: (e: Event) => change((e.target as HTMLInputElement).checked) }));
-    const screenSel = h("select", { onchange: (e: Event) => setUi({ monitor_cursor: (e.target as HTMLSelectElement).value === "cursor" }) },
-      h("option", { value: "primary", selected: !ui.monitor_cursor }, "Main display"),
-      h("option", { value: "cursor", selected: ui.monitor_cursor }, "Whichever display the cursor is on"));
-    const close = h("select", { onchange: (e: Event) => { saveIsland({ autoCloseInterval: Number((e.target as HTMLSelectElement).value) }); renderTopBar(); } });
-    for (const [sec, label] of [[5, "5 seconds"], [15, "15 seconds"], [30, "30 seconds"], [60, "1 minute"]] as const) {
-      close.append(h("option", { value: String(sec), selected: is.autoCloseInterval === sec }, label));
-    }
     return [
-      h("h2", {}, "Top bar"),
-      h("div", { class: "stack" },
-        toggle("Show the top bar", ui.enabled, (v) => setUi({ enabled: v })),
-        toggle("Hide it while a full-screen app is open", ui.hide_fullscreen, (v) => setUi({ hide_fullscreen: v })),
-        toggle("Sounds", is.soundEnabled, (v) => { saveIsland({ soundEnabled: v }); renderTopBar(); }),
-        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Show it on"), screenSel),
-        h("label", { class: "stack", style: "gap:4px" }, h("span", { class: "muted" }, "Collapse after"), close),
-        toggle("“Send with Tandem” in the Explorer right-click menu", shellMenu, (v) => {
-          void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });
-        }),
-        h("p", { class: "muted" },
-          "At rest the bar is a thin line at the top of the screen. ",
-          h("kbd", {}, "Ctrl+Alt+T"), " opens or closes the control bar. ",
-          h("kbd", {}, "Ctrl+Alt+U"), " opens or closes the small transfer bar."),
-        h("p", { class: "muted" },
-          "To send a file by drag: pick it up in Explorer or on the desktop, press ",
-          h("kbd", {}, "Space"), ", and drop it on the bar. Let go anywhere else and the bar closes again.")),
+      h("h2", {}, "Appearance"),
+      setting("Show the top bar", "At rest it is a thin line at the top of the screen.", switchEl(ui.enabled, (v) => setUi({ enabled: v }))),
+      setting("Hide in full-screen apps", "Keeps games and videos clean.", switchEl(ui.hide_fullscreen, (v) => setUi({ hide_fullscreen: v }))),
+      setting("Sounds", null, switchEl(is.soundEnabled, (v) => { saveIsland({ soundEnabled: v }); renderTopBar(); })),
+      setting("Show it on", null, seg([["primary", "Main display"], ["cursor", "Cursor's display"]] as const, ui.monitor_cursor ? "cursor" : "primary", (v) => setUi({ monitor_cursor: v === "cursor" }))),
+      setting("Collapse after", "How long the bar stays open when you leave it alone.",
+        seg([[5, "5 s"], [15, "15 s"], [30, "30 s"], [60, "1 min"]] as const, is.autoCloseInterval as 5 | 15 | 30 | 60, (sec) => { saveIsland({ autoCloseInterval: sec }); renderTopBar(); })),
+      h("h2", { style: "margin-top:22px" }, "Shortcuts"),
+      setting("Control bar", null, h("kbd", {}, "Ctrl+Alt+T")),
+      setting("Transfer bar", "Open or close the small transfer bar any time.", h("kbd", {}, "Ctrl+Alt+U")),
+      setting("Explorer right-click menu", "Adds “Send with Tandem” to files and folders.", switchEl(shellMenu, (v) => {
+        void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });
+      })),
+      h("div", { class: "note" }, h("span", {}, "To send by drag: pick a file up, press "), h("kbd", {}, "Space"), h("span", {}, ", and drop it on the bar. Let go anywhere else and the bar closes again.")),
     ];
   });
 }
