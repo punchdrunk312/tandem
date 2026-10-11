@@ -38,12 +38,15 @@ export async function onEvent<T>(name: string, handler: (payload: T) => void) {
 export interface Dropped {
   /** Top-level items (files and folders). */
   count: number;
-  send(): Promise<void>;
+  /** Send to one computer; without an id: to the one being controlled, or to all. */
+  send(peerId?: string): Promise<void>;
 }
 
 export interface DragDropPayload {
   type: "enter" | "over" | "leave" | "drop";
   drop?: Dropped;
+  /** Id of the computer under the pointer (an element with `data-peer`), if any. */
+  target?: string;
 }
 
 const CHUNK = 4 * 1024 * 1024;
@@ -68,7 +71,7 @@ async function walk(entry: FileSystemEntry, prefix: string, out: Item[]): Promis
   }
 }
 
-async function stageAndSend(tops: { name: string; entry: FileSystemEntry | null; file: File | null }[]) {
+async function stageAndSend(tops: { name: string; entry: FileSystemEntry | null; file: File | null }[], peerId?: string) {
   const items: Item[] = [];
   for (const t of tops) {
     if (t.entry) await walk(t.entry, "", items);
@@ -86,24 +89,28 @@ async function stageAndSend(tops: { name: string; entry: FileSystemEntry | null;
       off += buf.length;
     } while (off < file.size);
   }
-  await call("stage_finish", { id, names: tops.map((t) => t.name) });
+  await call("stage_finish", { id, names: tops.map((t) => t.name), peerId });
 }
 
 /** Whole-window drop handling for both windows. Works in a plain browser too. */
 export async function onDragDrop(handler: (e: DragDropPayload) => void) {
   let depth = 0;
+  const peerAt = (e: Event): string | undefined => {
+    const t = e.target;
+    return t instanceof Element ? t.closest<HTMLElement>("[data-peer]")?.dataset.peer : undefined;
+  };
   const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
   document.addEventListener("dragenter", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
     depth++;
-    handler({ type: "enter" });
+    handler({ type: "enter", target: peerAt(e) });
   });
   document.addEventListener("dragover", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-    handler({ type: "over" });
+    handler({ type: "over", target: peerAt(e) });
   });
   document.addEventListener("dragleave", (e) => {
     if (!hasFiles(e)) return;
@@ -124,7 +131,7 @@ export async function onDragDrop(handler: (e: DragDropPayload) => void) {
       const name = entry?.name ?? file?.name;
       if (name) tops.push({ name, entry, file });
     }
-    handler({ type: "drop", drop: { count: tops.length, send: () => stageAndSend(tops) } });
+    handler({ type: "drop", target: peerAt(e), drop: { count: tops.length, send: (peerId) => stageAndSend(tops, peerId) } });
   });
   // Dropping on the page must never navigate away to the file.
   window.addEventListener("dragover", (e) => e.preventDefault());

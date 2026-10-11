@@ -10,6 +10,7 @@ pub struct MockState {
     pub cursor: (i32, i32),
     pub capturing: bool,
     pub active_edge: Option<Edge>,
+    pub active_edges: Vec<Edge>,
     pub injected: Vec<InputEvent>,
     pub clipboard: Option<ClipContent>,
     pub releases: u32,
@@ -33,6 +34,7 @@ impl MockPlatform {
                 cursor: (w / 2, h / 2),
                 capturing: false,
                 active_edge: None,
+                active_edges: vec![],
                 injected: vec![],
                 clipboard: None,
                 releases: 0,
@@ -61,8 +63,10 @@ impl Platform for MockPlatform {
     fn screen(&self) -> Screen {
         self.st.lock().unwrap().screen
     }
-    fn set_active_edge(&self, edge: Option<Edge>) {
-        self.st.lock().unwrap().active_edge = edge;
+    fn set_active_edges(&self, edges: &[Edge]) {
+        let mut s = self.st.lock().unwrap();
+        s.active_edges = edges.to_vec();
+        s.active_edge = edges.first().copied();
     }
     fn begin_capture(&self) {
         let mut s = self.st.lock().unwrap();

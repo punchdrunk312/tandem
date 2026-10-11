@@ -29,8 +29,14 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 static SINK: OnceLock<UnboundedSender<CaptureEvent>> = OnceLock::new();
 static CAPTURING: AtomicBool = AtomicBool::new(false);
-/// 0 = none, 1 = left, 2 = right, 3 = top, 4 = bottom
-static EDGE: AtomicU8 = AtomicU8::new(0);
+/// Edges that lead to a connected computer, one bit each (see `EDGE_*`). 0 = none.
+static EDGES: AtomicU8 = AtomicU8::new(0);
+/// The edge bit the cursor is currently pushing against (0 = none).
+static AT_BIT: AtomicU8 = AtomicU8::new(0);
+const EDGE_LEFT: u8 = 1;
+const EDGE_RIGHT: u8 = 2;
+const EDGE_TOP: u8 = 4;
+const EDGE_BOTTOM: u8 = 8;
 /// Consecutive mouse-move events seen pushing against the active edge.
 static AT_EDGE: AtomicU32 = AtomicU32::new(0);
 /// How many such events it takes to cross. Stops a casual touch of the screen
@@ -167,14 +173,15 @@ fn emit(ev: CaptureEvent) {
     }
 }
 
-fn edge_code(e: Option<Edge>) -> u8 {
-    match e {
-        None => 0,
-        Some(Edge::Left) => 1,
-        Some(Edge::Right) => 2,
-        Some(Edge::Top) => 3,
-        Some(Edge::Bottom) => 4,
-    }
+fn edge_mask(edges: &[Edge]) -> u8 {
+    edges.iter().fold(0, |m, e| {
+        m | match e {
+            Edge::Left => EDGE_LEFT,
+            Edge::Right => EDGE_RIGHT,
+            Edge::Top => EDGE_TOP,
+            Edge::Bottom => EDGE_BOTTOM,
+        }
+    })
 }
 
 fn vscreen() -> Screen {
@@ -244,24 +251,36 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
     }
     let s = vscreen();
     if !CAPTURING.load(Relaxed) {
-        let edge = EDGE.load(Relaxed);
-        if edge == 0 || msg != WM_MOUSEMOVE {
+        let mask = EDGES.load(Relaxed);
+        if mask == 0 || msg != WM_MOUSEMOVE {
             return false;
         }
-        let at_edge = match edge {
-            1 => h.x <= s.x,
-            2 => h.x >= s.x + s.width - 1,
-            3 => h.y <= s.y,
-            _ => h.y >= s.y + s.height - 1,
+        // Which of the active edges, if any, is the cursor pushing against?
+        let hit = if mask & EDGE_LEFT != 0 && h.x <= s.x {
+            EDGE_LEFT
+        } else if mask & EDGE_RIGHT != 0 && h.x >= s.x + s.width - 1 {
+            EDGE_RIGHT
+        } else if mask & EDGE_TOP != 0 && h.y <= s.y {
+            EDGE_TOP
+        } else if mask & EDGE_BOTTOM != 0 && h.y >= s.y + s.height - 1 {
+            EDGE_BOTTOM
+        } else {
+            0
         };
         // Dragging a window or selection along the edge must not switch computers.
         let button_down = unsafe {
             GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0
         };
-        if !at_edge || button_down || GAME_ACTIVE.load(Relaxed) {
+        if hit == 0 || button_down || GAME_ACTIVE.load(Relaxed) {
+            AT_BIT.store(0, Relaxed);
             AT_EDGE.store(0, Relaxed);
             EDGE_SINCE_US.store(0, Relaxed);
             return false;
+        }
+        // Sliding from one edge to another (a corner) starts the push over.
+        if AT_BIT.swap(hit, Relaxed) != hit {
+            AT_EDGE.store(0, Relaxed);
+            EDGE_SINCE_US.store(0, Relaxed);
         }
         let now = now_us().max(1);
         if EDGE_SINCE_US.load(Relaxed) == 0 {
@@ -275,14 +294,15 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         if now.saturating_sub(EDGE_SINCE_US.load(Relaxed)) < delay_us {
             return false;
         }
+        AT_BIT.store(0, Relaxed);
         AT_EDGE.store(0, Relaxed);
         EDGE_SINCE_US.store(0, Relaxed);
         let fx = (h.x - s.x) as f32 / (s.width - 1).max(1) as f32;
         let fy = (h.y - s.y) as f32 / (s.height - 1).max(1) as f32;
-        let (edge, frac) = match edge {
-            1 => (Edge::Left, fy),
-            2 => (Edge::Right, fy),
-            3 => (Edge::Top, fx),
+        let (edge, frac) = match hit {
+            EDGE_LEFT => (Edge::Left, fy),
+            EDGE_RIGHT => (Edge::Right, fy),
+            EDGE_TOP => (Edge::Top, fx),
             _ => (Edge::Bottom, fx),
         };
         reset_move();
@@ -393,7 +413,7 @@ fn key_inner(msg: u32, k: &KbdLl) -> bool {
                     let _ = SetCursorPos(cx, cy);
                 }
                 emit(CaptureEvent::Failsafe);
-            } else if EDGE.load(Relaxed) != 0 {
+            } else if EDGES.load(Relaxed) != 0 {
                 emit(CaptureEvent::HotkeyEngage);
             }
         }
@@ -604,8 +624,9 @@ impl Platform for WinPlatform {
         vscreen()
     }
 
-    fn set_active_edge(&self, edge: Option<Edge>) {
-        EDGE.store(edge_code(edge), Relaxed);
+    fn set_active_edges(&self, edges: &[Edge]) {
+        EDGES.store(edge_mask(edges), Relaxed);
+        AT_BIT.store(0, Relaxed);
         AT_EDGE.store(0, Relaxed);
     }
 

@@ -130,3 +130,14 @@ click-through issues on first `npm run tauri dev`.
 Dropped files arrive in the page as normal HTML5 file drops, are copied chunk by chunk
 into a temporary staging folder, and are sent from there. If something looks wrong,
 `tandem.log` in `%APPDATA%\dev.tandem.app\` records the island's start-up and any page errors.
+
+## Several computers (hub)
+
+One PC is the hub. Up to **4 other PCs** can connect to it, one per side of its screen (right, left, top, bottom). Pair each one with the usual code; Tandem gives every new PC the first free side. Rearrange them in settings by clicking a computer, then clicking the side it should sit on.
+
+- Push the cursor through an edge to jump to the computer on that side. The bar and settings also have per-computer **Jump** and **Disconnect** buttons.
+- Text and image clipboard is relayed through the hub to every computer.
+- Files: drop on a computer's name on the bar, or use "Send to" in settings. Right-click "Send with Tandem" goes to the computer you are controlling, or to all connected ones.
+- A copied-files clipboard (Ctrl+C / Ctrl+V) is not relayed between two spokes. Send those through the hub.
+- A 5th computer is turned away.
+- Same network only (Windows only). Internet relay and macOS/Linux ports are not built yet.

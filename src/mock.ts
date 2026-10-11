@@ -11,6 +11,7 @@ const base: Snapshot = {
   pairing_code: "802-771",
   tcp_port: 24800,
   control: "offline",
+  control_peer: null,
   connected: null,
   paired: [],
   nearby: [],
@@ -24,17 +25,25 @@ let state: Snapshot = { ...base };
 if (scenario === "pair") {
   state.nearby = [{ id: "n1", name: "LAPTOP-HOME", addr: "192.168.1.42", port: 24800, paired: false }];
 } else if (scenario !== "offline") {
+  const multi = flags.includes("multi");
   state = {
     ...base,
     control: scenario === "connected" ? "local" : (scenario as Snapshot["control"]),
+    control_peer: scenario === "remote" || scenario === "controlled" ? "n2" : null,
     connected: { id: "n2", name: "Studio-PC" },
-    paired: [{ id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true }],
+    paired: multi
+      ? [
+          { id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true },
+          { id: "n3", name: "Laptop", side: "Left", connected: true, nearby: true },
+          { id: "n4", name: "Mac-mini", side: "Top", connected: true, nearby: true },
+        ]
+      : [{ id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true }],
   };
 }
 if (flags.includes("xfer")) {
   state.transfers = [
-    { id: 1, name: "holiday-photos", direction: "out", bytes: 48_000_000, total: 120_000_000, state: "active", message: "", path: null },
-    { id: 2, name: "invoice.pdf", direction: "in", bytes: 220_000, total: 220_000, state: "done", message: "", path: "C:\\Users\\me\\Downloads\\Tandem" },
+    { id: 1, name: "holiday-photos", direction: "out", bytes: 48_000_000, total: 120_000_000, state: "active", message: "", path: null, peer: "Studio-PC" },
+    { id: 2, name: "invoice.pdf", direction: "in", bytes: 220_000, total: 220_000, state: "done", message: "", path: "C:\\Users\\me\\Downloads\\Tandem", peer: "Studio-PC" },
   ];
 }
 const listeners: ((s: Snapshot) => void)[] = [];
@@ -100,7 +109,7 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
     case "stage_finish":
       state.transfers = [
         ...state.transfers,
-        { id: Date.now(), name: String((args?.names as string[])[0] ?? "file"), direction: "out", bytes: 0, total: 5_000_000, state: "active", message: "", path: null },
+        { id: Date.now(), name: String((args?.names as string[])[0] ?? "file"), direction: "out", bytes: 0, total: 5_000_000, state: "active", message: "", path: null, peer: String(args?.peerId ?? "Studio-PC") },
       ];
       push();
       return;

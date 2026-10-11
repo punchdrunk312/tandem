@@ -159,9 +159,13 @@ fn connect_known(st: State<'_, AppState>, id: String) {
     st.node.connect_known(id);
 }
 
+/// Disconnects one computer, or all of them when `peer_id` is not given.
 #[tauri::command]
-fn disconnect(st: State<'_, AppState>) {
-    st.node.disconnect();
+fn disconnect(st: State<'_, AppState>, peer_id: Option<String>) {
+    match peer_id {
+        Some(id) => st.node.disconnect_peer(id),
+        None => st.node.disconnect(),
+    }
 }
 
 #[tauri::command]
@@ -182,14 +186,25 @@ fn forget(st: State<'_, AppState>, id: String) {
     st.node.forget(id);
 }
 
-#[tauri::command]
-fn send_files(st: State<'_, AppState>, paths: Vec<String>) {
-    st.node
-        .send_files(paths.into_iter().map(PathBuf::from).collect());
+/// Sends to `peer_id`; without it: to the computer being controlled, or to all of them.
+fn send_to(node: &Node, paths: Vec<PathBuf>, peer_id: Option<String>) {
+    match peer_id {
+        Some(id) => node.send_files_to(paths, id),
+        None => node.send_files(paths),
+    }
 }
 
 #[tauri::command]
-async fn pick_and_send(app: AppHandle) -> R {
+fn send_files(st: State<'_, AppState>, paths: Vec<String>, peer_id: Option<String>) {
+    send_to(
+        &st.node,
+        paths.into_iter().map(PathBuf::from).collect(),
+        peer_id,
+    );
+}
+
+#[tauri::command]
+async fn pick_and_send(app: AppHandle, peer_id: Option<String>) -> R {
     let a2 = app.clone();
     let picked =
         tauri::async_runtime::spawn_blocking(move || a2.dialog().file().blocking_pick_files())
@@ -201,7 +216,7 @@ async fn pick_and_send(app: AppHandle) -> R {
             .filter_map(|f| f.into_path().ok())
             .collect();
         if !paths.is_empty() {
-            app.state::<AppState>().node.send_files(paths);
+            send_to(&app.state::<AppState>().node, paths, peer_id);
         }
     }
     Ok(())
@@ -263,9 +278,13 @@ fn new_code(st: State<'_, AppState>) {
     st.node.new_pairing_code();
 }
 
+/// Jumps to one computer, or to the one used last when `peer_id` is not given.
 #[tauri::command]
-fn engage(st: State<'_, AppState>) {
-    st.node.engage();
+fn engage(st: State<'_, AppState>, peer_id: Option<String>) {
+    match peer_id {
+        Some(id) => st.node.engage_peer(id),
+        None => st.node.engage(),
+    }
 }
 
 /// Open the folder where received files go.
@@ -374,7 +393,12 @@ fn stage_chunk(request: tauri::ipc::Request<'_>) -> R {
 }
 
 #[tauri::command]
-fn stage_finish(st: State<'_, AppState>, id: String, names: Vec<String>) -> R {
+fn stage_finish(
+    st: State<'_, AppState>,
+    id: String,
+    names: Vec<String>,
+    peer_id: Option<String>,
+) -> R {
     let dir = safe_id(&id).ok_or("bad session")?;
     let paths: Vec<PathBuf> = names
         .iter()
@@ -385,7 +409,7 @@ fn stage_finish(st: State<'_, AppState>, id: String, names: Vec<String>) -> R {
     if paths.is_empty() {
         return Err("nothing to send".into());
     }
-    st.node.send_files(paths);
+    send_to(&st.node, paths, peer_id);
     Ok(())
 }
 

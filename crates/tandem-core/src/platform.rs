@@ -46,8 +46,9 @@ pub enum CaptureEvent {
 pub trait Platform: Send + Sync + 'static {
     /// Bounding box of the whole desktop the cursor can travel on.
     fn screen(&self) -> Screen;
-    /// Edge that leads to the peer. `None` = no peer: never capture input.
-    fn set_active_edge(&self, edge: Option<Edge>);
+    /// Edges that lead to a connected peer (one per computer). Empty = no peer: never
+    /// capture input.
+    fn set_active_edges(&self, edges: &[Edge]);
     /// Start swallowing local input, parking the cursor mid-screen (hotkey jump).
     fn begin_capture(&self);
     /// Stop swallowing local input and place the cursor.

@@ -67,15 +67,20 @@ export function buildHeader(a: ViewActions): ViewHost {
 
 export function homeText(s: Snapshot | null): { title: string; sub: string } {
   if (!s) return { title: "Starting…", sub: "" };
+  const live = s.paired.filter((p) => p.connected);
   const peer = s.connected?.name ?? "";
+  const ctl = s.paired.find((p) => p.id === s.control_peer)?.name ?? peer;
   const side = s.paired.find((p) => p.connected)?.side.toLowerCase() ?? "right";
   switch (s.control) {
     case "local":
+      if (live.length > 1) {
+        return { title: `Connected to ${live.length} computers`, sub: "Push your cursor through an edge to jump to one. To send a file: pick it up, press Space, drop it on a computer's name." };
+      }
       return { title: `Connected to ${peer}`, sub: `Push your cursor through the ${side} edge. To send a file: pick it up, press Space, drop it on me.` };
     case "remote":
-      return { title: `Controlling ${peer}`, sub: "Your mouse and keyboard are over there. Push back through the edge, or press Scroll Lock." };
+      return { title: `Controlling ${ctl}`, sub: "Your mouse and keyboard are over there. Push back through the edge, or press Scroll Lock." };
     case "controlled":
-      return { title: `${peer} is driving`, sub: "Move to the edge to take your mouse back." };
+      return { title: `${ctl} is driving`, sub: "Move to the edge to take your mouse back." };
     default: {
       const near = s.nearby.find((n) => n.paired) ?? s.paired.find((p) => p.nearby);
       if (near) return { title: `${near.name} is nearby`, sub: "Connect to share your mouse, keyboard and clipboard." };
@@ -104,8 +109,13 @@ export function buildHome(a: ViewActions): ViewHost {
       sub.textContent = t.sub;
 
       const near = s ? s.nearby.find((n) => n.paired) ?? s.paired.find((p) => p.nearby && !p.connected) : undefined;
-      keyed(actions, `${s?.control}|${s?.connected?.id}|${near?.id}|${s?.nearby.length}`, () => {
+      const live = (s?.paired ?? []).filter((p) => p.connected);
+      keyed(actions, `${s?.control}|${live.map((p) => p.id + p.name).join()}|${near?.id}|${s?.nearby.length}`, () => {
         if (!s) return [];
+        if (live.length > 1) {
+          // One button per computer: jump straight to it.
+          return live.map((p) => btn(`→ ${p.name}`, () => fire("engage", { peerId: p.id }), "primary"));
+        }
         if (s.connected) {
           return [btn(`Jump to ${s.connected.name}`, () => fire("engage"), "primary"), btn("Disconnect", () => fire("disconnect"))];
         }
@@ -115,9 +125,20 @@ export function buildHome(a: ViewActions): ViewHost {
         return out;
       });
 
-      const peer = s?.paired.find((p) => p.connected);
-      keyed(side, `${peer?.id}|${peer?.side}`, () => {
+      const peer = live[0];
+      keyed(side, live.map((p) => `${p.id}${p.side}${p.name}`).join(), () => {
         if (!peer) return [];
+        if (live.length > 1) {
+          // Several computers: a read-only map of who sits where.
+          const mk = (sd: "Left" | "Right" | "Top" | "Bottom") => {
+            const occ = live.find((p) => p.side === sd);
+            return h("span", {
+              class: `side-btn ro at-${sd.toLowerCase()}${occ ? " on" : ""}`,
+              title: occ ? `${occ.name} is on your ${sd.toLowerCase()}` : `Nothing on your ${sd.toLowerCase()}`,
+            }, occ ? Array.from(occ.name)[0]?.toUpperCase() ?? "?" : SIDE_GLYPH[sd]);
+          };
+          return [mk("Top"), mk("Left"), h("span", { class: "side-me", text: "me" }), mk("Right"), mk("Bottom")];
+        }
         const mk = (sd: "Left" | "Right" | "Top" | "Bottom") =>
           h("button", {
             class: `side-btn at-${sd.toLowerCase()}${peer.side === sd ? " on" : ""}`,
@@ -130,12 +151,13 @@ export function buildHome(a: ViewActions): ViewHost {
 
       // Transfers: newest first, at most three rows.
       const rows = [...(s?.transfers ?? [])].reverse().slice(0, 3);
-      keyed(xfers, rows.map((r) => `${r.direction}${r.id}${r.state}${r.name}${r.message}`).join(","), () =>
+      const many = live.length > 1;
+      keyed(xfers, rows.map((r) => `${r.direction}${r.id}${r.state}${r.name}${r.message}${many}`).join(","), () =>
         rows.map((r) =>
           h("div", { class: `xfer ${r.state}`, "data-id": `${r.direction}${r.id}` },
             h("span", { class: "x-dir", text: r.direction === "out" ? "↑" : "↓" }),
             h("div", { class: "x-body" },
-              h("div", { class: "x-top" }, h("span", { class: "x-name", text: r.name }), h("span", { class: "x-state", text: "" })),
+              h("div", { class: "x-top" }, h("span", { class: "x-name", text: many ? `${r.name} · ${r.peer}` : r.name }), h("span", { class: "x-state", text: "" })),
               h("div", { class: "x-bar" }, h("i")),
               r.message ? h("div", { class: "x-msg", text: r.message }) : ""))),
       );
@@ -156,14 +178,28 @@ export function buildHome(a: ViewActions): ViewHost {
 export function buildDrop(): ViewHost {
   const big = h("div", { class: "d-title" });
   const small = h("div", { class: "d-sub" });
-  const el = h("div", { class: "view drop" }, h("div", { class: "d-text" }, big, small));
+  const targets = h("div", { class: "d-targets" });
+  const el = h("div", { class: "view drop" }, h("div", { class: "d-text" }, big, small), targets);
   return {
     el,
     sync() {
+      const peers = State.connectedPeers;
+      const many = peers.length > 1;
       const peer = State.connected?.name;
-      big.textContent = peer ? `Drop to send to ${peer}` : "Connect to a computer first";
-      small.textContent = peer ? "Files and folders land in its Downloads\\Tandem folder." : "Open settings to pair, then drop again.";
+      if (many) {
+        big.textContent = "Drop on a computer";
+        small.textContent = "Files and folders land in its Downloads\\Tandem folder.";
+      } else {
+        big.textContent = peer ? `Drop to send to ${peer}` : "Connect to a computer first";
+        small.textContent = peer ? "Files and folders land in its Downloads\\Tandem folder." : "Open settings to pair, then drop again.";
+      }
       el.classList.toggle("bad", !peer);
+      el.classList.toggle("many", many);
+      // With several computers every name is its own drop target.
+      keyed(targets, many ? peers.map((p) => `${p.id}${p.name}${State.dropTarget === p.id}`).join() : "", () =>
+        many
+          ? peers.map((p) => h("div", { class: `d-pill${State.dropTarget === p.id ? " over" : ""}`, "data-peer": p.id, text: p.name }))
+          : []);
     },
   };
 }

@@ -126,6 +126,8 @@ pub struct TransferView {
     pub state: String,
     pub message: String,
     pub path: Option<String>,
+    /// The other computer's name (sender of an incoming transfer, target of an outgoing one).
+    pub peer: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Default)]
@@ -137,6 +139,10 @@ pub struct Snapshot {
     pub tcp_port: u16,
     /// "offline" | "local" | "remote" | "controlled"
     pub control: String,
+    /// The computer the cursor is on / that is driving us, if any.
+    pub control_peer: Option<String>,
+    /// One connected computer: the one in control, otherwise the first by name. Kept for
+    /// simple UIs; `paired[].connected` lists them all.
     pub connected: Option<PeerBrief>,
     pub paired: Vec<PairedView>,
     pub nearby: Vec<NearbyView>,
@@ -157,7 +163,9 @@ struct PairingState {
 #[derive(Default)]
 struct Status {
     control: &'static str,
-    connected: Option<PeerBrief>,
+    control_peer: Option<String>,
+    /// Every connected computer, in a stable order (by name).
+    connected: Vec<PeerBrief>,
     error: Option<String>,
 }
 
@@ -234,7 +242,12 @@ impl Shared {
         let disc = self.discovered.lock().unwrap();
         let fresh = |d: &(Discovered, Instant)| d.1.elapsed() < NEARBY_TTL;
         let code = self.pairing.lock().unwrap().code.clone();
-        let connected_id = st.connected.as_ref().map(|c| c.id.clone());
+        let primary = st
+            .control_peer
+            .as_ref()
+            .and_then(|id| st.connected.iter().find(|c| &c.id == id))
+            .or_else(|| st.connected.first())
+            .cloned();
         let mut nearby: Vec<NearbyView> = disc
             .values()
             .filter(|d| fresh(d))
@@ -252,12 +265,17 @@ impl Shared {
             device_name: per.device_name.clone(),
             pairing_code: format!("{}-{}", &code[..3], &code[3..]),
             tcp_port: self.me.listen_port,
-            control: if st.connected.is_some() {
-                st.control.to_string()
-            } else {
+            control: if st.connected.is_empty() {
                 "offline".into()
+            } else {
+                st.control.to_string()
             },
-            connected: st.connected.clone(),
+            control_peer: if st.connected.is_empty() {
+                None
+            } else {
+                st.control_peer.clone()
+            },
+            connected: primary,
             paired: per
                 .peers
                 .iter()
@@ -265,7 +283,7 @@ impl Shared {
                     id: p.id.clone(),
                     name: p.name.clone(),
                     side: p.side,
-                    connected: connected_id.as_deref() == Some(&p.id),
+                    connected: st.connected.iter().any(|c| c.id == p.id),
                     nearby: disc.get(&p.id).map(fresh).unwrap_or(false),
                 })
                 .collect(),
@@ -382,19 +400,23 @@ enum Cmd {
     ConnectKnown {
         peer_id: String,
     },
-    Disconnect,
+    /// One computer, or all of them.
+    Disconnect(Option<String>),
     SetSide {
         peer_id: String,
         side: Edge,
     },
     Forget(String),
-    SendFiles(Vec<PathBuf>),
+    SendFiles {
+        paths: Vec<PathBuf>,
+        target: Option<String>,
+    },
     SetClipboardSync(bool),
     SetGameMode(bool),
     SetSwitchDelay(u32),
     SetName(String),
     NewCode,
-    Engage,
+    Engage(Option<String>),
 }
 
 impl Node {
@@ -536,10 +558,11 @@ impl Node {
             sh: sh.clone(),
             ev_tx: ev_tx.clone(),
             control: Control::Local,
-            session: None,
-            dialing_since: None,
+            sessions: HashMap::new(),
+            dialing: HashMap::new(),
             last_dial: HashMap::new(),
-            no_auto_until: None,
+            no_auto: HashMap::new(),
+            last_peer: None,
             last_clip_sig: None,
             clip: clipboard_worker(sh.platform.clone(), ev_tx.clone()),
         };
@@ -567,8 +590,13 @@ impl Node {
     pub fn connect_known(&self, peer_id: String) {
         self.cmd(Cmd::ConnectKnown { peer_id })
     }
+    /// Disconnect from every computer.
     pub fn disconnect(&self) {
-        self.cmd(Cmd::Disconnect)
+        self.cmd(Cmd::Disconnect(None))
+    }
+    /// Disconnect from one computer.
+    pub fn disconnect_peer(&self, peer_id: String) {
+        self.cmd(Cmd::Disconnect(Some(peer_id)))
     }
     pub fn set_side(&self, peer_id: String, side: Edge) {
         self.cmd(Cmd::SetSide { peer_id, side })
@@ -576,8 +604,19 @@ impl Node {
     pub fn forget(&self, peer_id: String) {
         self.cmd(Cmd::Forget(peer_id))
     }
+    /// Send files to the computer being controlled, or to every connected computer.
     pub fn send_files(&self, paths: Vec<PathBuf>) {
-        self.cmd(Cmd::SendFiles(paths))
+        self.cmd(Cmd::SendFiles {
+            paths,
+            target: None,
+        })
+    }
+    /// Send files to one connected computer.
+    pub fn send_files_to(&self, paths: Vec<PathBuf>, peer_id: String) {
+        self.cmd(Cmd::SendFiles {
+            paths,
+            target: Some(peer_id),
+        })
     }
     pub fn set_clipboard_sync(&self, on: bool) {
         self.cmd(Cmd::SetClipboardSync(on))
@@ -596,7 +635,11 @@ impl Node {
     }
     /// Same as the hotkey: jump to the other computer now.
     pub fn engage(&self) {
-        self.cmd(Cmd::Engage)
+        self.cmd(Cmd::Engage(None))
+    }
+    /// Jump to a particular connected computer.
+    pub fn engage_peer(&self, peer_id: String) {
+        self.cmd(Cmd::Engage(Some(peer_id)))
     }
 }
 
@@ -618,12 +661,16 @@ enum Ev {
     OfferBuilt {
         id: u64,
         kind: OfferKind,
+        target: String,
         res: std::io::Result<Offer>,
     },
     ClipFiles(Vec<PathBuf>),
     /// The clipboard worker read what is on the clipboard now.
     ClipRead(ClipContent),
-    DialFailed(String),
+    DialFailed {
+        ip: IpAddr,
+        err: String,
+    },
 }
 
 async fn handle_incoming(
@@ -777,18 +824,28 @@ async fn dial(
 
 // ---------------------------------------------------------------- actor
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Control {
     Local,
-    /// We are swallowing local input and forwarding it, through `edge`.
+    /// We are swallowing local input and forwarding it to `peer`, through `edge`.
     Remote {
+        peer: String,
         edge: Edge,
     },
-    /// The peer controls our cursor; `ret` is our edge that leads back.
+    /// `peer` controls our cursor; `ret` is our edge that leads back to it.
     Controlled {
+        peer: String,
         ret: Edge,
     },
 }
+
+/// How many computers can be connected at once: one per side of the screen.
+const MAX_PEERS: usize = 4;
+/// Sides handed out to new computers, in this order.
+const SIDE_ORDER: [Edge; 4] = [Edge::Right, Edge::Left, Edge::Top, Edge::Bottom];
+/// An existing connection that has been silent this long is considered dead, and a fresh
+/// connection from the same computer replaces it.
+const STALE_AFTER: Duration = Duration::from_secs(2);
 
 struct Session {
     sid: u64,
@@ -797,6 +854,7 @@ struct Session {
     tx: UnboundedSender<Msg>,
     reader: AbortHandle,
     last_rx: Instant,
+    /// Which edge of *my* screen leads to this computer.
     side: Edge,
 }
 
@@ -810,11 +868,15 @@ struct Actor {
     sh: Arc<Shared>,
     ev_tx: UnboundedSender<Ev>,
     control: Control,
-    session: Option<Session>,
-    dialing_since: Option<Instant>,
+    /// Connected computers by id, at most one per side of my screen.
+    sessions: HashMap<String, Session>,
+    /// Dials in flight, by address.
+    dialing: HashMap<IpAddr, Instant>,
     last_dial: HashMap<String, Instant>,
-    /// After a deliberate disconnect (either side) nobody redials for a while.
-    no_auto_until: Option<Instant>,
+    /// After a deliberate disconnect (either side) nobody redials that computer for a while.
+    no_auto: HashMap<String, Instant>,
+    /// The computer the cursor last went to: what Scroll Lock jumps to.
+    last_peer: Option<String>,
     last_clip_sig: Option<u64>,
     /// Clipboard reads / writes run on their own thread: the clipboard can be held by
     /// another app for a moment and a big image takes a while to copy, and the actor
@@ -911,22 +973,37 @@ impl Actor {
     }
 
     fn set_control(&mut self, c: Control) {
-        self.control = c;
-        files::SLOW_DOWN.store(
-            !matches!(c, Control::Local),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        self.sh.status.lock().unwrap().control = match c {
+        let peer = match &c {
+            Control::Local => None,
+            Control::Remote { peer, .. } | Control::Controlled { peer, .. } => Some(peer.clone()),
+        };
+        let label = match &c {
             Control::Local => "local",
             Control::Remote { .. } => "remote",
             Control::Controlled { .. } => "controlled",
         };
+        files::SLOW_DOWN.store(c != Control::Local, std::sync::atomic::Ordering::Relaxed);
+        self.control = c;
+        {
+            let mut st = self.sh.status.lock().unwrap();
+            st.control = label;
+            st.control_peer = peer;
+        }
         self.sh.publish();
     }
 
-    fn send(&self, m: Msg) {
-        if let Some(s) = &self.session {
+    fn send_to(&self, peer: &str, m: Msg) {
+        if let Some(s) = self.sessions.get(peer) {
             let _ = s.tx.send(m);
+        }
+    }
+
+    /// Send to every connected computer except `except` (if given).
+    fn send_all_but(&self, except: Option<&str>, m: &Msg) {
+        for (id, s) in &self.sessions {
+            if Some(id.as_str()) != except {
+                let _ = s.tx.send(m.clone());
+            }
         }
     }
 
@@ -934,60 +1011,78 @@ impl Actor {
         self.sh.platform.screen().center()
     }
 
-    fn drop_session(&mut self, why: &str) {
-        if self.session.is_none() {
-            return;
-        }
-        match self.control {
-            Control::Remote { .. } => {
-                let (x, y) = self.center();
-                self.sh.platform.end_capture(x, y);
-            }
-            Control::Controlled { .. } => self.sh.platform.release_all(),
-            Control::Local => {}
-        }
-        self.session = None;
-        self.set_control(Control::Local);
-        self.sh.platform.set_active_edge(None);
-        {
-            let mut st = self.sh.status.lock().unwrap();
-            st.connected = None;
-            if !why.is_empty() {
-                st.error = Some(why.to_string());
-            }
-        }
+    /// Recomputes what the UI shows as connected and tells the platform which screen
+    /// edges lead to a computer.
+    fn refresh_connected(&mut self) {
+        let mut v: Vec<PeerBrief> = self
+            .sessions
+            .values()
+            .map(|s| PeerBrief {
+                id: s.peer.id.clone(),
+                name: s.peer.name.clone(),
+            })
+            .collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        self.sh.status.lock().unwrap().connected = v;
+        let edges: Vec<Edge> = self.sessions.values().map(|s| s.side).collect();
+        self.sh.platform.set_active_edges(&edges);
         self.sh.publish();
     }
 
+    /// Ends one connection, handing the mouse back if it was involved.
+    fn drop_session(&mut self, pid: &str, why: &str) {
+        let Some(sess) = self.sessions.remove(pid) else {
+            return;
+        };
+        match &self.control {
+            Control::Remote { peer, .. } if peer == pid => {
+                let (x, y) = self.center();
+                self.sh.platform.end_capture(x, y);
+                self.set_control(Control::Local);
+            }
+            Control::Controlled { peer, .. } if peer == pid => {
+                self.sh.platform.release_all();
+                self.set_control(Control::Local);
+            }
+            _ => {}
+        }
+        drop(sess);
+        if !why.is_empty() {
+            self.sh.status.lock().unwrap().error = Some(why.to_string());
+        }
+        self.refresh_connected();
+    }
+
     fn on_tick(&mut self) {
-        if let Some(s) = &self.session {
+        let mut dead = Vec::new();
+        for (id, s) in &self.sessions {
             let _ = s.tx.send(Msg::Ping);
             if s.last_rx.elapsed() > SESSION_TIMEOUT {
-                self.drop_session("connection lost");
+                dead.push(id.clone());
             }
         }
-        if self
-            .dialing_since
-            .is_some_and(|t| t.elapsed() > Duration::from_secs(20))
-        {
-            self.dialing_since = None;
+        for id in dead {
+            self.drop_session(&id, "connection lost");
         }
+        self.dialing
+            .retain(|_, t| t.elapsed() <= Duration::from_secs(20));
+        self.no_auto.retain(|_, t| Instant::now() < *t);
         self.auto_connect();
         self.sh.publish(); // lets "nearby" entries expire
     }
 
-    /// Reconnect to paired computers. Only the device with the smaller id
-    /// dials, so two computers don't dial each other at the same time.
+    /// Reconnect to paired computers. Of two computers only the one with the smaller id
+    /// dials, so they don't dial each other at the same time.
     fn auto_connect(&mut self) {
-        if self.session.is_some() || self.dialing_since.is_some() {
-            return;
-        }
-        if self.no_auto_until.is_some_and(|t| Instant::now() < t) {
-            return;
-        }
         let per = self.sh.persisted.lock().unwrap().clone();
         for p in &per.peers {
-            if self.sh.me.id >= p.id {
+            if self.sessions.len() >= MAX_PEERS {
+                return;
+            }
+            if self.sh.me.id >= p.id || self.sessions.contains_key(&p.id) {
+                continue;
+            }
+            if self.no_auto.contains_key(&p.id) {
                 continue;
             }
             if self
@@ -1007,22 +1102,27 @@ impl Actor {
                     .map(|a| (a.ip(), a.port())),
             };
             if let (Some((ip, port)), Some(key)) = (target, unhex32(&p.link_key)) {
+                if self.dialing.contains_key(&ip) {
+                    continue;
+                }
                 self.last_dial.insert(p.id.clone(), Instant::now());
                 self.start_dial(
                     SocketAddr::new(ip, port),
                     ClientAuth::Known { link_key: key },
                 );
-                return;
             }
         }
     }
 
     fn start_dial(&mut self, addr: SocketAddr, auth: ClientAuth) {
-        self.dialing_since = Some(Instant::now());
+        self.dialing.insert(addr.ip(), Instant::now());
         let (sh, ev_tx) = (self.sh.clone(), self.ev_tx.clone());
         tokio::spawn(async move {
             if let Err(e) = dial(sh, ev_tx.clone(), addr, auth).await {
-                let _ = ev_tx.send(Ev::DialFailed(e.to_string()));
+                let _ = ev_tx.send(Ev::DialFailed {
+                    ip: addr.ip(),
+                    err: e.to_string(),
+                });
             }
         });
     }
@@ -1039,24 +1139,41 @@ impl Actor {
                 dialer,
             } => self.on_up(sid, peer, addr, tx, reader, dialer),
             Ev::Msg(sid, m) => {
-                if self.session.as_ref().map(|s| s.sid) == Some(sid) {
-                    self.session.as_mut().unwrap().last_rx = Instant::now();
-                    self.on_msg(m);
+                let found = self
+                    .sessions
+                    .iter_mut()
+                    .find(|(_, s)| s.sid == sid)
+                    .map(|(id, s)| {
+                        s.last_rx = Instant::now();
+                        id.clone()
+                    });
+                if let Some(pid) = found {
+                    self.on_msg(&pid, m);
                 }
             }
             Ev::Closed(sid) => {
-                if self.session.as_ref().map(|s| s.sid) == Some(sid) {
-                    self.drop_session("disconnected");
+                let found = self
+                    .sessions
+                    .iter()
+                    .find(|(_, s)| s.sid == sid)
+                    .map(|(id, _)| id.clone());
+                if let Some(pid) = found {
+                    self.drop_session(&pid, "disconnected");
                 }
             }
             Ev::Cmd(c) => self.on_cmd(c),
-            Ev::DialFailed(e) => {
-                self.dialing_since = None;
+            Ev::DialFailed { ip, err } => {
+                self.dialing.remove(&ip);
                 // Quiet during background reconnects; loud only when nothing else is going on.
-                log::info!("dial failed: {e}");
-                self.sh.set_error(Some(e));
+                log::info!("dial failed: {err}");
+                self.sh.set_error(Some(err));
             }
-            Ev::OfferBuilt { id, kind, res } => self.on_offer_built(id, kind, res),
+            Ev::OfferBuilt {
+                id,
+                kind,
+                target,
+                res,
+            } => self.on_offer_built(id, kind, target, res),
             Ev::ClipFiles(paths) => {
                 let c = ClipContent::Files(paths);
                 self.last_clip_sig = Some(sig(&c));
@@ -1064,6 +1181,14 @@ impl Actor {
             }
             Ev::ClipRead(c) => self.on_clip_read(c),
         }
+    }
+
+    /// The first side not used by another paired computer.
+    fn first_free_side(&self, pid: &str) -> Option<Edge> {
+        let per = self.sh.persisted.lock().unwrap();
+        SIDE_ORDER
+            .into_iter()
+            .find(|e| !per.peers.iter().any(|p| p.id != pid && p.side == *e))
     }
 
     fn on_up(
@@ -1075,73 +1200,118 @@ impl Actor {
         reader: AbortHandle,
         dialer: bool,
     ) {
-        self.dialing_since = None;
-        // One computer at a time; a second connection from the same peer replaces a dead one only.
-        if self.session.is_some() {
+        self.dialing.remove(&addr);
+        let pid = peer.id.clone();
+        // The same computer again. A healthy connection stays; a silent one is dead and
+        // the new connection takes its place.
+        match self.sessions.get(&pid) {
+            Some(old) if old.last_rx.elapsed() < STALE_AFTER => {
+                reader.abort();
+                return;
+            }
+            Some(_) => self.drop_session(&pid, ""),
+            None => {}
+        }
+        if self.sessions.len() >= MAX_PEERS {
             reader.abort();
+            self.sh.set_error(Some(
+                "Four computers are already connected — disconnect one first".into(),
+            ));
             return;
         }
-        // Persist new pairing / refresh name & address.
-        let side = {
+        // Persist a new pairing / refresh name & address.
+        let known = self
+            .sh
+            .persisted
+            .lock()
+            .unwrap()
+            .peers
+            .iter()
+            .any(|p| p.id == pid);
+        let fresh_side = if known {
+            None
+        } else {
+            self.first_free_side(&pid)
+        };
+        let mut side = {
             let mut per = self.sh.persisted.lock().unwrap();
             let sock = SocketAddr::new(addr, peer.listen_port).to_string();
-            if let Some(p) = per.peers.iter_mut().find(|p| p.id == peer.id) {
+            if let Some(p) = per.peers.iter_mut().find(|p| p.id == pid) {
                 p.name = peer.name.clone();
                 p.last_addr = Some(sock);
                 if let Some(k) = peer.new_link_key {
                     p.link_key = hex(&k);
                 }
+                p.side
             } else if let Some(k) = peer.new_link_key {
+                let side = fresh_side.unwrap_or(Edge::Right);
                 per.peers.push(PairedPeer {
-                    id: peer.id.clone(),
+                    id: pid.clone(),
                     name: peer.name.clone(),
                     link_key: hex(&k),
-                    side: Edge::Right,
+                    side,
                     last_addr: Some(sock),
                 });
+                side
             } else {
                 // Known-mode connection for a peer we no longer have: cannot happen (policy checked).
                 reader.abort();
                 return;
             }
-            per.peers.iter().find(|p| p.id == peer.id).unwrap().side
         };
+        // Two connected computers never share a side (with more than four paired, the
+        // stored sides can clash).
+        if self.sessions.values().any(|s| s.side == side) {
+            if let Some(free) = SIDE_ORDER
+                .into_iter()
+                .find(|e| !self.sessions.values().any(|s| s.side == *e))
+            {
+                side = free;
+                let mut per = self.sh.persisted.lock().unwrap();
+                if let Some(p) = per.peers.iter_mut().find(|p| p.id == pid) {
+                    p.side = free;
+                }
+            }
+        }
         self.sh.save();
-        self.session = Some(Session {
-            sid,
-            peer: peer.clone(),
-            addr,
-            tx,
-            reader,
-            last_rx: Instant::now(),
-            side,
-        });
-        {
-            let mut st = self.sh.status.lock().unwrap();
-            st.connected = Some(PeerBrief {
-                id: peer.id.clone(),
-                name: peer.name.clone(),
-            });
-            st.error = None;
-        }
-        self.sh.discovered.lock().unwrap().remove(&peer.id);
-        self.set_control(Control::Local);
-        self.sh.platform.set_active_edge(Some(side));
+        self.sessions.insert(
+            pid.clone(),
+            Session {
+                sid,
+                peer,
+                addr,
+                tx,
+                reader,
+                last_rx: Instant::now(),
+                side,
+            },
+        );
+        self.sh.status.lock().unwrap().error = None;
+        self.sh.discovered.lock().unwrap().remove(&pid);
+        self.refresh_connected();
         if dialer {
-            self.send(Msg::Layout { peer_side: side });
+            self.send_to(&pid, Msg::Layout { peer_side: side });
         }
-    }
-
-    fn side(&self) -> Option<Edge> {
-        self.session.as_ref().map(|s| s.side)
     }
 
     fn on_capture(&mut self, c: CaptureEvent) {
         match c {
             CaptureEvent::Crossed { edge, frac } => {
-                if self.control == Control::Local && self.side() == Some(edge) {
-                    self.set_control(Control::Remote { edge });
-                    self.send(Msg::Enter { edge, frac });
+                let target = if self.control == Control::Local {
+                    self.sessions
+                        .iter()
+                        .find(|(_, s)| s.side == edge)
+                        .map(|(id, _)| id.clone())
+                } else {
+                    None
+                };
+                if let Some(pid) = target {
+                    self.last_peer = Some(pid.clone());
+                    self.set_control(Control::Remote {
+                        peer: pid.clone(),
+                        edge,
+                    });
+                    self.send_to(&pid, Msg::Enter { edge, frac });
                 } else {
                     // Raced with a disconnect or a layout change: give the user their mouse back.
                     let (x, y) = self.center();
@@ -1149,149 +1319,245 @@ impl Actor {
                 }
             }
             CaptureEvent::Input(ev) => {
-                if matches!(self.control, Control::Remote { .. }) {
-                    self.send(Msg::Input(ev));
+                if let Control::Remote { peer, .. } = &self.control {
+                    if let Some(s) = self.sessions.get(peer) {
+                        let _ = s.tx.send(Msg::Input(ev));
+                    }
                 }
             }
             CaptureEvent::Failsafe => {
-                if matches!(self.control, Control::Remote { .. }) {
+                if let Control::Remote { peer, .. } = self.control.clone() {
                     self.set_control(Control::Local);
-                    self.send(Msg::Release);
+                    self.send_to(&peer, Msg::Release);
                 }
             }
-            CaptureEvent::HotkeyEngage => self.engage(),
+            CaptureEvent::HotkeyEngage => self.engage(None),
             CaptureEvent::ClipboardChanged => self.on_clipboard_changed(),
         }
     }
 
-    fn engage(&mut self) {
-        if let (Control::Local, Some(edge)) = (self.control, self.side()) {
-            self.sh.platform.begin_capture();
-            self.set_control(Control::Remote { edge });
-            self.send(Msg::Enter { edge, frac: 0.5 });
-        }
+    /// The computer a bare "jump" goes to: the one used last, else the first by name.
+    fn default_target(&self) -> Option<String> {
+        self.last_peer
+            .clone()
+            .filter(|p| self.sessions.contains_key(p))
+            .or_else(|| {
+                self.sh
+                    .status
+                    .lock()
+                    .unwrap()
+                    .connected
+                    .first()
+                    .map(|c| c.id.clone())
+            })
     }
 
-    fn on_msg(&mut self, m: Msg) {
+    fn engage(&mut self, target: Option<String>) {
+        if self.control != Control::Local {
+            return;
+        }
+        let Some(pid) = target
+            .filter(|t| self.sessions.contains_key(t))
+            .or_else(|| self.default_target())
+        else {
+            return;
+        };
+        let Some(edge) = self.sessions.get(&pid).map(|s| s.side) else {
+            return;
+        };
+        self.sh.platform.begin_capture();
+        self.last_peer = Some(pid.clone());
+        self.set_control(Control::Remote {
+            peer: pid.clone(),
+            edge,
+        });
+        self.send_to(&pid, Msg::Enter { edge, frac: 0.5 });
+    }
+
+    fn on_msg(&mut self, from: &str, m: Msg) {
         let plat = self.sh.platform.clone();
         match m {
-            Msg::Ping => self.send(Msg::Pong),
+            Msg::Ping => self.send_to(from, Msg::Pong),
             Msg::Pong => {}
             Msg::Bye => {
-                self.no_auto_until = Some(Instant::now() + Duration::from_secs(10));
-                self.drop_session("peer closed the connection")
+                self.no_auto
+                    .insert(from.to_string(), Instant::now() + Duration::from_secs(10));
+                self.drop_session(from, "peer closed the connection")
             }
             Msg::Layout { peer_side } => {
                 let mine = peer_side.opposite();
-                self.apply_side(mine, false);
+                self.apply_side(from, mine, true);
             }
             Msg::Enter { edge, frac } => {
                 if self.control == Control::Local {
                     let (x, y) = edge_point(plat.screen(), edge.opposite(), frac);
                     plat.set_cursor(x, y);
                     self.set_control(Control::Controlled {
+                        peer: from.to_string(),
                         ret: edge.opposite(),
                     });
                 } else {
-                    self.send(Msg::Release); // "not now"
+                    self.send_to(from, Msg::Release); // "not now"
                 }
             }
             Msg::Leave { frac } => {
-                if let Control::Remote { edge } = self.control {
-                    let (x, y) = edge_point(plat.screen(), edge, frac);
-                    plat.end_capture(x, y);
-                    self.set_control(Control::Local);
+                if let Control::Remote { peer, edge } = self.control.clone() {
+                    if peer == from {
+                        let (x, y) = edge_point(plat.screen(), edge, frac);
+                        plat.end_capture(x, y);
+                        self.set_control(Control::Local);
+                    }
                 }
             }
-            Msg::Release => match self.control {
-                Control::Remote { .. } => {
+            Msg::Release => match self.control.clone() {
+                Control::Remote { peer, .. } if peer == from => {
                     let (x, y) = self.center();
                     plat.end_capture(x, y);
                     self.set_control(Control::Local);
                 }
-                Control::Controlled { .. } => {
+                Control::Controlled { peer, .. } if peer == from => {
                     plat.release_all();
                     self.set_control(Control::Local);
                 }
-                Control::Local => {}
+                _ => {}
             },
             Msg::Input(ev) => {
-                if let Control::Controlled { ret } = self.control {
-                    plat.inject(&ev);
-                    if let InputEvent::MouseMove { dx, dy } = ev {
-                        let s = plat.screen();
-                        let (x, y) = plat.cursor_pos();
-                        let (fx, fy) = (
-                            (x - s.x) as f32 / (s.width - 1).max(1) as f32,
-                            (y - s.y) as f32 / (s.height - 1).max(1) as f32,
-                        );
-                        let leaving = match ret {
-                            Edge::Left => (x <= s.x && dx < 0).then_some(fy),
-                            Edge::Right => (x >= s.x + s.width - 1 && dx > 0).then_some(fy),
-                            Edge::Top => (y <= s.y && dy < 0).then_some(fx),
-                            Edge::Bottom => (y >= s.y + s.height - 1 && dy > 0).then_some(fx),
-                        };
-                        if let Some(frac) = leaving {
-                            plat.release_all();
-                            self.set_control(Control::Local);
-                            self.send(Msg::Leave { frac });
-                        }
+                let ret = match &self.control {
+                    Control::Controlled { peer, ret } if peer == from => *ret,
+                    _ => return,
+                };
+                plat.inject(&ev);
+                if let InputEvent::MouseMove { dx, dy } = ev {
+                    let s = plat.screen();
+                    let (x, y) = plat.cursor_pos();
+                    let (fx, fy) = (
+                        (x - s.x) as f32 / (s.width - 1).max(1) as f32,
+                        (y - s.y) as f32 / (s.height - 1).max(1) as f32,
+                    );
+                    let leaving = match ret {
+                        Edge::Left => (x <= s.x && dx < 0).then_some(fy),
+                        Edge::Right => (x >= s.x + s.width - 1 && dx > 0).then_some(fy),
+                        Edge::Top => (y <= s.y && dy < 0).then_some(fx),
+                        Edge::Bottom => (y >= s.y + s.height - 1 && dy > 0).then_some(fx),
+                    };
+                    if let Some(frac) = leaving {
+                        plat.release_all();
+                        self.set_control(Control::Local);
+                        self.send_to(from, Msg::Leave { frac });
                     }
                 }
             }
             Msg::ClipText(t) => {
                 let on = self.sh.persisted.lock().unwrap().clipboard_sync;
                 if on && t.len() <= MAX_CLIP_TEXT {
-                    let c = ClipContent::Text(t);
-                    self.last_clip_sig = Some(sig(&c));
+                    let c = ClipContent::Text(t.clone());
+                    let s = sig(&c);
+                    // Seen already (it came round again): neither apply nor pass on.
+                    if self.last_clip_sig == Some(s) {
+                        return;
+                    }
+                    self.last_clip_sig = Some(s);
                     let _ = self.clip.send(ClipJob::Write(c));
+                    // A computer in the middle passes it on to the others.
+                    self.send_all_but(Some(from), &Msg::ClipText(t));
                 }
             }
             Msg::ClipImage(png) => {
                 let on = self.sh.persisted.lock().unwrap().clipboard_sync;
                 if on && !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
-                    let c = ClipContent::Image(png);
-                    self.last_clip_sig = Some(sig(&c));
+                    let c = ClipContent::Image(png.clone());
+                    let s = sig(&c);
+                    if self.last_clip_sig == Some(s) {
+                        return;
+                    }
+                    self.last_clip_sig = Some(s);
                     let _ = self.clip.send(ClipJob::Write(c));
+                    self.send_all_but(Some(from), &Msg::ClipImage(png));
                 }
             }
-            Msg::FileOffer { id, kind, items } => self.on_file_offer(id, kind, items),
+            Msg::FileOffer { id, kind, items } => self.on_file_offer(from, id, kind, items),
         }
     }
 
-    fn apply_side(&mut self, side: Edge, announce: bool) {
-        let Some(sess) = self.session.as_mut() else {
-            return;
-        };
-        sess.side = side;
-        let pid = sess.peer.id.clone();
+    fn announce_side(&self, pid: &str) {
+        if let Some(s) = self.sessions.get(pid) {
+            let _ = s.tx.send(Msg::Layout { peer_side: s.side });
+        }
+    }
+
+    fn set_side_raw(&mut self, pid: &str, side: Edge) {
         {
             let mut per = self.sh.persisted.lock().unwrap();
             if let Some(p) = per.peers.iter_mut().find(|p| p.id == pid) {
                 p.side = side;
             }
         }
+        if let Some(s) = self.sessions.get_mut(pid) {
+            s.side = side;
+        }
         self.sh.save();
-        if self.control == Control::Local {
-            self.sh.platform.set_active_edge(Some(side));
+        self.refresh_connected();
+    }
+
+    /// Puts computer `pid` on `side` of my screen. `from_peer`: the other computer chose
+    /// this layout, so if the side is taken it is the newcomer that moves; when the user
+    /// chose it, the two computers swap sides.
+    fn apply_side(&mut self, pid: &str, side: Edge, from_peer: bool) {
+        let old = {
+            let per = self.sh.persisted.lock().unwrap();
+            match per.peers.iter().find(|p| p.id == pid) {
+                Some(p) => p.side,
+                None => return,
+            }
+        };
+        let holder = self
+            .sh
+            .persisted
+            .lock()
+            .unwrap()
+            .peers
+            .iter()
+            .find(|p| p.id != pid && p.side == side)
+            .map(|p| p.id.clone());
+        let mut side = side;
+        let mut tell_peer = !from_peer;
+        if let Some(h) = holder {
+            let free = if from_peer {
+                self.first_free_side(pid)
+            } else {
+                None
+            };
+            match free {
+                Some(f) => {
+                    side = f;
+                    tell_peer = true;
+                }
+                None => {
+                    self.set_side_raw(&h, old);
+                    self.announce_side(&h);
+                }
+            }
         }
-        if announce {
-            self.send(Msg::Layout { peer_side: side });
+        self.set_side_raw(pid, side);
+        if tell_peer {
+            self.announce_side(pid);
         }
-        self.sh.publish();
     }
 
     fn on_cmd(&mut self, c: Cmd) {
         match c {
             Cmd::Connect { addr, port, code } => {
-                self.no_auto_until = None;
-                if self.session.is_none() {
+                if self.sessions.len() >= MAX_PEERS {
+                    self.sh.set_error(Some(
+                        "Four computers are already connected — disconnect one first".into(),
+                    ));
+                } else {
                     self.sh.set_error(None);
                     self.start_dial(SocketAddr::new(addr, port), ClientAuth::Pair { code });
                 }
             }
             Cmd::ConnectKnown { peer_id } => {
-                self.no_auto_until = None;
+                self.no_auto.remove(&peer_id);
                 let per = self.sh.persisted.lock().unwrap().clone();
                 let Some(p) = per.peers.iter().find(|p| p.id == peer_id) else {
                     return;
@@ -1303,38 +1569,39 @@ impl Actor {
                         .and_then(|a| a.parse::<SocketAddr>().ok())
                         .map(|a| (a.ip(), a.port()))
                 });
-                if let (Some((ip, port)), Some(key), true) =
-                    (target, unhex32(&p.link_key), self.session.is_none())
-                {
-                    self.sh.set_error(None);
-                    self.start_dial(
-                        SocketAddr::new(ip, port),
-                        ClientAuth::Known { link_key: key },
-                    );
-                }
-            }
-            Cmd::Disconnect => {
-                self.no_auto_until = Some(Instant::now() + Duration::from_secs(30));
-                self.send(Msg::Bye);
-                self.drop_session("");
-            }
-            Cmd::SetSide { peer_id, side } => {
-                if self.session.as_ref().map(|s| s.peer.id == peer_id) == Some(true) {
-                    self.apply_side(side, true);
-                } else {
-                    let mut per = self.sh.persisted.lock().unwrap();
-                    if let Some(p) = per.peers.iter_mut().find(|p| p.id == peer_id) {
-                        p.side = side;
+                if let (Some((ip, port)), Some(key)) = (target, unhex32(&p.link_key)) {
+                    if !self.sessions.contains_key(&peer_id) && self.sessions.len() < MAX_PEERS {
+                        self.sh.set_error(None);
+                        self.start_dial(
+                            SocketAddr::new(ip, port),
+                            ClientAuth::Known { link_key: key },
+                        );
                     }
-                    drop(per);
-                    self.sh.save();
-                    self.sh.publish();
                 }
             }
+            Cmd::Disconnect(which) => {
+                let ids: Vec<String> = match which {
+                    Some(id) => vec![id],
+                    None => self.sessions.keys().cloned().collect(),
+                };
+                for id in ids {
+                    if !self.sessions.contains_key(&id) {
+                        continue;
+                    }
+                    self.no_auto
+                        .insert(id.clone(), Instant::now() + Duration::from_secs(30));
+                    self.send_to(&id, Msg::Bye);
+                    self.drop_session(&id, "");
+                }
+            }
+            Cmd::SetSide { peer_id, side } => self.apply_side(&peer_id, side, false),
             Cmd::Forget(id) => {
-                if self.session.as_ref().map(|s| s.peer.id == id) == Some(true) {
-                    self.send(Msg::Bye);
-                    self.drop_session("");
+                if self.sessions.contains_key(&id) {
+                    self.send_to(&id, Msg::Bye);
+                    self.drop_session(&id, "");
+                }
+                if self.last_peer.as_deref() == Some(id.as_str()) {
+                    self.last_peer = None;
                 }
                 self.sh
                     .persisted
@@ -1378,23 +1645,45 @@ impl Actor {
                 drop(p);
                 self.sh.publish();
             }
-            Cmd::Engage => self.engage(),
-            Cmd::SendFiles(paths) => {
-                if self.session.is_some() {
-                    self.build_offer(paths, OfferKind::Send);
-                } else {
+            Cmd::Engage(target) => self.engage(target),
+            Cmd::SendFiles { paths, target } => {
+                let targets = self.file_targets(target);
+                if targets.is_empty() {
                     self.sh
                         .set_error(Some("Connect to a computer first".into()));
                 }
+                for t in targets {
+                    self.build_offer(paths.clone(), OfferKind::Send, t);
+                }
             }
         }
+    }
+
+    /// Who a "send files" goes to: the named computer; otherwise the one the mouse is on
+    /// (or that is driving us); otherwise every connected computer.
+    fn file_targets(&self, target: Option<String>) -> Vec<String> {
+        if let Some(t) = target {
+            return if self.sessions.contains_key(&t) {
+                vec![t]
+            } else {
+                vec![]
+            };
+        }
+        if let Control::Remote { peer, .. } | Control::Controlled { peer, .. } = &self.control {
+            if self.sessions.contains_key(peer) {
+                return vec![peer.clone()];
+            }
+        }
+        let mut all: Vec<String> = self.sessions.keys().cloned().collect();
+        all.sort();
+        all
     }
 
     // ---- clipboard & files
 
     fn on_clipboard_changed(&mut self) {
         let on = self.sh.persisted.lock().unwrap().clipboard_sync;
-        if !on || self.session.is_none() {
+        if !on || self.sessions.is_empty() {
             return;
         }
         let _ = self.clip.send(ClipJob::Read);
@@ -1403,7 +1692,7 @@ impl Actor {
     /// The clipboard worker finished reading: send it on unless it is our own echo.
     fn on_clip_read(&mut self, c: ClipContent) {
         let on = self.sh.persisted.lock().unwrap().clipboard_sync;
-        if !on || self.session.is_none() {
+        if !on || self.sessions.is_empty() {
             return;
         }
         let s = sig(&c);
@@ -1414,40 +1703,57 @@ impl Actor {
         match c {
             ClipContent::Text(t) => {
                 if !t.is_empty() && t.len() <= MAX_CLIP_TEXT {
-                    self.send(Msg::ClipText(t));
+                    self.send_all_but(None, &Msg::ClipText(t));
                 }
             }
-            ClipContent::Files(paths) => self.build_offer(paths, OfferKind::Clipboard),
+            ClipContent::Files(paths) => {
+                let mut ids: Vec<String> = self.sessions.keys().cloned().collect();
+                ids.sort();
+                for id in ids {
+                    self.build_offer(paths.clone(), OfferKind::Clipboard, id);
+                }
+            }
             ClipContent::Image(png) => {
                 if !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
-                    self.send(Msg::ClipImage(png));
+                    self.send_all_but(None, &Msg::ClipImage(png));
                 }
             }
         }
     }
 
-    fn build_offer(&mut self, paths: Vec<PathBuf>, kind: OfferKind) {
+    fn build_offer(&mut self, paths: Vec<PathBuf>, kind: OfferKind, target: String) {
         let id: u64 = rand::thread_rng().gen();
         let ev_tx = self.ev_tx.clone();
         tokio::task::spawn_blocking(move || {
             let res = files::build_manifest(&paths);
-            let _ = ev_tx.send(Ev::OfferBuilt { id, kind, res });
+            let _ = ev_tx.send(Ev::OfferBuilt {
+                id,
+                kind,
+                target,
+                res,
+            });
         });
     }
 
-    fn on_offer_built(&mut self, id: u64, kind: OfferKind, res: std::io::Result<Offer>) {
+    fn on_offer_built(
+        &mut self,
+        id: u64,
+        kind: OfferKind,
+        target: String,
+        res: std::io::Result<Offer>,
+    ) {
         let offer = match res {
             Ok(o) if !o.items.is_empty() => Arc::new(o),
             Ok(_) => return,
             Err(e) => return self.sh.set_error(Some(format!("Cannot send files: {e}"))),
         };
-        if self.session.is_none() {
+        let Some(peer_name) = self.sessions.get(&target).map(|s| s.peer.name.clone()) else {
             return;
-        }
+        };
         {
             let mut q = self.sh.offers.lock().unwrap();
             q.push_back((id, offer.clone()));
-            while q.len() > 8 {
+            while q.len() > 16 {
                 q.pop_front();
             }
         }
@@ -1471,16 +1777,24 @@ impl Actor {
             state: "active".into(),
             message: String::new(),
             path: None,
+            peer: peer_name,
         });
-        self.send(Msg::FileOffer {
-            id,
-            kind,
-            items: offer.items.clone(),
-        });
+        self.send_to(
+            &target,
+            Msg::FileOffer {
+                id,
+                kind,
+                items: offer.items.clone(),
+            },
+        );
     }
 
-    fn on_file_offer(&mut self, id: u64, kind: OfferKind, items: Vec<FileItem>) {
-        let Some(sess) = &self.session else { return };
+    fn on_file_offer(&mut self, from: &str, id: u64, kind: OfferKind, items: Vec<FileItem>) {
+        let Some(sess) = self.sessions.get(from) else {
+            return;
+        };
+        let (peer_name, peer_id) = (sess.peer.name.clone(), sess.peer.id.clone());
+        let addr = SocketAddr::new(sess.addr, sess.peer.listen_port);
         let per = self.sh.persisted.lock().unwrap().clone();
         let total = files::total_size(&items);
         let tops = items.iter().filter(|i| !i.path.contains('/')).count();
@@ -1502,6 +1816,7 @@ impl Actor {
             state: state.into(),
             message: message.into(),
             path: None,
+            peer: peer_name.clone(),
         };
         if items.is_empty()
             || items.len() > files::MAX_ITEMS
@@ -1526,7 +1841,7 @@ impl Actor {
         let Some(key) = unhex32(
             &per.peers
                 .iter()
-                .find(|p| p.id == sess.peer.id)
+                .find(|p| p.id == peer_id)
                 .map(|p| p.link_key.clone())
                 .unwrap_or_default(),
         ) else {
@@ -1537,7 +1852,6 @@ impl Actor {
             OfferKind::Send => self.sh.cfg.download_dir.clone(),
         };
         self.sh.upsert_transfer(view("active", ""));
-        let addr = SocketAddr::new(sess.addr, sess.peer.listen_port);
         let (sh, ev_tx) = (self.sh.clone(), self.ev_tx.clone());
         tokio::spawn(async move {
             let res = fetch_files(&sh, addr, key, id, &items, &dest).await;

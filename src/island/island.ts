@@ -397,6 +397,12 @@ export class Island {
       case "enter":
       case "over": {
         this.cancelDropClose();
+        // With several computers, the one under the pointer lights up.
+        const t = e.target ?? null;
+        if (t !== State.dropTarget) {
+          State.dropTarget = t;
+          State.notify();
+        }
         if (State.fileDragOver) return;
         State.fileDragOver = true;
         this.engine.animateMorph(1); // Mochi turns into a box
@@ -404,6 +410,7 @@ export class Island {
         break;
       }
       case "leave": {
+        State.dropTarget = null;
         if (!State.fileDragOver) return;
         State.fileDragOver = false;
         this.engine.animateMorph(0);
@@ -417,6 +424,7 @@ export class Island {
         this.lastDropAt = performance.now();
         this.cancelDropClose();
         State.fileDragOver = false;
+        State.dropTarget = null;
         const dropped = e.drop;
         if (!dropped?.count) {
           this.engine.animateMorph(0);
@@ -429,18 +437,25 @@ export class Island {
           this.showNote("Connect to a computer first — then drop again.");
           return;
         }
-        this.swallow(dropped);
+        if (State.connectedPeers.length > 1 && !e.target) {
+          // Several computers and none picked: don't guess.
+          this.engine.animateMorph(0);
+          Sound.play("error");
+          this.showNote("Drop it on a computer's name.", 2600, "home");
+          return;
+        }
+        this.swallow(dropped, e.target);
         break;
       }
     }
   }
 
   /** Mochi eats the file(s); the transfer itself runs in Rust. */
-  private swallow(dropped: Dropped) {
+  private swallow(dropped: Dropped, target?: string) {
     State.staging++;
     this.pillSuppressed = false;
     dropped
-      .send()
+      .send(target)
       .catch(() => {
         Sound.play("error");
         this.showNote("Couldn't read that file.");
@@ -788,11 +803,11 @@ export class Island {
     }
     switch (s.control) {
       case "remote":
-        return `→ ${s.connected?.name}`;
+        return `→ ${State.controlName}`;
       case "controlled":
-        return `← ${s.connected?.name}`;
+        return `← ${State.controlName}`;
       case "local":
-        return s.connected?.name ?? "";
+        return State.connectedPeers.length > 1 ? `${State.connectedPeers.length} computers` : s.connected?.name ?? "";
       default:
         return homeText(s).title;
     }

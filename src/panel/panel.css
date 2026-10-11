@@ -104,6 +104,12 @@ details[open] summary { margin-bottom: 8px; }
 .cell { border-radius: 13px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 12px; padding: 4px 8px; overflow: hidden; }
 .cell.me { background: rgba(45, 212, 191, 0.09); border: 1px solid rgba(45, 212, 191, 0.45); color: var(--teal); font-weight: 650; grid-area: 2 / 2; box-shadow: 0 0 28px -10px rgba(45, 212, 191, 0.6); }
 .cell.other { background: rgba(251, 191, 36, 0.09); border: 1px solid rgba(251, 191, 36, 0.45); color: var(--amber); font-weight: 650; box-shadow: 0 0 28px -10px rgba(251, 191, 36, 0.5); }
+.cell { position: relative; }
+.cell.other { cursor: pointer; font: inherit; font-size: 12px; font-weight: 650; }
+.cell.other.held { background: rgba(251, 191, 36, 0.22); border-color: var(--amber); }
+.cell.other.away { opacity: 0.55; }
+.cell .on-dot { position: absolute; top: 7px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+.cell.slot:disabled { cursor: default; opacity: 0.5; }
 .cell.slot { border: 1px dashed var(--line-2); background: none; color: var(--dim-2); border-radius: 13px; padding: 4px 8px; }
 .cell.slot:hover:not(:disabled) { border-color: var(--dim); color: var(--ink); background: var(--surface-2); }
 .at-left { grid-area: 2 / 1; } .at-right { grid-area: 2 / 3; } .at-top { grid-area: 1 / 2; } .at-bottom { grid-area: 3 / 2; }

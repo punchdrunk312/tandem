@@ -34,6 +34,8 @@ class IslandState {
   mouseInIsland = { x: 0, y: 0 };
 
   fileDragOver = false;
+  /** Which computer's drop target the dragged files are over (several computers only). */
+  dropTarget: string | null = null;
   /** Dropped files being copied to the staging folder before the transfer starts. */
   staging = 0;
   isPinned = false;
@@ -73,6 +75,17 @@ class IslandState {
 
   get connected() {
     return this.snap?.connected ?? null;
+  }
+
+  /** Every connected computer. */
+  get connectedPeers() {
+    return (this.snap?.paired ?? []).filter((p) => p.connected);
+  }
+
+  /** Name of the computer in control (or being controlled), falling back to any connected one. */
+  get controlName(): string {
+    const s = this.snap;
+    return s?.paired.find((p) => p.id === s.control_peer)?.name ?? s?.connected?.name ?? "";
   }
 
   get activeTransfers() {

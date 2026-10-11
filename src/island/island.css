@@ -180,6 +180,9 @@ html.dev body { background: #2b2f38; }
 }
 .side-btn:hover { background: rgba(255, 255, 255, 0.16); color: var(--ink); }
 .side-btn.on { background: var(--teal); color: #04201c; }
+.side-btn.ro { display: grid; place-items: center; cursor: default; font-weight: 650; }
+.side-btn.ro:hover { background: rgba(255, 255, 255, 0.07); color: var(--dim); }
+.side-btn.ro.on:hover { background: var(--teal); color: #04201c; }
 .side-me { grid-area: 2 / 2; display: grid; place-items: center; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim-2); }
 .at-top { grid-area: 1 / 2; } .at-left { grid-area: 2 / 1; } .at-right { grid-area: 2 / 3; } .at-bottom { grid-area: 3 / 2; }
 
@@ -201,6 +204,19 @@ html.dev body { background: #2b2f38; }
 .d-title { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
 .d-sub { font-size: 12.5px; color: var(--dim); margin-top: 4px; }
 .drop.bad .d-title { color: var(--red-text); }
+
+.d-targets { position: absolute; left: 190px; right: 30px; top: 70px; display: flex; gap: 8px; flex-wrap: nowrap; }
+.d-pill {
+  flex: 1 1 0; min-width: 0; height: 32px;
+  display: grid; place-items: center;
+  padding: 0 10px; border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12.5px; font-weight: 600; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.d-pill.over { background: var(--teal); border: 1px solid var(--teal); color: #04201c; }
 
 /* note */
 .n-msg { position: absolute; left: 100px; right: 30px; top: 16px; font-size: 16px; font-weight: 600; line-height: 1.35; }
