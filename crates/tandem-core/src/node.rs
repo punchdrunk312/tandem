@@ -133,8 +133,18 @@ pub struct TransferView {
     pub peer: String,
 }
 
+/// Files being carried across the edge, for the little picture under the cursor.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct CarryView {
+    pub name: String,
+    pub count: usize,
+    pub folder: bool,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Default)]
 pub struct Snapshot {
+    /// Set on the computer the files are being carried *to*, until they are let go.
+    pub carry: Option<CarryView>,
     pub device_id: String,
     pub device_name: String,
     /// Shown as `123-456`; the other computer types it to pair.
@@ -174,6 +184,7 @@ struct Status {
     connected: Vec<PeerBrief>,
     error: Option<String>,
     notice: Option<(String, Instant)>,
+    carry: Option<CarryView>,
 }
 
 struct Shared {
@@ -302,6 +313,7 @@ impl Shared {
             drag_files: per.drag_files,
             error: st.error.clone(),
             notice: st.notice.as_ref().map(|(m, _)| m.clone()),
+            carry: st.carry.clone(),
         }
     }
 
@@ -941,6 +953,7 @@ struct Actor {
 struct Carry {
     id: u64,
     peer: String,
+    view: CarryView,
     /// Set once everything has arrived (in a staging folder).
     staged: Option<Vec<PathBuf>>,
 }
@@ -1256,6 +1269,11 @@ impl Actor {
             Ev::CarryFetched { id, paths } => self.on_carry_fetched(id, paths),
             Ev::CarryDropped { id, dir, res } => match res {
                 Ok(()) => {
+                    let name = dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.notify(&format!("Dropped into {name}"));
                     self.sh
                         .transfer_finish(id, "in", Ok(Some(dir.to_string_lossy().into_owned())))
                 }
@@ -1423,7 +1441,12 @@ impl Actor {
                         edge,
                     });
                     self.send_to(&pid, Msg::Enter { edge, frac });
+                    let n = paths.len();
                     self.build_offer(paths, OfferKind::Carry, pid);
+                    self.notify(&format!(
+                        "Carrying {n} item{} — let go on the other screen to drop",
+                        if n == 1 { "" } else { "s" }
+                    ));
                 } else {
                     let (x, y) = self.center();
                     self.sh.platform.end_capture(x, y);
@@ -1534,6 +1557,7 @@ impl Actor {
             Msg::Enter { edge, frac } => {
                 if self.control == Control::Local {
                     self.carry = None;
+                    self.sync_carry();
                     self.early_release = None;
                     let (x, y) = edge_point(plat.screen(), edge.opposite(), frac);
                     plat.set_cursor(x, y);
@@ -2021,8 +2045,17 @@ impl Actor {
             self.carry = Some(Carry {
                 id,
                 peer: from.to_string(),
+                view: CarryView {
+                    name: name.clone(),
+                    count: tops,
+                    folder: items
+                        .first()
+                        .is_some_and(|i| i.is_dir && !i.path.contains('/')),
+                },
                 staged: None,
             });
+            self.sync_carry();
+            self.notify("Files incoming — let go of the mouse where you want them");
         }
         let Some(key) = unhex32(
             &per.peers
@@ -2044,6 +2077,7 @@ impl Actor {
             if let Some(dir) = self.early_release.take() {
                 self.drops.insert(id, dir);
                 self.carry = None;
+                self.sync_carry();
             }
         }
         let (sh, ev_tx) = (self.sh.clone(), self.ev_tx.clone());
@@ -2081,7 +2115,9 @@ impl Actor {
                 .drop_dir_at(x, y)
                 .unwrap_or_else(|| self.sh.cfg.download_dir.clone())
         };
-        match self.carry.take() {
+        let taken = self.carry.take();
+        self.sync_carry();
+        match taken {
             Some(c) if c.peer == from => {
                 let dir = dir();
                 match c.staged {
@@ -2093,6 +2129,7 @@ impl Actor {
             }
             other => {
                 self.carry = other;
+                self.sync_carry();
                 // Perhaps the offer is still on its way.
                 if self.carry.is_none() {
                     self.early_release = Some(dir());
@@ -2123,9 +2160,17 @@ impl Actor {
         }
     }
 
+    /// Tells the UI whether files are being carried to this computer right now.
+    fn sync_carry(&self) {
+        self.sh.status.lock().unwrap().carry = self.carry.as_ref().map(|c| c.view.clone());
+        self.sh.publish();
+    }
+
     /// The mouse left (or the link dropped) before the files were let go: forget them.
     fn cancel_carry(&mut self) {
-        if let Some(c) = self.carry.take() {
+        let taken = self.carry.take();
+        self.sync_carry();
+        if let Some(c) = taken {
             if let Some(paths) = &c.staged {
                 discard_staged(paths);
             }

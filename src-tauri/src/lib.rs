@@ -15,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 mod elevate;
+mod ghost;
 mod island;
 mod shellmenu;
 #[cfg(windows)]
@@ -222,6 +223,11 @@ async fn pick_and_send(app: AppHandle, peer_id: Option<String>) -> R {
 #[tauri::command]
 fn set_clipboard_sync(st: State<'_, AppState>, on: bool) {
     st.node.set_clipboard_sync(on);
+}
+
+#[tauri::command]
+fn ghost_show(app: AppHandle, on: bool) {
+    ghost::set(&app, on);
 }
 
 #[tauri::command]
@@ -809,6 +815,7 @@ pub fn run() {
                 .store(ui.monitor_cursor, std::sync::atomic::Ordering::Relaxed);
 
             create_main_window(app)?;
+            ghost::spawn(app.handle().clone());
 
             // Island: borderless, transparent, never takes focus.
             if let Some(win) = island::window(app.handle()) {
@@ -937,6 +944,7 @@ pub fn run() {
             log_js,
             set_game_mode,
             set_drag_files,
+            ghost_show,
             set_switch_delay,
             ui_get,
             ui_set,

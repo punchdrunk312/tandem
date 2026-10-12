@@ -58,6 +58,18 @@ pub struct PollGate {
     pub reveal_until_ms: AtomicU64,
 }
 
+/// Top-left of the display a hotkey opened the bar on; kept until the bar goes away, so
+/// later resizes don't send it back to the main display.
+static PIN: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+fn pin_get() -> Option<(i32, i32)> {
+    *PIN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn pin_set(v: Option<(i32, i32)>) {
+    *PIN.lock().unwrap_or_else(|e| e.into_inner()) = v;
+}
+
 impl Default for PollGate {
     fn default() -> Self {
         Self::new()
@@ -79,7 +91,9 @@ impl PollGate {
     }
 
     pub fn pref(&self) -> &'static str {
-        if self.monitor_cursor.load(Ordering::Relaxed) {
+        if pin_get().is_some() {
+            "pinned"
+        } else if self.monitor_cursor.load(Ordering::Relaxed) {
             "cursor"
         } else {
             "primary"
@@ -211,6 +225,7 @@ mod sys {
 }
 
 pub use sys::make_non_activating;
+pub use sys::{cursor_physical, show_no_activate};
 
 // ------------------------------------------------------------------ geometry
 
@@ -226,6 +241,16 @@ fn monitor_contains(m: &Monitor, x: f64, y: f64) -> bool {
 /// The display the island lives on: the primary one, or the one under the cursor.
 fn target_monitor(app: &AppHandle, pref: &str) -> Option<Monitor> {
     let monitors = app.available_monitors().ok()?;
+    if pref == "pinned" {
+        if let Some((px, py)) = pin_get() {
+            if let Some(m) = monitors
+                .iter()
+                .find(|m| m.position().x == px && m.position().y == py)
+            {
+                return Some(m.clone());
+            }
+        }
+    }
     if pref == "cursor" {
         if let Some((cx, cy)) = sys::cursor_physical() {
             if let Some(m) = monitors.iter().find(|m| monitor_contains(m, cx, cy)) {
@@ -309,7 +334,9 @@ pub fn hotkey(app: &AppHandle, gate: &PollGate, what: &'static str) {
         .store(now_ms() + REVEAL_MS, Ordering::Relaxed);
     if let Some(win) = window(app) {
         // Always the display the user is on, whatever the "follow cursor" setting says.
-        apply_geometry(app, "cursor", gate.collapsed.load(Ordering::Relaxed));
+        let here = target_monitor(app, "cursor").map(|m| (m.position().x, m.position().y));
+        pin_set(here);
+        apply_geometry(app, "pinned", gate.collapsed.load(Ordering::Relaxed));
         gate.forget_ignore_state();
         sys::make_non_activating(&win);
         sys::show_no_activate(&win);
@@ -321,6 +348,7 @@ pub fn hotkey(app: &AppHandle, gate: &PollGate, what: &'static str) {
 
 /// The page closed the bar again: a full-screen app gets its screen back at once.
 pub fn end_reveal(gate: &PollGate) {
+    pin_set(None);
     gate.reveal_until_ms.store(0, Ordering::Relaxed);
 }
 

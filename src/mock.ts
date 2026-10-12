@@ -19,6 +19,7 @@ const base: Snapshot = {
   clipboard_sync: true,
   game_mode: true,
   drag_files: true,
+  carry: null,
   switch_delay_ms: 0,
   error: null,
   notice: null,

@@ -194,9 +194,9 @@ export class Island {
         this.engine.triggerEmote("happy");
       } else if (prev.connected && !s.connected) {
         this.ping("blip");
-      } else if (prev.control !== s.control) {
-        this.ping(s.control === "remote" ? "open" : "blip");
       }
+      // Switching computers is silent: the line at the top already changes colour, and a
+      // sound on every crossing is just noise.
       for (const t of s.transfers) {
         const before = prev.transfers.find((p) => p.id === t.id && p.direction === t.direction);
         if (!before) {
@@ -226,8 +226,13 @@ export class Island {
   }
 
   /** A sound for something that happened in the background — never inside a full-screen app. */
+  private lastPing = 0;
   private ping(name: Parameters<typeof Sound.play>[0]) {
-    if (!this.quiet) Sound.play(name);
+    if (this.quiet) return;
+    const now = performance.now();
+    if (name !== "error" && now - this.lastPing < 1500) return; // never a burst of sounds
+    this.lastPing = now;
+    Sound.play(name);
   }
 
   private flashState(st: "finished" | "error", ms: number) {
