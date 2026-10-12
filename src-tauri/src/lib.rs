@@ -173,13 +173,7 @@ fn disconnect(st: State<'_, AppState>, peer_id: Option<String>) {
 
 #[tauri::command]
 fn set_side(st: State<'_, AppState>, peer_id: String, side: String) -> R {
-    let side = match side.as_str() {
-        "left" => Edge::Left,
-        "right" => Edge::Right,
-        "top" => Edge::Top,
-        "bottom" => Edge::Bottom,
-        _ => return Err("bad side".into()),
-    };
+    let side = Edge::parse(&side).ok_or("bad side")?;
     st.node.set_side(peer_id, side);
     Ok(())
 }
@@ -228,6 +222,11 @@ async fn pick_and_send(app: AppHandle, peer_id: Option<String>) -> R {
 #[tauri::command]
 fn set_clipboard_sync(st: State<'_, AppState>, on: bool) {
     st.node.set_clipboard_sync(on);
+}
+
+#[tauri::command]
+fn set_drag_files(st: State<'_, AppState>, on: bool) {
+    st.node.set_drag_files(on);
 }
 
 #[tauri::command]
@@ -670,7 +669,7 @@ fn queue_sends(app: &AppHandle, paths: Vec<PathBuf>, patience: Duration) {
             let _ = app.emit_to(
                 island::WINDOW_LABEL,
                 "note",
-                "Not connected — open Tandem on both computers first.",
+                "Not connected — open CubeCursor on both computers first.",
             );
             island::hotkey(&app, &sh.gate, "bar");
         }
@@ -692,7 +691,7 @@ const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreen
 /// The pairing / settings window: created hidden, hides instead of closing.
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let b = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("settings.html".into()))
-        .title("Tandem")
+        .title("CubeCursor")
         .theme(Some(Theme::Dark))
         .inner_size(900.0, 660.0)
         .min_inner_size(640.0, 520.0)
@@ -748,7 +747,7 @@ pub fn run() {
                 .path()
                 .download_dir()
                 .unwrap_or_else(|_| cfg_dir.clone())
-                .join("Tandem");
+                .join("CubeCursor");
             let cfg = NodeConfig {
                 tcp_port: DEFAULT_TCP_PORT,
                 udp_port: DISCOVERY_PORT,
@@ -870,7 +869,7 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&bar, &pill, &open, &quit])?;
             let mut tray = TrayIconBuilder::new()
-                .tooltip("Tandem")
+                .tooltip("CubeCursor")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
@@ -937,6 +936,7 @@ pub fn run() {
             stage_finish,
             log_js,
             set_game_mode,
+            set_drag_files,
             set_switch_delay,
             ui_get,
             ui_set,
@@ -953,7 +953,7 @@ pub fn run() {
             quit_app,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building Tandem")
+        .expect("error while building CubeCursor")
         .run(|_app, event| {
             // Never leave the pointer hidden behind us.
             if let tauri::RunEvent::Exit = event {

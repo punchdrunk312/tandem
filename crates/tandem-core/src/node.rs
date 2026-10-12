@@ -66,6 +66,9 @@ pub struct Persisted {
     /// Milliseconds the cursor must keep pushing at the edge before it crosses.
     #[serde(default)]
     pub switch_delay_ms: u32,
+    /// Dragging a file to a screen edge carries it over to the next computer.
+    #[serde(default = "yes")]
+    pub drag_files: bool,
 }
 
 fn yes() -> bool {
@@ -150,6 +153,7 @@ pub struct Snapshot {
     pub clipboard_sync: bool,
     pub game_mode: bool,
     pub switch_delay_ms: u32,
+    pub drag_files: bool,
     pub error: Option<String>,
     /// A short, self-clearing message for the user ("control came back because…").
     pub notice: Option<String>,
@@ -295,6 +299,7 @@ impl Shared {
             clipboard_sync: per.clipboard_sync,
             game_mode: per.game_mode,
             switch_delay_ms: per.switch_delay_ms,
+            drag_files: per.drag_files,
             error: st.error.clone(),
             notice: st.notice.as_ref().map(|(m, _)| m.clone()),
         }
@@ -362,6 +367,14 @@ impl Shared {
         }
     }
 
+    fn remove_transfer(&self, id: u64, dir: &str) {
+        self.transfers
+            .lock()
+            .unwrap()
+            .retain(|x| !(x.id == id && x.direction == dir));
+        self.publish();
+    }
+
     fn transfer_finish(
         &self,
         id: u64,
@@ -418,6 +431,7 @@ enum Cmd {
     SetClipboardSync(bool),
     SetGameMode(bool),
     SetSwitchDelay(u32),
+    SetDragFiles(bool),
     SetName(String),
     NewCode,
     Engage(Option<String>),
@@ -440,6 +454,7 @@ impl Node {
                 auto_file_limit_mb: 512,
                 game_mode: true,
                 switch_delay_ms: 0,
+                drag_files: true,
             }
         });
         store.save(&persisted);
@@ -501,6 +516,7 @@ impl Node {
             let p = sh.persisted.lock().unwrap();
             platform.set_game_mode(p.game_mode);
             platform.set_switch_delay(p.switch_delay_ms);
+            platform.set_drag_files(p.drag_files);
         }
         platform.set_capture_sink(cap_tx);
         {
@@ -568,6 +584,9 @@ impl Node {
             no_auto: HashMap::new(),
             last_peer: None,
             last_clip_sig: None,
+            carry: None,
+            drops: HashMap::new(),
+            early_release: None,
             clip: clipboard_worker(sh.platform.clone(), ev_tx.clone()),
         };
         tokio::spawn(actor.run(ev_rx));
@@ -628,6 +647,9 @@ impl Node {
     pub fn set_game_mode(&self, on: bool) {
         self.cmd(Cmd::SetGameMode(on))
     }
+    pub fn set_drag_files(&self, on: bool) {
+        self.cmd(Cmd::SetDragFiles(on))
+    }
     pub fn set_switch_delay(&self, ms: u32) {
         self.cmd(Cmd::SetSwitchDelay(ms))
     }
@@ -669,6 +691,17 @@ enum Ev {
         res: std::io::Result<Offer>,
     },
     ClipFiles(Vec<PathBuf>),
+    /// Carried files finished arriving (into a staging folder).
+    CarryFetched {
+        id: u64,
+        paths: Vec<PathBuf>,
+    },
+    /// Carried files were moved to where the user let go of them.
+    CarryDropped {
+        id: u64,
+        dir: PathBuf,
+        res: std::result::Result<(), String>,
+    },
     /// The clipboard worker read what is on the clipboard now.
     ClipRead(ClipContent),
     DialFailed {
@@ -843,10 +876,19 @@ enum Control {
     },
 }
 
-/// How many computers can be connected at once: one per side of the screen.
-const MAX_PEERS: usize = 4;
+/// How many computers can be connected at once: one per side and one per corner.
+const MAX_PEERS: usize = 8;
 /// Sides handed out to new computers, in this order.
-const SIDE_ORDER: [Edge; 4] = [Edge::Right, Edge::Left, Edge::Top, Edge::Bottom];
+const SIDE_ORDER: [Edge; 8] = [
+    Edge::Right,
+    Edge::Left,
+    Edge::Top,
+    Edge::Bottom,
+    Edge::TopRight,
+    Edge::TopLeft,
+    Edge::BottomRight,
+    Edge::BottomLeft,
+];
 /// An existing connection that has been silent this long is considered dead, and a fresh
 /// connection from the same computer replaces it.
 const STALE_AFTER: Duration = Duration::from_secs(2);
@@ -882,10 +924,25 @@ struct Actor {
     /// The computer the cursor last went to: what Scroll Lock jumps to.
     last_peer: Option<String>,
     last_clip_sig: Option<u64>,
+    /// Files being carried to us while the other computer's mouse holds them.
+    carry: Option<Carry>,
+    /// Carries that were let go before they finished arriving: id -> folder to drop in.
+    drops: HashMap<u64, PathBuf>,
+    /// The button went up before the offer for the files reached us (folder under the
+    /// cursor at that moment); applies to the offer that follows in the same crossing.
+    early_release: Option<PathBuf>,
     /// Clipboard reads / writes run on their own thread: the clipboard can be held by
     /// another app for a moment and a big image takes a while to copy, and the actor
     /// that forwards mouse movement must never wait for either.
     clip: std::sync::mpsc::Sender<ClipJob>,
+}
+
+/// Files a computer is carrying over with its mouse, waiting for the button to be let go.
+struct Carry {
+    id: u64,
+    peer: String,
+    /// Set once everything has arrived (in a staging folder).
+    staged: Option<Vec<PathBuf>>,
 }
 
 enum ClipJob {
@@ -961,6 +1018,10 @@ pub fn edge_point(s: Screen, edge: Edge, frac: f32) -> (i32, i32) {
         Edge::Right => (s.x + s.width - 3, y),
         Edge::Top => (x, s.y + 2),
         Edge::Bottom => (x, s.y + s.height - 3),
+        Edge::TopLeft => (s.x + 2, s.y + 2),
+        Edge::TopRight => (s.x + s.width - 3, s.y + 2),
+        Edge::BottomLeft => (s.x + 2, s.y + s.height - 3),
+        Edge::BottomRight => (s.x + s.width - 3, s.y + s.height - 3),
     }
 }
 
@@ -977,6 +1038,10 @@ impl Actor {
     }
 
     fn set_control(&mut self, c: Control) {
+        if !matches!(c, Control::Controlled { .. }) {
+            self.cancel_carry();
+            self.early_release = None;
+        }
         let peer = match &c {
             Control::Local => None,
             Control::Remote { peer, .. } | Control::Controlled { peer, .. } => Some(peer.clone()),
@@ -1188,6 +1253,14 @@ impl Actor {
                 target,
                 res,
             } => self.on_offer_built(id, kind, target, res),
+            Ev::CarryFetched { id, paths } => self.on_carry_fetched(id, paths),
+            Ev::CarryDropped { id, dir, res } => match res {
+                Ok(()) => {
+                    self.sh
+                        .transfer_finish(id, "in", Ok(Some(dir.to_string_lossy().into_owned())))
+                }
+                Err(e) => self.sh.transfer_finish(id, "in", Err(e)),
+            },
             Ev::ClipFiles(paths) => {
                 let c = ClipContent::Files(paths);
                 self.last_clip_sig = Some(sig(&c));
@@ -1273,7 +1346,7 @@ impl Actor {
                 return;
             }
         };
-        // Two connected computers never share a side (with more than four paired, the
+        // Two connected computers never share a side (with more than eight paired, the
         // stored sides can clash).
         if self.sessions.values().any(|s| s.side == side) {
             if let Some(free) = SIDE_ORDER
@@ -1328,6 +1401,30 @@ impl Actor {
                     self.send_to(&pid, Msg::Enter { edge, frac });
                 } else {
                     // Raced with a disconnect or a layout change: give the user their mouse back.
+                    let (x, y) = self.center();
+                    self.sh.platform.end_capture(x, y);
+                }
+            }
+            CaptureEvent::DragCrossed { edge, frac, paths } => {
+                let target = if self.control == Control::Local
+                    && self.sh.persisted.lock().unwrap().drag_files
+                {
+                    self.sessions
+                        .iter()
+                        .find(|(_, s)| s.side == edge)
+                        .map(|(id, _)| id.clone())
+                } else {
+                    None
+                };
+                if let Some(pid) = target {
+                    self.last_peer = Some(pid.clone());
+                    self.set_control(Control::Remote {
+                        peer: pid.clone(),
+                        edge,
+                    });
+                    self.send_to(&pid, Msg::Enter { edge, frac });
+                    self.build_offer(paths, OfferKind::Carry, pid);
+                } else {
                     let (x, y) = self.center();
                     self.sh.platform.end_capture(x, y);
                 }
@@ -1436,6 +1533,8 @@ impl Actor {
             }
             Msg::Enter { edge, frac } => {
                 if self.control == Control::Local {
+                    self.carry = None;
+                    self.early_release = None;
                     let (x, y) = edge_point(plat.screen(), edge.opposite(), frac);
                     plat.set_cursor(x, y);
                     self.set_control(Control::Controlled {
@@ -1473,6 +1572,13 @@ impl Actor {
                     _ => return,
                 };
                 plat.inject(&ev);
+                if let InputEvent::Button {
+                    button: Button::Left,
+                    down: false,
+                } = ev
+                {
+                    self.on_carry_release(from);
+                }
                 if let InputEvent::MouseMove { dx, dy } = ev {
                     let s = plat.screen();
                     let (x, y) = plat.cursor_pos();
@@ -1485,6 +1591,22 @@ impl Actor {
                         Edge::Right => (x >= s.x + s.width - 1 && dx > 0).then_some(fy),
                         Edge::Top => (y <= s.y && dy < 0).then_some(fx),
                         Edge::Bottom => (y >= s.y + s.height - 1 && dy > 0).then_some(fx),
+                        // A corner: back through it only by pushing into that very corner.
+                        Edge::TopLeft => {
+                            (x <= s.x && y <= s.y && (dx < 0 || dy < 0)).then_some(0.5)
+                        }
+                        Edge::TopRight => {
+                            (x >= s.x + s.width - 1 && y <= s.y && (dx > 0 || dy < 0))
+                                .then_some(0.5)
+                        }
+                        Edge::BottomLeft => {
+                            (x <= s.x && y >= s.y + s.height - 1 && (dx < 0 || dy > 0))
+                                .then_some(0.5)
+                        }
+                        Edge::BottomRight => (x >= s.x + s.width - 1
+                            && y >= s.y + s.height - 1
+                            && (dx > 0 || dy > 0))
+                            .then_some(0.5),
                     };
                     if let Some(frac) = leaving {
                         plat.release_all();
@@ -1666,6 +1788,12 @@ impl Actor {
             Cmd::SetGameMode(on) => {
                 self.sh.persisted.lock().unwrap().game_mode = on;
                 self.sh.platform.set_game_mode(on);
+                self.sh.save();
+                self.sh.publish();
+            }
+            Cmd::SetDragFiles(on) => {
+                self.sh.persisted.lock().unwrap().drag_files = on;
+                self.sh.platform.set_drag_files(on);
                 self.sh.save();
                 self.sh.publish();
             }
@@ -1884,6 +2012,18 @@ impl Actor {
             }
             return;
         }
+        if kind == OfferKind::Carry {
+            // Only while that computer's mouse is the one on our screen.
+            let ours = matches!(&self.control, Control::Controlled { peer, .. } if peer == from);
+            if !ours || !per.drag_files {
+                return;
+            }
+            self.carry = Some(Carry {
+                id,
+                peer: from.to_string(),
+                staged: None,
+            });
+        }
         let Some(key) = unhex32(
             &per.peers
                 .iter()
@@ -1896,13 +2036,26 @@ impl Actor {
         let dest = match kind {
             OfferKind::Clipboard => self.sh.cfg.temp_dir.join(format!("clip-{id:016x}")),
             OfferKind::Send => self.sh.cfg.download_dir.clone(),
+            OfferKind::Carry => self.sh.cfg.temp_dir.join(format!("carry-{id:016x}")),
         };
         self.sh.upsert_transfer(view("active", ""));
+        if kind == OfferKind::Carry {
+            // The button already went up before the offer reached us: drop it right away.
+            if let Some(dir) = self.early_release.take() {
+                self.drops.insert(id, dir);
+                self.carry = None;
+            }
+        }
         let (sh, ev_tx) = (self.sh.clone(), self.ev_tx.clone());
         tokio::spawn(async move {
             let res = fetch_files(&sh, addr, key, id, &items, &dest).await;
             match res {
                 Ok(paths) => {
+                    if kind == OfferKind::Carry {
+                        // Not finished yet: it is done once dropped where the user chose.
+                        let _ = ev_tx.send(Ev::CarryFetched { id, paths });
+                        return;
+                    }
                     let shown = if kind == OfferKind::Send {
                         Some(dest.to_string_lossy().into_owned())
                     } else {
@@ -1916,6 +2069,86 @@ impl Actor {
                 Err(e) => sh.transfer_finish(id, "in", Err(e.to_string())),
             }
         });
+    }
+
+    /// The left button went up while `from`'s mouse is on our screen: if it was carrying
+    /// files, they land in the folder under the cursor.
+    fn on_carry_release(&mut self, from: &str) {
+        let (x, y) = self.sh.platform.cursor_pos();
+        let dir = || {
+            self.sh
+                .platform
+                .drop_dir_at(x, y)
+                .unwrap_or_else(|| self.sh.cfg.download_dir.clone())
+        };
+        match self.carry.take() {
+            Some(c) if c.peer == from => {
+                let dir = dir();
+                match c.staged {
+                    Some(paths) => self.finish_drop(c.id, paths, dir),
+                    None => {
+                        self.drops.insert(c.id, dir);
+                    }
+                }
+            }
+            other => {
+                self.carry = other;
+                // Perhaps the offer is still on its way.
+                if self.carry.is_none() {
+                    self.early_release = Some(dir());
+                }
+            }
+        }
+    }
+
+    fn finish_drop(&self, id: u64, paths: Vec<PathBuf>, dir: PathBuf) {
+        let ev_tx = self.ev_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let res = files::move_into(&paths, &dir).map_err(|e| e.to_string());
+            let _ = ev_tx.send(Ev::CarryDropped { id, dir, res });
+        });
+    }
+
+    fn on_carry_fetched(&mut self, id: u64, paths: Vec<PathBuf>) {
+        if let Some(dir) = self.drops.remove(&id) {
+            return self.finish_drop(id, paths, dir);
+        }
+        match self.carry.as_mut() {
+            Some(c) if c.id == id => c.staged = Some(paths),
+            _ => {
+                // Nobody wants them any more (the cursor went back).
+                discard_staged(&paths);
+                self.sh.remove_transfer(id, "in");
+            }
+        }
+    }
+
+    /// The mouse left (or the link dropped) before the files were let go: forget them.
+    fn cancel_carry(&mut self) {
+        if let Some(c) = self.carry.take() {
+            if let Some(paths) = &c.staged {
+                discard_staged(paths);
+            }
+            self.sh.remove_transfer(c.id, "in");
+        }
+    }
+}
+
+/// Deletes carried files that were never dropped (and their staging folder).
+fn discard_staged(paths: &[PathBuf]) {
+    let mut parent = None;
+    for p in paths {
+        if parent.is_none() {
+            parent = p.parent().map(std::path::Path::to_path_buf);
+        }
+        let _ = if p.is_dir() {
+            std::fs::remove_dir_all(p)
+        } else {
+            std::fs::remove_file(p)
+        };
+    }
+    if let Some(d) = parent {
+        let _ = std::fs::remove_dir(d);
     }
 }
 

@@ -497,10 +497,10 @@ async fn clipboard_and_files_reach_every_computer() {
 }
 
 #[tokio::test]
-async fn a_fifth_computer_is_turned_away() {
+async fn a_ninth_computer_is_turned_away() {
     let hub = start("HUB").await;
     let mut spokes = Vec::new();
-    for i in 0..4 {
+    for i in 0..8 {
         let s = start(&format!("S{i}")).await;
         let code = hub.node.snapshot().pairing_code;
         s.node.connect(lo(), hub.node.tcp_port(), code);
@@ -510,13 +510,54 @@ async fn a_fifth_computer_is_turned_away() {
     }
     let sides: std::collections::HashSet<_> =
         hub.node.snapshot().paired.iter().map(|p| p.side).collect();
-    assert_eq!(sides.len(), 4, "one computer per side");
+    assert_eq!(sides.len(), 8, "one computer per side and corner");
     let late = start("LATE").await;
     let code = hub.node.snapshot().pairing_code;
     late.node.connect(lo(), hub.node.tcp_port(), code);
     until("late told off", || hub.node.snapshot().error.is_some()).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(connected_names(&hub).len(), 4);
+    assert_eq!(connected_names(&hub).len(), 8);
+}
+
+#[tokio::test]
+async fn a_computer_in_the_corner_is_reached_diagonally() {
+    let a = start("MAIN").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let id = a.node.snapshot().paired[0].id.clone();
+
+    // Put B diagonally: up and to the right of A.
+    a.node.set_side(id, Edge::TopRight);
+    until("corner layout on both sides", || {
+        a.plat.st.lock().unwrap().active_edge == Some(Edge::TopRight)
+            && b.plat.st.lock().unwrap().active_edge == Some(Edge::BottomLeft)
+    })
+    .await;
+
+    // A's mouse pushes into its top-right corner.
+    a.plat.user_push_edge(Edge::TopRight, 0.5);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    assert_eq!(a.node.snapshot().control, "remote");
+    let (x, y) = b.plat.cursor_pos();
+    assert_eq!((x, y), (2, 797), "enters B in its bottom-left corner");
+
+    // Going back means pushing into that same corner again, not just touching an edge.
+    a.plat
+        .emit(CaptureEvent::Input(InputEvent::MouseMove { dx: 0, dy: 10 }));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        b.node.snapshot().control,
+        "controlled",
+        "bottom edge alone is not the way back"
+    );
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: -10,
+        dy: 10,
+    }));
+    until("A back in control", || a.node.snapshot().control == "local").await;
+    assert_eq!(b.node.snapshot().control, "local");
+    let (x, y) = a.plat.cursor_pos();
+    assert_eq!((x, y), (997, 2), "back at A's top-right corner");
 }
 
 #[tokio::test]
@@ -548,4 +589,149 @@ async fn a_protected_screen_hands_control_back() {
     b.plat.emit(CaptureEvent::InputBlocked);
     until("B local", || b.node.snapshot().control == "local").await;
     until("A local", || a.node.snapshot().control == "local").await;
+}
+
+fn release_left(from: &Side) {
+    from.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: false,
+    }));
+}
+
+fn make_file(name: &str, body: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join(name);
+    std::fs::write(&p, body).unwrap();
+    (d, p)
+}
+
+#[tokio::test]
+async fn a_dragged_file_is_dropped_where_the_mouse_is_let_go() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let target = tempfile::tempdir().unwrap();
+    b.plat.st.lock().unwrap().drop_dir = Some(target.path().to_path_buf());
+    let (_keep, file) = make_file("report.txt", b"quarterly numbers");
+
+    // A has B on its left: drag the file to the left edge.
+    a.plat.user_drag_to_edge(Edge::Left, 0.4, vec![file]);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    // Wait until everything has arrived at B, then let go of the button.
+    until("file arrived at B", || {
+        std::fs::read_dir(b._tmp.path())
+            .map(|d| {
+                d.flatten().any(|e| {
+                    e.file_name().to_string_lossy().starts_with("carry-")
+                        && std::fs::read_dir(e.path())
+                            .map(|mut x| x.next().is_some())
+                            .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    })
+    .await;
+    // Not dropped yet: the button is still down.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+
+    release_left(&a);
+    until("file dropped", || target.path().join("report.txt").exists()).await;
+    assert_eq!(
+        std::fs::read(target.path().join("report.txt")).unwrap(),
+        b"quarterly numbers"
+    );
+    until("transfer done", || {
+        b.node
+            .snapshot()
+            .transfers
+            .iter()
+            .any(|t| t.state == "done" && t.path.as_deref() == target.path().to_str())
+    })
+    .await;
+    // The staging folder is gone.
+    assert!(std::fs::read_dir(b._tmp.path())
+        .unwrap()
+        .flatten()
+        .all(|e| !e.file_name().to_string_lossy().starts_with("carry-")));
+}
+
+#[tokio::test]
+async fn letting_go_before_the_files_arrive_still_drops_them() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let target = tempfile::tempdir().unwrap();
+    b.plat.st.lock().unwrap().drop_dir = Some(target.path().to_path_buf());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("photos/2026")).unwrap();
+    std::fs::write(dir.path().join("photos/2026/a.jpg"), vec![7u8; 300_000]).unwrap();
+    std::fs::write(dir.path().join("photos/b.jpg"), b"bb").unwrap();
+
+    a.plat
+        .user_drag_to_edge(Edge::Left, 0.5, vec![dir.path().join("photos")]);
+    // Release at once: the button-up can overtake the offer.
+    release_left(&a);
+    until("folder dropped", || {
+        target.path().join("photos/2026/a.jpg").exists()
+            && target.path().join("photos/b.jpg").exists()
+    })
+    .await;
+    assert_eq!(
+        std::fs::metadata(target.path().join("photos/2026/a.jpg"))
+            .unwrap()
+            .len(),
+        300_000
+    );
+}
+
+#[tokio::test]
+async fn taking_the_files_back_cancels_the_carry() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let target = tempfile::tempdir().unwrap();
+    b.plat.st.lock().unwrap().drop_dir = Some(target.path().to_path_buf());
+    let (_keep, file) = make_file("secret.txt", b"nope");
+
+    a.plat.user_drag_to_edge(Edge::Left, 0.5, vec![file]);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    until("file staged", || {
+        std::fs::read_dir(b._tmp.path())
+            .map(|d| {
+                d.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with("carry-"))
+            })
+            .unwrap_or(false)
+    })
+    .await;
+    // The mouse goes back through the edge it came in by (B's right side).
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 400,
+        dy: 0,
+    }));
+    until("B local again", || b.node.snapshot().control == "local").await;
+    until("staging cleaned", || {
+        std::fs::read_dir(b._tmp.path())
+            .unwrap()
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("carry-"))
+    })
+    .await;
+    assert!(std::fs::read_dir(target.path()).unwrap().next().is_none());
+    assert!(b.node.snapshot().transfers.is_empty());
+}
+
+#[tokio::test]
+async fn dragging_to_an_edge_with_the_option_off_does_nothing() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    a.node.set_drag_files(false);
+    until("setting applied", || !a.node.snapshot().drag_files).await;
+    let (_keep, file) = make_file("x.txt", b"x");
+    a.plat.user_drag_to_edge(Edge::Left, 0.5, vec![file]);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(b.node.snapshot().control, "local");
+    assert!(!a.plat.st.lock().unwrap().capturing, "mouse handed back");
 }

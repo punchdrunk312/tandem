@@ -1,4 +1,4 @@
-# Tandem
+# CubeCursor
 
 Use **one mouse and keyboard on two Windows computers**. Push the cursor off the
 edge of one screen and it appears on the other; copy on one, paste on the other
@@ -16,16 +16,16 @@ src-tauri + src      the desktop app (tray + window)
 
 ## Using it
 
-1. Install and start Tandem on both computers (it lives in the tray; closing the window keeps it running).
+1. Install and start CubeCursor on both computers (it lives in the tray; closing the window keeps it running).
 2. On computer **B**, find computer **A** under *Nearby*, type the 6-digit code A shows, press *Pair*. Once.
-3. Tell Tandem where the other computer sits ("Place right", etc.).
+3. Tell CubeCursor where the other computer sits ("Place right", etc.).
 4. Push the cursor through that screen edge. Come back the same way.
 
 **Scroll Lock** jumps to the other computer from anywhere — and, while you're
 on the other computer, brings your mouse straight back. If anything ever feels
 stuck, press it.
 
-Windows Firewall will ask once; allow Tandem on *Private* networks (it listens on TCP 24800 and UDP 24801 for discovery).
+Windows Firewall will ask once; allow CubeCursor on *Private* networks (it listens on TCP 24800 and UDP 24801 for discovery).
 
 ## How it works / security
 
@@ -74,7 +74,7 @@ pulsing teal: a transfer is running).
 - **Send a file by dragging:** pick it up in Explorer or on the desktop, press **Space**, drop
   it on the bar. Let go anywhere else and the bar closes again. Nothing opens just because you
   dragged something, so moving desktop icons is unaffected.
-- **Right-click → "Send with Tandem"** on any file or folder (switch it on in the settings).
+- **Right-click → "Send with CubeCursor"** on any file or folder (switch it on in the settings).
 - **Copy files with Ctrl+C** on one PC and **paste with Ctrl+V** in Explorer on the other
   (up to 512 MB; larger ones: use Send).
 - In a **full-screen app** the line hides too. The two hotkeys still work there and the bar
@@ -113,7 +113,7 @@ hooks without any UI), then the app.
 
 * One paired computer connected at a time; LAN only (no internet relay).
 * Elevated (admin) windows and the UAC / lock screen ignore injected input unless
-  Tandem itself runs elevated; Ctrl+Alt+Del can't be forwarded.
+  CubeCursor itself runs elevated; Ctrl+Alt+Del can't be forwarded.
 * Games using raw input may not see injected mouse motion.
 * Pointer position is mapped by screen *fraction* when crossing; mixed-DPI
   multi-monitor layouts use the bounding box of the whole desktop.
@@ -133,11 +133,11 @@ into a temporary staging folder, and are sent from there. If something looks wro
 
 ## Several computers (hub)
 
-One PC is the hub. Up to **4 other PCs** can connect to it, one per side of its screen (right, left, top, bottom). Pair each one with the usual code; Tandem gives every new PC the first free side. Rearrange them in settings by clicking a computer, then clicking the side it should sit on.
+One PC is the hub. Up to **4 other PCs** can connect to it, one per side of its screen (right, left, top, bottom). Pair each one with the usual code; CubeCursor gives every new PC the first free side. Rearrange them in settings by clicking a computer, then clicking the side it should sit on.
 
 - Push the cursor through an edge to jump to the computer on that side. The bar and settings also have per-computer **Jump** and **Disconnect** buttons.
 - Text and image clipboard is relayed through the hub to every computer.
-- Files: drop on a computer's name on the bar, or use "Send to" in settings. Right-click "Send with Tandem" goes to the computer you are controlling, or to all connected ones.
+- Files: drop on a computer's name on the bar, or use "Send to" in settings. Right-click "Send with CubeCursor" goes to the computer you are controlling, or to all connected ones.
 - A copied-files clipboard (Ctrl+C / Ctrl+V) is not relayed between two spokes. Send those through the hub.
 - A 5th computer is turned away.
 - Same network only (Windows only). Internet relay and macOS/Linux ports are not built yet.
@@ -145,13 +145,13 @@ One PC is the hub. Up to **4 other PCs** can connect to it, one per side of its 
 ## Hidden pointer, admin windows
 
 - While you drive another computer, the pointer on this one is hidden (it would otherwise sit
-  stuck in the middle of the screen) and comes back when control returns. If Tandem ever
+  stuck in the middle of the screen) and comes back when control returns. If CubeCursor ever
   crashes while it is hidden, it restores your cursors on the next start.
 - Windows ignores a normal program's mouse and keyboard in windows that run as administrator.
   Settings → *Admin windows* has **Restart as administrator** (one question from Windows) and
   **Always start as administrator**. Do this on the computer you control. Trade-off: in
-  administrator mode you can't drag files from Explorer onto Tandem, and the right-click
-  "Send with Tandem" won't reach it.
+  administrator mode you can't drag files from Explorer onto CubeCursor, and the right-click
+  "Send with CubeCursor" won't reach it.
 - The dimmed UAC prompt and the lock screen can't be controlled by any program. When one
-  appears, Tandem hands the mouse and keyboard back automatically so you can answer it on that
+  appears, CubeCursor hands the mouse and keyboard back automatically so you can answer it on that
   computer.

@@ -14,6 +14,9 @@ pub struct MockState {
     pub injected: Vec<InputEvent>,
     pub clipboard: Option<ClipContent>,
     pub releases: u32,
+    /// What `drop_dir_at` answers (the folder under the cursor, in a test).
+    pub drop_dir: Option<std::path::PathBuf>,
+    pub drag_files: bool,
 }
 
 pub struct MockPlatform {
@@ -38,6 +41,8 @@ impl MockPlatform {
                 injected: vec![],
                 clipboard: None,
                 releases: 0,
+                drop_dir: None,
+                drag_files: true,
             }),
             sink: Mutex::new(None),
         })
@@ -52,6 +57,11 @@ impl MockPlatform {
         self.st.lock().unwrap().clipboard = Some(c);
         self.emit(CaptureEvent::ClipboardChanged);
     }
+    /// Simulate dragging files to a screen edge and over to the next computer.
+    pub fn user_drag_to_edge(&self, edge: Edge, frac: f32, paths: Vec<std::path::PathBuf>) {
+        self.st.lock().unwrap().capturing = true;
+        self.emit(CaptureEvent::DragCrossed { edge, frac, paths });
+    }
     /// Simulate the hook noticing the cursor pushing through an edge.
     pub fn user_push_edge(&self, edge: Edge, frac: f32) {
         self.st.lock().unwrap().capturing = true;
@@ -60,6 +70,12 @@ impl MockPlatform {
 }
 
 impl Platform for MockPlatform {
+    fn set_drag_files(&self, on: bool) {
+        self.st.lock().unwrap().drag_files = on;
+    }
+    fn drop_dir_at(&self, _x: i32, _y: i32) -> Option<std::path::PathBuf> {
+        self.st.lock().unwrap().drop_dir.clone()
+    }
     fn screen(&self) -> Screen {
         self.st.lock().unwrap().screen
     }

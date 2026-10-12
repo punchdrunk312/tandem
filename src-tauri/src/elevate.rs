@@ -1,21 +1,21 @@
-//! Running Tandem as administrator.
+//! Running CubeCursor as administrator.
 //!
 //! Windows blocks a normal program from sending mouse and keyboard input into windows
 //! that run as administrator (installers, Task Manager, "Run as administrator" apps).
-//! That is the reason the remote computer sometimes ignores you. An elevated Tandem is
+//! That is the reason the remote computer sometimes ignores you. An elevated CubeCursor is
 //! allowed to type into them.
 //!
 //! Two pieces, both optional and off by default:
 //! * "Restart as administrator": one UAC question, then the new copy takes over.
-//! * "Always start as administrator": a logon task that starts Tandem elevated without a
+//! * "Always start as administrator": a logon task that starts CubeCursor elevated without a
 //!   prompt. (A plain `Run` registry entry can't start an elevated program silently.)
 //!
 //! The catch of elevation: Windows also stops non-elevated programs from dragging files
 //! onto an elevated window, so dragging from Explorer and the right-click menu don't work
-//! while Tandem is elevated. The settings page says so.
+//! while CubeCursor is elevated. The settings page says so.
 //!
 //! The protected UAC screen itself (the dimmed "Do you want to allow…" prompt) can never be
-//! driven by a normal program; Tandem notices it and hands control back instead.
+//! driven by a normal program; CubeCursor notices it and hands control back instead.
 
 #[cfg(windows)]
 mod imp {
@@ -119,10 +119,10 @@ mod imp {
             .replace('"', "&quot;")
     }
 
-    /// Creates or deletes the logon task. Creating one needs an elevated Tandem.
+    /// Creates or deletes the logon task. Creating one needs an elevated CubeCursor.
     ///
     /// The task is written as XML because `schtasks /Create` flags can't switch off the
-    /// defaults that would kill Tandem after three days or on battery power.
+    /// defaults that would kill CubeCursor after three days or on battery power.
     pub fn autostart_set(on: bool) -> Result<(), String> {
         if !on {
             quiet(Command::new("schtasks").args(["/Delete", "/TN", TASK, "/F"]))
@@ -131,7 +131,7 @@ mod imp {
             return Ok(());
         }
         if !is_elevated() {
-            return Err("Restart Tandem as administrator first.".into());
+            return Err("Restart CubeCursor as administrator first.".into());
         }
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let user = format!(

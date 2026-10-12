@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -16,6 +16,11 @@ pub enum Edge {
     Right,
     Top,
     Bottom,
+    /// The four corners: a computer sitting diagonally from this one.
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }
 
 impl Edge {
@@ -25,7 +30,38 @@ impl Edge {
             Edge::Right => Edge::Left,
             Edge::Top => Edge::Bottom,
             Edge::Bottom => Edge::Top,
+            Edge::TopLeft => Edge::BottomRight,
+            Edge::BottomRight => Edge::TopLeft,
+            Edge::TopRight => Edge::BottomLeft,
+            Edge::BottomLeft => Edge::TopRight,
         }
+    }
+
+    pub fn is_corner(self) -> bool {
+        matches!(
+            self,
+            Edge::TopLeft | Edge::TopRight | Edge::BottomLeft | Edge::BottomRight
+        )
+    }
+
+    /// Parses "left", "top-right", "bottomleft", ... (case-insensitive).
+    pub fn parse(s: &str) -> Option<Edge> {
+        let k: String = s
+            .chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        Some(match k.as_str() {
+            "left" => Edge::Left,
+            "right" => Edge::Right,
+            "top" => Edge::Top,
+            "bottom" => Edge::Bottom,
+            "topleft" => Edge::TopLeft,
+            "topright" => Edge::TopRight,
+            "bottomleft" => Edge::BottomLeft,
+            "bottomright" => Edge::BottomRight,
+            _ => return None,
+        })
     }
 }
 
@@ -77,6 +113,9 @@ pub enum OfferKind {
     Clipboard,
     /// Files were explicitly sent; the receiver saves them to a folder.
     Send,
+    /// Files being dragged by the mouse: the receiver holds them until the button is
+    /// let go, then drops them in the folder under the cursor.
+    Carry,
 }
 
 /// Messages on the control connection.

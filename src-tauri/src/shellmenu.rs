@@ -1,8 +1,8 @@
-//! "Send with Tandem" in the Explorer right-click menu.
+//! "Send with CubeCursor" in the Explorer right-click menu.
 //!
 //! Registered per user (HKCU, no admin rights) through `reg.exe`, so there is nothing
 //! to compile against and nothing to uninstall by hand: switching it off deletes the keys.
-//! Explorer starts `tandem-app.exe --send "<path>"`; the running Tandem picks that up
+//! Explorer starts `tandem-app.exe --send "<path>"`; the running CubeCursor picks that up
 //! through the single-instance hand-over (see `lib.rs`).
 
 #[cfg(windows)]
@@ -46,11 +46,11 @@ mod imp {
         let command = format!("\"{exe}\" --send \"%1\"");
         for k in KEYS {
             let sub = format!(r"{k}\command");
-            let ok = reg(&["add", k, "/ve", "/d", "Send with Tandem", "/f"])
+            let ok = reg(&["add", k, "/ve", "/d", "Send with CubeCursor", "/f"])
                 && reg(&["add", k, "/v", "Icon", "/d", exe.as_str(), "/f"])
                 && reg(&["add", sub.as_str(), "/ve", "/d", command.as_str(), "/f"]);
             if !ok {
-                return Err("Windows would not let Tandem add the menu entry".into());
+                return Err("Windows would not let CubeCursor add the menu entry".into());
             }
         }
         Ok(())

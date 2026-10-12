@@ -48,7 +48,7 @@ function keyed(el: HTMLElement, key: string, build: () => (Node | string)[]) {
 
 export function buildHeader(a: ViewActions): ViewHost {
   const dot = h("i", { class: "hd-dot" });
-  const title = h("span", { class: "hd-title", text: "Tandem" });
+  const title = h("span", { class: "hd-title", text: "CubeCursor" });
   const sound = h("button", { class: "icon-btn", title: "Sound", "aria-label": "Toggle sound", onclick: () => a.toggleSound() });
   const settings = h("button", { class: "icon-btn", title: "Pair & settings", "aria-label": "Open settings", onclick: () => { a.blip(); fire("open_main_window"); } }, svg(ICON.sliders, 15, { stroke: 1.8 }));
   const close = h("button", { class: "icon-btn", title: "Close", "aria-label": "Close", onclick: () => a.collapse() }, svg(ICON.close, 15, { stroke: 1.8 }));
@@ -85,7 +85,7 @@ export function homeText(s: Snapshot | null): { title: string; sub: string } {
       const near = s.nearby.find((n) => n.paired) ?? s.paired.find((p) => p.nearby);
       if (near) return { title: `${near.name} is nearby`, sub: "Connect to share your mouse, keyboard and clipboard." };
       if (s.nearby.length) return { title: "A computer wants a friend", sub: `Open settings and type the code shown on ${s.nearby[0].name}.` };
-      return { title: "Not connected", sub: s.paired.length ? "Waiting for your other computer to show up…" : "Run Tandem on your other computer, then pair them in settings." };
+      return { title: "Not connected", sub: s.paired.length ? "Waiting for your other computer to show up…" : "Run CubeCursor on your other computer, then pair them in settings." };
     }
   }
 }
@@ -188,10 +188,10 @@ export function buildDrop(): ViewHost {
       const peer = State.connected?.name;
       if (many) {
         big.textContent = "Drop on a computer";
-        small.textContent = "Files and folders land in its Downloads\\Tandem folder.";
+        small.textContent = "Files and folders land in its Downloads\\CubeCursor folder.";
       } else {
         big.textContent = peer ? `Drop to send to ${peer}` : "Connect to a computer first";
-        small.textContent = peer ? "Files and folders land in its Downloads\\Tandem folder." : "Open settings to pair, then drop again.";
+        small.textContent = peer ? "Files and folders land in its Downloads\\CubeCursor folder." : "Open settings to pair, then drop again.";
       }
       el.classList.toggle("bad", !peer);
       el.classList.toggle("many", many);

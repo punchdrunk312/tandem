@@ -50,11 +50,310 @@ const EDGE_LEFT: u8 = 1;
 const EDGE_RIGHT: u8 = 2;
 const EDGE_TOP: u8 = 4;
 const EDGE_BOTTOM: u8 = 8;
+const EDGE_TL: u8 = 16;
+const EDGE_TR: u8 = 32;
+const EDGE_BL: u8 = 64;
+const EDGE_BR: u8 = 128;
 /// Consecutive mouse-move events seen pushing against the active edge.
 static AT_EDGE: AtomicU32 = AtomicU32::new(0);
 /// How many such events it takes to cross. Stops a casual touch of the screen
 /// edge (scrollbars, window borders) from stealing the mouse.
 const PUSH_EVENTS: u32 = 4;
+
+// ------------------------------------------------------- dragging files across
+//
+// Windows has no API for "what is being dragged right now", so the drag is read from
+// the shell instead: when the left button goes down on an item in an Explorer window or
+// on the desktop, a helper asks Explorer (through a small resident PowerShell process
+// and its Shell.Application object) which items are selected. If the cursor then runs
+// into a connected edge with the button still held, the files are handed to the engine
+// and the local drag is cancelled. Anything that goes wrong here only means the drag
+// does not cross; it never affects normal mouse sharing.
+
+static DRAG_FILES: AtomicBool = AtomicBool::new(true);
+/// Bumped on every left-button press and release, so a stale answer is never used.
+static DRAG_GEN: AtomicU32 = AtomicU32::new(1);
+/// The press `DRAG_PATHS` belongs to.
+static DRAG_READY_GEN: AtomicU32 = AtomicU32::new(0);
+static DRAG_PATHS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+static DRAG_TX: OnceLock<std::sync::mpsc::Sender<DragReq>> = OnceLock::new();
+
+#[derive(Clone, Copy)]
+enum ShellKind {
+    Desktop,
+    Explorer(isize),
+}
+
+impl ShellKind {
+    fn arg(self) -> String {
+        match self {
+            ShellKind::Desktop => "D 0".into(),
+            ShellKind::Explorer(h) => format!("E {h}"),
+        }
+    }
+}
+
+enum DragReq {
+    Warm,
+    Stop,
+    Sel {
+        seq: u32,
+        kind: ShellKind,
+    },
+    Dir {
+        kind: ShellKind,
+        reply: std::sync::mpsc::Sender<Option<String>>,
+    },
+}
+
+const PS_SCRIPT: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$sh = New-Object -ComObject Shell.Application
+function Docs($k, $h) {
+  if ($k -eq 'D') {
+    $x = 0
+    $r = $sh.Windows().FindWindowSW([ref]0, [ref]0, 8, [ref]$x, 1)
+    if ($r) { return @($r.Document) }
+    return @()
+  }
+  $o = @()
+  foreach ($w in $sh.Windows()) { if ($w.HWND -eq $h) { $o += $w.Document } }
+  return $o
+}
+while ($true) {
+  $l = [Console]::In.ReadLine()
+  if ($l -eq $null) { break }
+  $p = $l.Split(' ')
+  $out = 'NONE'
+  try {
+    $docs = Docs $p[1] ([int64]$p[2])
+    if ($p[0] -eq 'SEL') {
+      foreach ($d in $docs) {
+        $o = @()
+        foreach ($i in $d.SelectedItems()) { $o += $i.Path }
+        if ($o.Count -gt 0) { $out = 'OK|' + ($o -join '|'); break }
+      }
+    } elseif ($p[0] -eq 'DIR') {
+      if ($p[1] -eq 'D') { $out = 'OK|' + [Environment]::GetFolderPath('Desktop') }
+      elseif ($docs.Count -gt 0) { $out = 'OK|' + $docs[0].Folder.Self.Path }
+    }
+  } catch { }
+  [Console]::Out.WriteLine($out)
+  [Console]::Out.Flush()
+}
+"#;
+
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(bytes.len() * 4 / 3 + 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        s.push(T[(n >> 18) as usize & 63] as char);
+        s.push(T[(n >> 12) as usize & 63] as char);
+        s.push(if c.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        s.push(if c.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    s
+}
+
+/// The resident PowerShell that answers shell questions, one line in, one line out.
+struct Ps {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    lines: std::sync::mpsc::Receiver<String>,
+}
+
+impl Ps {
+    fn start() -> Option<Ps> {
+        use std::io::BufRead;
+        use std::os::windows::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let utf16: Vec<u8> = PS_SCRIPT
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let mut child = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NoLogo",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-EncodedCommand",
+                &base64(&utf16),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn()
+            .ok()?;
+        let stdin = child.stdin.take()?;
+        let stdout = child.stdout.take()?;
+        let (tx, lines) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("tandem-ps-read".into())
+            .spawn(move || {
+                for line in std::io::BufReader::new(stdout)
+                    .lines()
+                    .map_while(Result::ok)
+                {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+        Some(Ps {
+            child,
+            stdin,
+            lines,
+        })
+    }
+
+    fn ask(&mut self, line: &str, wait: std::time::Duration) -> Option<String> {
+        use std::io::Write;
+        while self.lines.try_recv().is_ok() {} // anything left over is an old answer
+        writeln!(self.stdin, "{line}").ok()?;
+        self.stdin.flush().ok()?;
+        let r = self.lines.recv_timeout(wait).ok()?;
+        Some(r.trim_start_matches('\u{feff}').trim().to_string())
+    }
+}
+
+impl Drop for Ps {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn parse_paths(reply: Option<String>) -> Vec<PathBuf> {
+    reply
+        .as_deref()
+        .and_then(|r| r.strip_prefix("OK|"))
+        .map(|r| {
+            r.split('|')
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn ask_ps(ps: &mut Option<Ps>, line: &str) -> Option<String> {
+    if ps.is_none() {
+        *ps = Ps::start();
+    }
+    let r = ps
+        .as_mut()?
+        .ask(line, std::time::Duration::from_millis(1500));
+    if r.is_none() {
+        *ps = None; // dead or stuck: start a fresh one next time
+    }
+    r
+}
+
+fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
+    let mut ps: Option<Ps> = None;
+    for req in rx {
+        match req {
+            DragReq::Stop => ps = None,
+            DragReq::Warm => {
+                if ps.is_none() {
+                    ps = Ps::start();
+                }
+            }
+            DragReq::Sel { seq, kind } => {
+                // Explorer changes the selection on press; give it a moment.
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                let held = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 };
+                if !held || DRAG_GEN.load(Relaxed) != seq {
+                    continue;
+                }
+                let paths = parse_paths(ask_ps(&mut ps, &format!("SEL {}", kind.arg())));
+                if paths.is_empty() || DRAG_GEN.load(Relaxed) != seq {
+                    continue;
+                }
+                if let Ok(mut p) = DRAG_PATHS.lock() {
+                    *p = paths;
+                    DRAG_READY_GEN.store(seq, Relaxed);
+                }
+            }
+            DragReq::Dir { kind, reply } => {
+                let r = ask_ps(&mut ps, &format!("DIR {}", kind.arg()));
+                let _ = reply.send(r);
+            }
+        }
+    }
+}
+
+/// What kind of shell surface is at this point, if it is the *items* area of one (so a
+/// press on a title bar or a scrollbar is never mistaken for dragging files).
+fn shell_kind_at(x: i32, y: i32, items_only: bool) -> Option<ShellKind> {
+    unsafe {
+        let hwnd = WindowFromPoint(POINT { x, y });
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let class_of = |h: HWND| {
+            let mut buf = [0u16; 64];
+            let n = GetClassNameW(h, &mut buf);
+            String::from_utf16_lossy(&buf[..n.max(0) as usize])
+        };
+        let root = GetAncestor(hwnd, GA_ROOT);
+        if root.0.is_null() {
+            return None;
+        }
+        if items_only {
+            let c = class_of(hwnd);
+            if c != "SysListView32" && c != "DirectUIHWND" {
+                return None;
+            }
+        }
+        match class_of(root).as_str() {
+            "CabinetWClass" => Some(ShellKind::Explorer(root.0 as isize)),
+            "Progman" | "WorkerW" => Some(ShellKind::Desktop),
+            _ => None,
+        }
+    }
+}
+
+/// Left button went down: if it is on a file, find out which files (off the hook thread).
+fn note_left_down(h: &MsLl) {
+    let seq = DRAG_GEN.fetch_add(1, Relaxed) + 1;
+    if !DRAG_FILES.load(Relaxed) || EDGES.load(Relaxed) == 0 {
+        return;
+    }
+    if let (Some(tx), Some(kind)) = (DRAG_TX.get(), shell_kind_at(h.x, h.y, true)) {
+        let _ = tx.send(DragReq::Sel { seq, kind });
+    }
+}
+
+/// The local drag has moved to the other computer: end it here without dropping anything.
+fn cancel_local_drag() {
+    let _ = std::thread::Builder::new()
+        .name("tandem-dragcancel".into())
+        .spawn(|| {
+            send(&[
+                key_input(VK_ESCAPE.0, 0, false, true),
+                key_input(VK_ESCAPE.0, 0, false, false),
+            ]);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            send(&[mouse_input(0, 0, 0, MOUSEEVENTF_LEFTUP)]);
+        });
+}
 
 const CF_UNICODETEXT: u32 = 13;
 const CF_HDROP: u32 = 15;
@@ -193,6 +492,10 @@ fn edge_mask(edges: &[Edge]) -> u8 {
             Edge::Right => EDGE_RIGHT,
             Edge::Top => EDGE_TOP,
             Edge::Bottom => EDGE_BOTTOM,
+            Edge::TopLeft => EDGE_TL,
+            Edge::TopRight => EDGE_TR,
+            Edge::BottomLeft => EDGE_BL,
+            Edge::BottomRight => EDGE_BR,
         }
     })
 }
@@ -264,26 +567,62 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
     }
     let s = vscreen();
     if !CAPTURING.load(Relaxed) {
+        if msg == WM_LBUTTONDOWN {
+            note_left_down(h);
+            return false;
+        }
+        if msg == WM_LBUTTONUP {
+            DRAG_GEN.fetch_add(1, Relaxed);
+            return false;
+        }
         let mask = EDGES.load(Relaxed);
         if mask == 0 || msg != WM_MOUSEMOVE {
             return false;
         }
-        // Which of the active edges, if any, is the cursor pushing against?
-        let hit = if mask & EDGE_LEFT != 0 && h.x <= s.x {
+        // Which of the active edges, if any, is the cursor pushing against? A corner
+        // (both edges at once) wins over the two edges that make it up.
+        let at_l = h.x <= s.x;
+        let at_r = h.x >= s.x + s.width - 1;
+        let at_t = h.y <= s.y;
+        let at_b = h.y >= s.y + s.height - 1;
+        let hit = if mask & EDGE_TL != 0 && at_l && at_t {
+            EDGE_TL
+        } else if mask & EDGE_TR != 0 && at_r && at_t {
+            EDGE_TR
+        } else if mask & EDGE_BL != 0 && at_l && at_b {
+            EDGE_BL
+        } else if mask & EDGE_BR != 0 && at_r && at_b {
+            EDGE_BR
+        } else if mask & EDGE_LEFT != 0 && at_l {
             EDGE_LEFT
-        } else if mask & EDGE_RIGHT != 0 && h.x >= s.x + s.width - 1 {
+        } else if mask & EDGE_RIGHT != 0 && at_r {
             EDGE_RIGHT
-        } else if mask & EDGE_TOP != 0 && h.y <= s.y {
+        } else if mask & EDGE_TOP != 0 && at_t {
             EDGE_TOP
-        } else if mask & EDGE_BOTTOM != 0 && h.y >= s.y + s.height - 1 {
+        } else if mask & EDGE_BOTTOM != 0 && at_b {
             EDGE_BOTTOM
         } else {
             0
         };
         // Dragging a window or selection along the edge must not switch computers.
-        let button_down = unsafe {
-            GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0
+        let (left, right) = unsafe {
+            (
+                GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0,
+                GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0,
+            )
         };
+        // Holding files (picked up in Explorer or on the desktop) is the one case where a
+        // pressed button may still cross.
+        let carrying = hit != 0
+            && left
+            && !right
+            && DRAG_FILES.load(Relaxed)
+            && DRAG_READY_GEN.load(Relaxed) == DRAG_GEN.load(Relaxed)
+            && DRAG_PATHS
+                .try_lock()
+                .map(|p| !p.is_empty())
+                .unwrap_or(false);
+        let button_down = (left || right) && !carrying;
         if hit == 0 || button_down || GAME_ACTIVE.load(Relaxed) {
             AT_BIT.store(0, Relaxed);
             AT_EDGE.store(0, Relaxed);
@@ -316,6 +655,10 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             EDGE_LEFT => (Edge::Left, fy),
             EDGE_RIGHT => (Edge::Right, fy),
             EDGE_TOP => (Edge::Top, fx),
+            EDGE_TL => (Edge::TopLeft, 0.5),
+            EDGE_TR => (Edge::TopRight, 0.5),
+            EDGE_BL => (Edge::BottomLeft, 0.5),
+            EDGE_BR => (Edge::BottomRight, 0.5),
             _ => (Edge::Bottom, fx),
         };
         reset_move();
@@ -323,6 +666,18 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         let (cx, cy) = s.center();
         unsafe {
             let _ = SetCursorPos(cx, cy);
+        }
+        if carrying {
+            let paths = DRAG_PATHS
+                .try_lock()
+                .map(|mut p| std::mem::take(&mut *p))
+                .unwrap_or_default();
+            if !paths.is_empty() {
+                DRAG_GEN.fetch_add(1, Relaxed);
+                emit(CaptureEvent::DragCrossed { edge, frac, paths });
+                cancel_local_drag();
+                return true;
+            }
         }
         emit(CaptureEvent::Crossed { edge, frac });
         return true;
@@ -924,6 +1279,45 @@ impl Platform for WinPlatform {
 
     fn set_switch_delay(&self, ms: u32) {
         SWITCH_DELAY_MS.store(ms, Relaxed);
+    }
+
+    fn set_drag_files(&self, on: bool) {
+        DRAG_FILES.store(on, Relaxed);
+        if on {
+            if DRAG_TX.get().is_none() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                if DRAG_TX.set(tx).is_ok()
+                    && std::thread::Builder::new()
+                        .name("tandem-drag".into())
+                        .spawn(move || drag_thread(rx))
+                        .is_err()
+                {
+                    log::error!("cannot start the file-drag helper");
+                }
+            }
+            if let Some(tx) = DRAG_TX.get() {
+                let _ = tx.send(DragReq::Warm);
+            }
+        } else if let Some(tx) = DRAG_TX.get() {
+            let _ = tx.send(DragReq::Stop);
+        }
+    }
+
+    fn drop_dir_at(&self, x: i32, y: i32) -> Option<PathBuf> {
+        if !DRAG_FILES.load(Relaxed) {
+            return None;
+        }
+        let kind = shell_kind_at(x, y, false)?;
+        let (rtx, rrx) = std::sync::mpsc::channel();
+        DRAG_TX
+            .get()?
+            .send(DragReq::Dir { kind, reply: rtx })
+            .ok()?;
+        let reply = rrx
+            .recv_timeout(std::time::Duration::from_millis(2000))
+            .ok()??;
+        let dir = PathBuf::from(reply.strip_prefix("OK|")?);
+        dir.is_dir().then_some(dir)
     }
 
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {

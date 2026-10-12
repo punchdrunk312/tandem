@@ -34,13 +34,7 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn edge(s: &str) -> Option<Edge> {
-    match s {
-        "left" => Some(Edge::Left),
-        "right" => Some(Edge::Right),
-        "top" => Some(Edge::Top),
-        "bottom" => Some(Edge::Bottom),
-        _ => None,
-    }
+    Edge::parse(s)
 }
 
 const HELP: &str = "\

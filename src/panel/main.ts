@@ -23,7 +23,7 @@ function h<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
-const logoSvg = `<svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><defs><clipPath id="lt"><rect x="12" y="15.5" width="30" height="30" rx="7"/></clipPath></defs><rect width="64" height="64" rx="15" fill="#0e1014"/><rect x="21.5" y="19" width="30" height="30" rx="7" fill="#fbbf24"/><rect x="12" y="15.5" width="30" height="30" rx="7" fill="#2dd4bf"/><rect x="21.5" y="19" width="30" height="30" rx="7" fill="#e0f7f4" fill-opacity=".85" clip-path="url(#lt)"/></svg>`;
+const logoSvg = `<img class="logo" src="/brand.png" alt="" width="30" height="30">`;
 
 const fmtBytes = (n: number) => {
   if (n < 1024) return `${n} B`;
@@ -40,7 +40,13 @@ function icon(cls: string): HTMLElement {
   return w;
 }
 
-const SIDES: Side[] = ["left", "right", "top", "bottom"];
+const SIDES: Side[] = ["topleft", "top", "topright", "left", "right", "bottomleft", "bottom", "bottomright"];
+const SIDE_LABEL: Record<Side, string> = {
+  left: "left", right: "right", top: "top", bottom: "bottom",
+  topleft: "top-left", topright: "top-right", bottomleft: "bottom-left", bottomright: "bottom-right",
+};
+const sideLabel = (name: string) => SIDE_LABEL[name.toLowerCase() as Side] ?? name.toLowerCase();
+const isCorner = (name: string) => name.length > 6;
 
 // ---------------------------------------------------------------- state
 let snap: Snapshot | null = null;
@@ -94,7 +100,7 @@ type PageId = "computers" | "files" | "settings" | "bar";
 const PAGES: { id: PageId; label: string; title: string; sub: string; icon: string }[] = [
   { id: "computers", label: "Computers", title: "Computers", sub: "Pair computers and arrange them around this one.", icon: ICONS.computers },
   { id: "files", label: "Files", title: "Files", sub: "Send files and folders to your other computers.", icon: ICONS.files },
-  { id: "settings", label: "Settings", title: "Settings", sub: "How Tandem behaves on this computer.", icon: ICONS.settings },
+  { id: "settings", label: "Settings", title: "Settings", sub: "How CubeCursor behaves on this computer.", icon: ICONS.settings },
   { id: "bar", label: "Top bar", title: "Top bar", sub: "The thin line at the top of your screen.", icon: ICONS.bar },
 ];
 let page: PageId = "computers";
@@ -136,9 +142,11 @@ function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
 }
 
 const side = h("aside", { class: "side" },
-  h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-name" }, "Tandem")),
+  h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-name" }, "CubeCursor")),
   statusEl, nav,
-  h("div", { class: "side-foot" }, h("kbd", {}, "Ctrl+Alt+Z"), h("span", {}, "control bar")));
+  h("div", { class: "side-foot" },
+    h("div", { class: "foot-row" }, h("kbd", {}, "Ctrl+Alt+Z"), h("span", {}, "control bar")),
+    h("button", { class: "link", onclick: () => startTour() }, "Show the tour")));
 app.append(side, content);
 side.querySelector(".brand-logo")!.innerHTML = logoSvg; // static, trusted markup
 go(page);
@@ -205,7 +213,7 @@ function pairSection(s: Snapshot, heading: string): Node[] {
       h("div", {}, h("div", { class: "muted" }, "This computer's code"), h("div", { class: "code" }, s.pairing_code)),
       h("button", { class: "link", onclick: () => call("new_code") }, "New code")),
     h("p", { class: "muted", style: "margin-top:10px" },
-      "On the other computer, open Tandem, find this computer under Nearby and type this code. You only do this once."),
+      "On the other computer, open CubeCursor, find this computer under Nearby and type this code. You only do this once."),
   ];
 
   const isLive = (id: string) => s.paired.some((p) => p.id === id && p.connected);
@@ -233,7 +241,7 @@ function pairSection(s: Snapshot, heading: string): Node[] {
       h("button", { onclick: () => call("connect_known", { id: p.id }) }, "Try connect")));
   }
   if (!nearby.length && !paired.length) {
-    list.append(h("div", { class: "muted" }, "Looking for computers running Tandem on this network…"));
+    list.append(h("div", { class: "muted" }, "Looking for computers running CubeCursor on this network…"));
   }
   out.push(h("h2", { style: "margin-top:18px" }, "Nearby"), list);
 
@@ -245,7 +253,7 @@ function pairSection(s: Snapshot, heading: string): Node[] {
   return out;
 }
 
-const MAX_COMPUTERS = 4;
+const MAX_COMPUTERS = 8;
 
 function renderStage(s: Snapshot) {
   const live = s.paired.filter((p) => p.connected);
@@ -260,7 +268,7 @@ function renderStage(s: Snapshot) {
       : "Push your cursor through the screen edge to cross over. Copy and paste works between both.";
     const rows = live.map((p) =>
       h("div", { class: "peer" },
-        h("div", { class: "grow" }, h("div", { class: "name" }, p.name), h("small", {}, `on your ${p.side.toLowerCase()}${p.id === s.control_peer ? " · in control" : ""}`)),
+        h("div", { class: "grow" }, h("div", { class: "name" }, p.name), h("small", {}, `on your ${sideLabel(p.side)}${p.id === s.control_peer ? " · in control" : ""}`)),
         h("button", { class: "primary", onclick: () => call("engage", { peerId: p.id }) }, "Jump"),
         h("button", { class: "danger", onclick: () => call("disconnect", { peerId: p.id }) }, "Disconnect")));
     const out: Node[] = [
@@ -308,7 +316,7 @@ function renderLayout(s: Snapshot) {
         class: `cell slot at-${sd}`,
         disabled: !held,
         onclick: () => { const id = held; held = null; if (id) call("set_side", { peerId: id, side: sd }); keys.layout = ""; renderLayout(snap!); },
-      }, held ? `Put it ${sd}` : "Empty");
+      }, held ? `Put it here` : SIDE_LABEL[sd]);
     });
     const live = s.paired.filter((p) => p.connected);
     return [
@@ -317,8 +325,8 @@ function renderLayout(s: Snapshot) {
       h("p", { class: "muted", style: "margin-top:10px" },
         heldPeer
           ? `Now click an empty side — or another computer to swap places with ${heldPeer.name}.`
-          : "Click a computer to pick it up, then click the side it should be on."),
-      ...live.map((p) => h("p", { class: "muted", style: "margin-top:4px" }, `Push the cursor through the ${p.side.toLowerCase()} edge to reach ${p.name}.`)),
+          : "Click a computer to pick it up, then click where it should sit. Corners work too — push into the corner to reach a diagonal computer."),
+      ...live.map((p) => h("p", { class: "muted", style: "margin-top:4px" }, `Push the cursor into the ${sideLabel(p.side)} ${isCorner(p.side) ? "corner" : "edge"} to reach ${p.name}.`)),
     ];
   });
 }
@@ -348,7 +356,7 @@ function renderFiles(s: Snapshot) {
         h("div", { class: "row", style: "justify-content:center;margin-top:10px" },
           h("button", { disabled: !connected, onclick: () => call("pick_and_send", { peerId: sendTo || undefined }) }, "Choose files…"),
           h("button", { onclick: () => call("open_downloads") }, "Open received folder"))),
-      h("p", { class: "muted", style: "margin-top:8px" }, "Tip: copy files in Explorer (Ctrl+C) and paste them on the other computer (Ctrl+V) — no dragging needed."),
+      h("p", { class: "muted", style: "margin-top:8px" }, "Tip: drag a file from Explorer or the desktop right through the screen edge, or copy it (Ctrl+C) and paste on the other computer (Ctrl+V)."),
     ];
     if (s.transfers.length) {
       const list = h("div", { class: "stack", style: "margin-top:14px" });
@@ -391,12 +399,13 @@ function seg<T extends string | number>(opts: readonly (readonly [T, string])[],
 
 let autostart = false;
 function renderSettings(s: Snapshot) {
-  update(settings, "settings", [s.device_name, s.clipboard_sync, s.game_mode, s.switch_delay_ms, autostart], () => {
+  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.game_mode, s.switch_delay_ms, autostart], () => {
     const name = h("input", { type: "text", class: "name-in", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
     return [
       h("h2", {}, "General"),
       setting("Computer name", "Shown to your other computers. Applies after a restart.", name),
       setting("Share clipboard", "Text, images and copied files follow you between computers.", switchEl(s.clipboard_sync, (v) => call("set_clipboard_sync", { on: v }))),
+      setting("Drag files across", "Pick a file up in Explorer or on the desktop, push it through the edge and let go on the other computer.", switchEl(s.drag_files, (v) => call("set_drag_files", { on: v }))),
       setting("Game mode", "Don't switch computers while a full-screen app is open.", switchEl(s.game_mode, (v) => call("set_game_mode", { on: v }))),
       setting("Edge delay", "How long to hold at the screen edge before switching.",
         seg([[0, "Instant"], [250, "¼ s"], [500, "½ s"], [1000, "1 s"]] as const, s.switch_delay_ms as 0 | 250 | 500 | 1000, (ms) => call("set_switch_delay", { ms }))),
@@ -437,7 +446,7 @@ function renderAdmin() {
     } }, elev.elevated ? "Running as administrator" : elevBusy || "Restart as administrator");
     return [
       h("h2", {}, "Admin windows"),
-      setting("Control admin windows", "Installers, setup wizards and “Run as administrator” apps ignore the mouse and keyboard unless Tandem runs as administrator too. Do this on the computer you control.", restart),
+      setting("Control admin windows", "Installers, setup wizards and “Run as administrator” apps ignore the mouse and keyboard unless CubeCursor runs as administrator too. Do this on the computer you control.", restart),
       setting("Always start as administrator", elev.elevated ? "Starts with Windows without asking each time." : "Restart as administrator first.",
         switchEl(elev.autostart, async (on) => {
           try {
@@ -450,8 +459,8 @@ function renderAdmin() {
         })),
       ...(elevError ? [h("div", { class: "err", role: "alert" }, elevError)] : []),
       h("div", { class: "note" }, h("span", {}, elev.elevated
-        ? "In administrator mode, Windows doesn't let you drag files from Explorer onto Tandem, and “Send with Tandem” won't reach it. Use “Choose files…” or copy and paste instead."
-        : "The dimmed “Do you want to allow…” screen can never be controlled by any program. When it appears, Tandem hands the mouse and keyboard back so you can answer it on that computer.")),
+        ? "In administrator mode, Windows doesn't let you drag files from Explorer onto CubeCursor, and “Send with CubeCursor” won't reach it. Use “Choose files…” or copy and paste instead."
+        : "The dimmed “Do you want to allow…” screen can never be controlled by any program. When it appears, CubeCursor hands the mouse and keyboard back so you can answer it on that computer.")),
     ];
   });
 }
@@ -496,7 +505,7 @@ function renderTopBar() {
       h("h2", { style: "margin-top:22px" }, "Shortcuts"),
       setting("Control bar", null, h("kbd", {}, "Ctrl+Alt+Z")),
       setting("Transfer bar", "Open or close the small transfer bar any time.", h("kbd", {}, "Ctrl+Alt+U")),
-      setting("Explorer right-click menu", "Adds “Send with Tandem” to files and folders.", switchEl(shellMenu, (v) => {
+      setting("Explorer right-click menu", "Adds “Send with CubeCursor” to files and folders.", switchEl(shellMenu, (v) => {
         void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });
       })),
       h("div", { class: "note" }, h("span", {}, "To send by drag: pick a file up, press "), h("kbd", {}, "Space"), h("span", {}, ", and drop it on the bar. Let go anywhere else and the bar closes again.")),
@@ -525,3 +534,58 @@ elevState();
 void call<boolean>("shell_menu_get").then((v) => { shellMenu = !!v; renderTopBar(); }).catch(() => {});
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });
 void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });
+
+// ---------------------------------------------------------------- first-launch tour
+const TOUR_KEY = "cubecursor.tour.done";
+interface TourStep { title: string; text: string; art: () => HTMLElement }
+const cursorSvg = `<svg viewBox="0 0 24 24" class="art-cursor"><path d="M5 3l14 8-6 2-2 6z" fill="#12202c" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+function artHtml(html: string): HTMLElement {
+  const w = h("div", { class: "art" });
+  w.innerHTML = html; // static, trusted markup
+  return w;
+}
+const TOUR: TourStep[] = [
+  { title: "Meet CubeCursor", text: "One mouse and keyboard for all your Windows PCs. Move your cursor off the edge of one screen and it appears on the next computer.",
+    art: () => artHtml(`<img class="art-bob" src="/brand.png" alt="">`) },
+  { title: "Pair once, with a code", text: "Open CubeCursor on the other PC. It shows up under Nearby — type the 6-digit code from this one. That's the only setup, and the link is encrypted.",
+    art: () => artHtml(`<div class="art-keys"><kbd>8</kbd><kbd>0</kbd><kbd>2</kbd><kbd>-</kbd><kbd>7</kbd><kbd>7</kbd><kbd>1</kbd></div>`) },
+  { title: "Arrange them like your desk", text: "Pick a computer up in the layout map and put it where it really sits — left, right, above, below, or in a corner for a diagonal. Up to eight computers around this one.",
+    art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
+  { title: "Drag files across", text: "Pick up a file or folder in Explorer or on the desktop, push it through the edge, and let go on the other computer. It lands in the folder under your cursor. Ctrl+C and Ctrl+V work between computers too.",
+    art: () => artHtml(`<div class="art-file"></div>${cursorSvg}`) },
+  { title: "Handy keys", text: "Ctrl+Alt+Z opens the control bar on the screen your cursor is on. If anything ever feels stuck, press Scroll Lock and your mouse comes straight back.",
+    art: () => artHtml(`<div class="art-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Z</kbd></div>`) },
+];
+let tourStep = 0;
+const tour = h("div", { id: "tour", role: "dialog", "aria-modal": "true", "aria-label": "Welcome tour" });
+document.body.append(tour);
+
+function endTour() {
+  tour.classList.remove("show");
+  try { localStorage.setItem(TOUR_KEY, "1"); } catch { /* storage unavailable */ }
+}
+function renderTour() {
+  const st = TOUR[tourStep];
+  const last = tourStep === TOUR.length - 1;
+  const art = h("div", { class: "tour-art" });
+  art.append(st.art());
+  tour.replaceChildren(
+    h("div", { class: "tour-card" },
+      art,
+      h("div", { class: "tour-body tour-step", key: tourStep }, h("h3", {}, st.title), h("p", {}, st.text)),
+      h("div", { class: "tour-foot" },
+        h("div", { class: "dots" }, ...TOUR.map((_, i) => h("i", { class: i === tourStep ? "on" : "" }))),
+        last ? null : h("button", { class: "link", onclick: endTour }, "Skip"),
+        tourStep > 0 ? h("button", { onclick: () => { tourStep--; renderTour(); } }, "Back") : null,
+        h("button", { class: "primary", onclick: () => { if (last) endTour(); else { tourStep++; renderTour(); } } }, last ? "Get started" : "Next"))));
+}
+function startTour() {
+  tourStep = 0;
+  renderTour();
+  tour.classList.add("show");
+  go("computers");
+}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tour.classList.contains("show")) endTour(); });
+try {
+  if (!localStorage.getItem(TOUR_KEY)) startTour();
+} catch { /* storage unavailable: skip the tour rather than show it every time */ }

@@ -134,6 +134,47 @@ pub fn unique_name(dir: &Path, name: &str) -> String {
     unreachable!()
 }
 
+/// Moves received files (and folders) into `dir`, never overwriting: a clash gets a
+/// `name (1)` style name. Falls back to copy-and-delete across drives.
+pub fn move_into(paths: &[PathBuf], dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut staging: Option<PathBuf> = None;
+    for p in paths {
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if staging.is_none() {
+            staging = p.parent().map(Path::to_path_buf);
+        }
+        let target = dir.join(unique_name(dir, name));
+        if std::fs::rename(p, &target).is_err() {
+            copy_tree(p, &target)?;
+            if p.is_dir() {
+                std::fs::remove_dir_all(p)?;
+            } else {
+                std::fs::remove_file(p)?;
+            }
+        }
+    }
+    if let Some(s) = staging {
+        let _ = std::fs::remove_dir(&s); // only if now empty
+    }
+    Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            copy_tree(&e.path(), &to.join(e.file_name()))?;
+        }
+    } else {
+        std::fs::copy(from, to)?;
+    }
+    Ok(())
+}
+
 /// Sender side of a file connection. Returns the offer id (if the request was
 /// read) together with the outcome.
 pub async fn serve<R, W>(

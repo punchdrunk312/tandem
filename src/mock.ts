@@ -17,8 +17,9 @@ const base: Snapshot = {
   nearby: [],
   transfers: [],
   clipboard_sync: true,
-    game_mode: true,
-    switch_delay_ms: 0,
+  game_mode: true,
+  drag_files: true,
+  switch_delay_ms: 0,
   error: null,
   notice: null,
 };
@@ -36,7 +37,8 @@ if (scenario === "pair") {
       ? [
           { id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true },
           { id: "n3", name: "Laptop", side: "Left", connected: true, nearby: true },
-          { id: "n4", name: "Mac-mini", side: "Top", connected: true, nearby: true },
+          { id: "n4", name: "Office-PC", side: "Top", connected: true, nearby: true },
+          { id: "n5", name: "Gaming-PC", side: "TopRight", connected: true, nearby: true },
         ]
       : [{ id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true }],
   };
@@ -44,7 +46,7 @@ if (scenario === "pair") {
 if (flags.includes("xfer")) {
   state.transfers = [
     { id: 1, name: "holiday-photos", direction: "out", bytes: 48_000_000, total: 120_000_000, state: "active", message: "", path: null, peer: "Studio-PC" },
-    { id: 2, name: "invoice.pdf", direction: "in", bytes: 220_000, total: 220_000, state: "done", message: "", path: "C:\\Users\\me\\Downloads\\Tandem", peer: "Studio-PC" },
+    { id: 2, name: "invoice.pdf", direction: "in", bytes: 220_000, total: 220_000, state: "done", message: "", path: "C:\\Users\\me\\Downloads\\CubeCursor", peer: "Studio-PC" },
   ];
 }
 const listeners: ((s: Snapshot) => void)[] = [];
@@ -82,7 +84,9 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       return structuredClone(state);
     case "set_side": {
       const s = String(args?.side);
-      state.paired = state.paired.map((p) => ({ ...p, side: (s[0].toUpperCase() + s.slice(1)) as never }));
+      const names: Record<string, string> = { topleft: "TopLeft", topright: "TopRight", bottomleft: "BottomLeft", bottomright: "BottomRight" };
+      const name = names[s] ?? s[0].toUpperCase() + s.slice(1);
+      state.paired = state.paired.map((p) => (p.id === args?.peerId ? { ...p, side: name as never } : p));
       push();
       return;
     }
@@ -109,6 +113,10 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       return;
     case "set_switch_delay":
       state.switch_delay_ms = Number(args?.ms ?? 0);
+      push();
+      return;
+    case "set_drag_files":
+      state.drag_files = !!args?.on;
       push();
       return;
     case "set_clipboard_sync":

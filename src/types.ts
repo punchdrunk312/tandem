@@ -1,4 +1,6 @@
-export type Side = "left" | "right" | "top" | "bottom";
+export type Side = "left" | "right" | "top" | "bottom" | "topleft" | "topright" | "bottomleft" | "bottomright";
+/** As the Rust side names them. */
+export type SideName = "Left" | "Right" | "Top" | "Bottom" | "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight";
 export type Control = "offline" | "local" | "remote" | "controlled";
 
 export interface Snapshot {
@@ -11,7 +13,7 @@ export interface Snapshot {
   control_peer: string | null;
   /** One connected computer (the one in control, else the first); see `paired[].connected`. */
   connected: { id: string; name: string } | null;
-  paired: { id: string; name: string; side: "Left" | "Right" | "Top" | "Bottom"; connected: boolean; nearby: boolean }[];
+  paired: { id: string; name: string; side: SideName; connected: boolean; nearby: boolean }[];
   nearby: { id: string; name: string; addr: string; port: number; paired: boolean }[];
   transfers: {
     id: number;
@@ -27,6 +29,8 @@ export interface Snapshot {
   }[];
   clipboard_sync: boolean;
   game_mode: boolean;
+  /** Carry files that are being dragged across the screen edge. */
+  drag_files: boolean;
   switch_delay_ms: number;
   error: string | null;
   /** A short message that clears itself, e.g. why control came back. */

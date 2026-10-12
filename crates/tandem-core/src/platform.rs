@@ -44,6 +44,12 @@ pub enum CaptureEvent {
     /// Windows switched to a protected screen (an admin prompt, the lock screen) that
     /// no program can type into. Whoever has the keyboard must hand it back.
     InputBlocked,
+    /// The user dragged files to a screen edge and the cursor is going over with them.
+    DragCrossed {
+        edge: Edge,
+        frac: f32,
+        paths: Vec<std::path::PathBuf>,
+    },
 }
 
 pub trait Platform: Send + Sync + 'static {
@@ -65,6 +71,13 @@ pub trait Platform: Send + Sync + 'static {
     fn clipboard_set(&self, c: &ClipContent);
     /// Game mode: no edge switching while a full-screen app is in front.
     fn set_game_mode(&self, _on: bool) {}
+    /// Carrying dragged files across the edge (see `CaptureEvent::DragCrossed`).
+    fn set_drag_files(&self, _on: bool) {}
+    /// The folder a file dropped at this point on screen would land in (an Explorer
+    /// window's folder, the desktop), if there is one.
+    fn drop_dir_at(&self, _x: i32, _y: i32) -> Option<std::path::PathBuf> {
+        None
+    }
     /// How long the cursor must keep pushing against the edge before it crosses.
     fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.
