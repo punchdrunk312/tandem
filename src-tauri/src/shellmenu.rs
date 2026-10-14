@@ -2,7 +2,7 @@
 //!
 //! Registered per user (HKCU, no admin rights) through `reg.exe`, so there is nothing
 //! to compile against and nothing to uninstall by hand: switching it off deletes the keys.
-//! Explorer starts `tandem-app.exe --send "<path>"`; the running CubeCursor picks that up
+//! Explorer starts `CubeCursor.exe --send "<path>"`; the running CubeCursor picks that up
 //! through the single-instance hand-over (see `lib.rs`).
 
 #[cfg(windows)]

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CubeCursor",
   "version": "0.1.0",
-  "identifier": "dev.tandem.app",
+  "identifier": "shop.cubecursor.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -74,11 +74,27 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "Share one mouse and keyboard between two computers",
+    "shortDescription": "CubeCursor — one mouse and keyboard for all your Windows PCs",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "uninstallerHeaderImage": "installer/header.bmp",
+        "languages": [
+          "English"
+        ],
+        "compression": "lzma",
+        "startMenuFolder": "CubeCursor"
       }
-    }
-  }
+    },
+    "publisher": "CubeCursor",
+    "homepage": "https://cubecursor.shop",
+    "copyright": "Copyright © 2026 CubeCursor. All rights reserved.",
+    "licenseFile": "installer/EULA.txt",
+    "longDescription": "CubeCursor shares one mouse and keyboard across your Windows PCs over your own network. Move the cursor off the edge of one screen and it appears on the next, with a shared clipboard and drag-and-drop file transfer."
+  },
+  "mainBinaryName": "CubeCursor"
 }

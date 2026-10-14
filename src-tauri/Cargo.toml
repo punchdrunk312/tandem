@@ -1,6 +1,6 @@
 [package]
 name = "tandem-app"
-description = "Tandem — share one mouse and keyboard between two computers"
+description = "CubeCursor — one mouse and keyboard for all your Windows PCs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

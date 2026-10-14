@@ -1,0 +1,36 @@
+CUBECURSOR END USER LICENSE AGREEMENT
+
+Please read this agreement before installing CubeCursor. By installing or using the software you agree to it. If you do not agree, do not install it.
+
+1. LICENSE
+CubeCursor grants you a personal, non-exclusive, non-transferable license to install and use the software on up to 10 Windows computers that you own or use, for as long as you hold a valid license key. The software is licensed, not sold.
+
+2. WHAT YOU MAY NOT DO
+You may not resell, rent, sublicense or redistribute the software or your license key, share your license key with others, or remove any notices from the software. You may not reverse-engineer, decompile or disassemble the software, except to the extent the law allows it despite this restriction.
+
+3. YOUR DATA AND PRIVACY
+CubeCursor works over your own local network. Keyboard and mouse input, clipboard contents and files travel only between your own computers, encrypted with a key derived from the pairing code, and are never sent to us. The only contact with our servers is activating and checking your license key, which sends the key and your computer's name. Our privacy policy at https://cubecursor.shop/privacy explains this in full.
+
+4. ADMINISTRATOR MODE AND INPUT CONTROL
+To share one mouse and keyboard, the software reads and injects input on your computers. It does this only while you are connected to a computer you paired yourself. You are responsible for pairing only computers you trust.
+
+5. UPDATES
+We may offer updates. An update may change or remove features. Computers running different major versions may not be able to connect to each other.
+
+6. NO WARRANTY
+The software is provided "as is", without warranty of any kind, express or implied, including warranties of merchantability, fitness for a particular purpose and non-infringement. We do not promise that it will be error-free or that it will work with every program, game or security product.
+
+7. LIMIT OF LIABILITY
+To the fullest extent the law allows, CubeCursor and its owners are not liable for any indirect, incidental or consequential damages, or for lost data or profits, arising from the use of the software. Our total liability is limited to the price you paid for the license.
+
+8. REFUNDS
+If the software does not work for you, contact us within 30 days of purchase for a full refund.
+
+9. TERMINATION
+This license ends automatically if you break these terms. When it ends you must stop using the software and delete all copies.
+
+10. GENERAL
+This agreement is the whole agreement between you and CubeCursor about the software. If a part of it cannot be enforced, the rest still applies.
+
+Copyright (c) 2026 CubeCursor. All rights reserved.
+Contact: support@cubecursor.shop
