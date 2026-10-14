@@ -16,8 +16,8 @@ fn follow(app: &AppHandle) {
     ) else {
         return;
     };
-    // Just below and to the right of the pointer, so it never covers what you aim at.
-    let _ = win.set_position(PhysicalPosition::new(x as i32 + 6, y as i32 + 14));
+    // Hugging the pointer's tip (the page draws its picture at the window's top-left).
+    let _ = win.set_position(PhysicalPosition::new(x as i32 + 4, y as i32 + 6));
 }
 
 pub fn set(app: &AppHandle, on: bool) {

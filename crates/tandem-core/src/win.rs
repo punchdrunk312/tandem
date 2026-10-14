@@ -98,7 +98,8 @@ enum DragReq {
     Stop,
     Sel {
         seq: u32,
-        kind: ShellKind,
+        x: i32,
+        y: i32,
     },
     Dir {
         kind: ShellKind,
@@ -275,14 +276,22 @@ fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
                     ps = Ps::start();
                 }
             }
-            DragReq::Sel { seq, kind } => {
+            DragReq::Sel { seq, x, y } => {
                 // Explorer changes the selection on press; give it a moment.
                 std::thread::sleep(std::time::Duration::from_millis(80));
                 let held = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 };
                 if !held || DRAG_GEN.load(Relaxed) != seq {
                     continue;
                 }
+                // Looked up here, not in the mouse hook, which must never wait on windows.
+                let Some(kind) = shell_kind_at(x, y, true) else {
+                    continue;
+                };
                 let paths = parse_paths(ask_ps(&mut ps, &format!("SEL {}", kind.arg())));
+                log::info!(
+                    "file drag: {} selected item(s) under the press",
+                    paths.len()
+                );
                 if paths.is_empty() || DRAG_GEN.load(Relaxed) != seq {
                     continue;
                 }
@@ -336,8 +345,12 @@ fn note_left_down(h: &MsLl) {
     if !DRAG_FILES.load(Relaxed) || EDGES.load(Relaxed) == 0 {
         return;
     }
-    if let (Some(tx), Some(kind)) = (DRAG_TX.get(), shell_kind_at(h.x, h.y, true)) {
-        let _ = tx.send(DragReq::Sel { seq, kind });
+    if let Some(tx) = DRAG_TX.get() {
+        let _ = tx.send(DragReq::Sel {
+            seq,
+            x: h.x,
+            y: h.y,
+        });
     }
 }
 

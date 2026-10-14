@@ -515,6 +515,7 @@ function renderTopBar() {
 
 function render(s: Snapshot) {
   snap = s;
+  maybeTour(s);
   renderHeader(s);
   renderStage(s);
   renderLayout(s);
@@ -537,7 +538,7 @@ void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });
 
 // ---------------------------------------------------------------- first-launch tour
 const TOUR_KEY = "cubecursor.tour.done";
-interface TourStep { title: string; text: string; art: () => HTMLElement }
+interface TourStep { title: string; text: string; art: () => HTMLElement; focus?: string }
 const cursorSvg = `<svg viewBox="0 0 24 24" class="art-cursor"><path d="M5 3l14 8-6 2-2 6z" fill="#12202c" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 function artHtml(html: string): HTMLElement {
   const w = h("div", { class: "art" });
@@ -545,27 +546,39 @@ function artHtml(html: string): HTMLElement {
   return w;
 }
 const TOUR: TourStep[] = [
-  { title: "Meet CubeCursor", text: "One mouse and keyboard for all your Windows PCs. Move your cursor off the edge of one screen and it appears on the next computer.",
+  { title: "You're connected!", text: "Nice — your computers are linked. Move your cursor off the edge of one screen and it appears on the other. Here's a 30-second tour of where everything is.",
     art: () => artHtml(`<img class="art-bob" src="/brand.png" alt="">`) },
-  { title: "Pair once, with a code", text: "Open CubeCursor on the other PC. It shows up under Nearby — type the 6-digit code from this one. That's the only setup, and the link is encrypted.",
-    art: () => artHtml(`<div class="art-keys"><kbd>8</kbd><kbd>0</kbd><kbd>2</kbd><kbd>-</kbd><kbd>7</kbd><kbd>7</kbd><kbd>1</kbd></div>`) },
-  { title: "Arrange them like your desk", text: "Pick a computer up in the layout map and put it where it really sits — left, right, above, below, or in a corner for a diagonal. Up to eight computers around this one.",
-    art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
+  { title: "Everything is in this window", text: "Computers lists who is connected and lets you arrange them. Files sends things across. Settings has the switches. Top bar changes the black bar at the top of your screen.",
+    focus: ".nav", art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
+  { title: "Arrange them like your desk", text: "On the Computers page, click a computer in the layout map, then click where it sits — a side, or a corner for a diagonal. Up to eight computers around this one.",
+    focus: ".nav-item[data-page=computers]", art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
   { title: "Drag files across", text: "Pick up a file or folder in Explorer or on the desktop, push it through the edge, and let go on the other computer. It lands in the folder under your cursor. Ctrl+C and Ctrl+V work between computers too.",
     art: () => artHtml(`<div class="art-file"></div>${cursorSvg}`) },
-  { title: "Handy keys", text: "Ctrl+Alt+Z opens the control bar on the screen your cursor is on. If anything ever feels stuck, press Scroll Lock and your mouse comes straight back.",
+  { title: "Find Settings any time", text: "Open the Settings page for sound, edge delay, game mode and more. Closing this window doesn't quit CubeCursor — it keeps running next to the clock, and clicking its icon there brings this window back.",
+    focus: ".nav-item[data-page=settings]", art: () => artHtml(`<div class="art-keys"><kbd>⚙</kbd></div>`) },
+  { title: "Handy keys", text: "Ctrl+Alt+Z opens the control bar on the screen your cursor is on. If anything ever feels stuck, press Scroll Lock and your mouse comes straight back. \"Show the tour\" at the bottom left replays this.",
     art: () => artHtml(`<div class="art-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Z</kbd></div>`) },
 ];
 let tourStep = 0;
 const tour = h("div", { id: "tour", role: "dialog", "aria-modal": "true", "aria-label": "Welcome tour" });
 document.body.append(tour);
 
+function clearFocus() {
+  document.querySelectorAll(".tour-focus").forEach((e) => e.classList.remove("tour-focus"));
+  tour.classList.remove("aside");
+}
 function endTour() {
+  clearFocus();
   tour.classList.remove("show");
   try { localStorage.setItem(TOUR_KEY, "1"); } catch { /* storage unavailable */ }
 }
 function renderTour() {
   const st = TOUR[tourStep];
+  clearFocus();
+  if (st.focus) {
+    document.querySelector(st.focus)?.classList.add("tour-focus");
+    tour.classList.add("aside");
+  }
   const last = tourStep === TOUR.length - 1;
   const art = h("div", { class: "tour-art" });
   art.append(st.art());
@@ -586,6 +599,13 @@ function startTour() {
   go("computers");
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tour.classList.contains("show")) endTour(); });
-try {
-  if (!localStorage.getItem(TOUR_KEY)) startTour();
-} catch { /* storage unavailable: skip the tour rather than show it every time */ }
+// The tour opens once, right after the first successful connection — not at launch, when
+// there is nothing to point at yet. (If storage is unavailable it is simply skipped.)
+let tourArmed = true;
+function maybeTour(s: Snapshot) {
+  if (!tourArmed || !s.connected) return;
+  tourArmed = false;
+  try {
+    if (!localStorage.getItem(TOUR_KEY)) setTimeout(startTour, 1200);
+  } catch { /* storage unavailable */ }
+}

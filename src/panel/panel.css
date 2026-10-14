@@ -250,3 +250,10 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
   .set { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* tour: point at a part of the window while the card moves aside. The dimming is the
+   spotlighted element's own huge shadow, so that element stays bright above it. */
+#tour.aside { justify-content: flex-end; padding-right: 6vw; background: transparent; backdrop-filter: none; }
+.side:has(.tour-focus) { position: relative; z-index: 5; }
+.tour-focus { position: relative; z-index: 60; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 3px var(--teal), 0 0 0 100vmax rgba(18, 32, 44, 0.45); animation: ring 1.6s ease-in-out infinite; }
+@keyframes ring { 50% { box-shadow: 0 0 0 6px var(--teal), 0 0 0 100vmax rgba(18, 32, 44, 0.45); } }

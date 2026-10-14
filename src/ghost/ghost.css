@@ -1,8 +1,8 @@
 /* The picture that follows the cursor while files are being carried across. */
 html, body { margin: 0; background: transparent; overflow: hidden; font: 13px/1.3 system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif; }
-#ghost { display: flex; flex-direction: column; align-items: center; width: 100vw; padding-top: 4px; opacity: 0; transform: scale(0.8) rotate(-4deg); transition: opacity 0.14s, transform 0.2s cubic-bezier(0.3, 1.4, 0.5, 1); }
+#ghost { display: flex; flex-direction: column; align-items: flex-start; width: 100vw; padding: 0 0 0 2px; transform-origin: 14px 0; opacity: 0; transform: scale(0.8) rotate(-4deg); transition: opacity 0.14s, transform 0.2s cubic-bezier(0.3, 1.4, 0.5, 1); }
 #ghost.on { opacity: 1; transform: none; }
-.pic { position: relative; width: 52px; height: 52px; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.35)); }
+.pic { position: relative; width: 40px; height: 40px; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.35)); }
 .pic svg { width: 100%; height: 100%; display: block; }
 .count { position: absolute; right: -6px; top: -4px; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #14b8a6; color: #042b27; font-weight: 700; font-size: 11px; line-height: 20px; text-align: center; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3); }
-.name { margin-top: 4px; max-width: 150px; padding: 2px 8px; border-radius: 6px; background: rgba(18, 32, 44, 0.82); color: #fff; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name { margin-top: 3px; max-width: 128px; padding: 2px 8px; border-radius: 6px; background: rgba(18, 32, 44, 0.82); color: #fff; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
