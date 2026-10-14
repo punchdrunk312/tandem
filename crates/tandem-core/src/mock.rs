@@ -17,6 +17,10 @@ pub struct MockState {
     /// What `drop_dir_at` answers (the folder under the cursor, in a test).
     pub drop_dir: Option<std::path::PathBuf>,
     pub drag_files: bool,
+    /// What `take_drag_files` answers once (the selection under the press, in a test).
+    pub drag_ready: Option<Vec<std::path::PathBuf>>,
+    pub carrying: bool,
+    pub drag_cancels: u32,
 }
 
 pub struct MockPlatform {
@@ -43,6 +47,9 @@ impl MockPlatform {
                 releases: 0,
                 drop_dir: None,
                 drag_files: true,
+                drag_ready: None,
+                carrying: false,
+                drag_cancels: 0,
             }),
             sink: Mutex::new(None),
         })
@@ -70,6 +77,15 @@ impl MockPlatform {
 }
 
 impl Platform for MockPlatform {
+    fn take_drag_files(&self) -> Option<Vec<std::path::PathBuf>> {
+        self.st.lock().unwrap().drag_ready.take()
+    }
+    fn cancel_drag(&self) {
+        self.st.lock().unwrap().drag_cancels += 1;
+    }
+    fn set_carrying(&self, on: bool) {
+        self.st.lock().unwrap().carrying = on;
+    }
     fn set_drag_files(&self, on: bool) {
         self.st.lock().unwrap().drag_files = on;
     }

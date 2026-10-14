@@ -735,3 +735,87 @@ async fn dragging_to_an_edge_with_the_option_off_does_nothing() {
     assert_eq!(b.node.snapshot().control, "local");
     assert!(!a.plat.st.lock().unwrap().capturing, "mouse handed back");
 }
+
+#[tokio::test]
+async fn a_file_picked_up_on_the_second_computer_can_be_dragged_back() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let target = tempfile::tempdir().unwrap();
+    a.plat.st.lock().unwrap().drop_dir = Some(target.path().to_path_buf());
+    let (_keep, file) = make_file("notes.txt", b"from the other pc");
+
+    // A's mouse is on B; the button goes down on a file there, which B's shell reports.
+    a.plat.user_push_edge(Edge::Left, 0.5);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    b.plat.st.lock().unwrap().drag_ready = Some(vec![file]);
+    a.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: true,
+    }));
+    // Drag out through B's right edge, back towards A.
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 5000,
+        dy: 0,
+    }));
+    until("A local again", || a.node.snapshot().control == "local").await;
+    assert_eq!(
+        b.plat.st.lock().unwrap().drag_cancels,
+        1,
+        "the drag on B is ended"
+    );
+    until("file arrived at A", || {
+        std::fs::read_dir(a._tmp.path())
+            .map(|d| {
+                d.flatten().any(|e| {
+                    e.file_name().to_string_lossy().starts_with("carry-")
+                        && std::fs::read_dir(e.path())
+                            .map(|mut x| x.next().is_some())
+                            .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    })
+    .await;
+    assert!(a.node.snapshot().carry.is_some(), "shown under the cursor");
+
+    a.plat.emit(CaptureEvent::LocalLeftUp);
+    until("file dropped on A", || {
+        target.path().join("notes.txt").exists()
+    })
+    .await;
+    assert_eq!(
+        std::fs::read(target.path().join("notes.txt")).unwrap(),
+        b"from the other pc"
+    );
+    until("carry over", || a.node.snapshot().carry.is_none()).await;
+}
+
+#[tokio::test]
+async fn bringing_dragged_files_back_keeps_them_in_hand() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let target = tempfile::tempdir().unwrap();
+    a.plat.st.lock().unwrap().drop_dir = Some(target.path().to_path_buf());
+    let (_keep, file) = make_file("keep.txt", b"still mine");
+    let original = file.clone();
+
+    a.plat.user_drag_to_edge(Edge::Left, 0.5, vec![file]);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    until("B shows the files", || b.node.snapshot().carry.is_some()).await;
+
+    // Still holding the button, the cursor comes back out of B.
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 5000,
+        dy: 0,
+    }));
+    until("A local again", || a.node.snapshot().control == "local").await;
+    until("A shows the files", || a.node.snapshot().carry.is_some()).await;
+    until("B forgot them", || b.node.snapshot().carry.is_none()).await;
+
+    a.plat.emit(CaptureEvent::LocalLeftUp);
+    until("moved on A", || target.path().join("keep.txt").exists()).await;
+    assert!(!original.exists(), "moved, not copied");
+    until("A done", || a.node.snapshot().carry.is_none()).await;
+}

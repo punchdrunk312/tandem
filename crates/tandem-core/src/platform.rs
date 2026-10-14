@@ -50,6 +50,9 @@ pub enum CaptureEvent {
         frac: f32,
         paths: Vec<std::path::PathBuf>,
     },
+    /// The physical left button went up while not swallowing input (the end of a drag
+    /// that came back to this computer).
+    LocalLeftUp,
 }
 
 pub trait Platform: Send + Sync + 'static {
@@ -78,6 +81,14 @@ pub trait Platform: Send + Sync + 'static {
     fn drop_dir_at(&self, _x: i32, _y: i32) -> Option<std::path::PathBuf> {
         None
     }
+    /// The files picked up by the drag in progress (read when its button went down), once.
+    fn take_drag_files(&self) -> Option<Vec<std::path::PathBuf>> {
+        None
+    }
+    /// Ends the drag in progress here without dropping anything.
+    fn cancel_drag(&self) {}
+    /// Files are being carried: pushing against an edge with the button down may cross.
+    fn set_carrying(&self, _on: bool) {}
     /// How long the cursor must keep pushing against the edge before it crosses.
     fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.

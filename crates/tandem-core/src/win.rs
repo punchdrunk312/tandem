@@ -71,6 +71,8 @@ const PUSH_EVENTS: u32 = 4;
 // does not cross; it never affects normal mouse sharing.
 
 static DRAG_FILES: AtomicBool = AtomicBool::new(true);
+/// Files are in hand (see `Platform::set_carrying`): the button may stay down at an edge.
+static CARRYING: AtomicBool = AtomicBool::new(false);
 /// Bumped on every left-button press and release, so a stale answer is never used.
 static DRAG_GEN: AtomicU32 = AtomicU32::new(1);
 /// The press `DRAG_PATHS` belongs to.
@@ -340,17 +342,13 @@ fn shell_kind_at(x: i32, y: i32, items_only: bool) -> Option<ShellKind> {
 }
 
 /// Left button went down: if it is on a file, find out which files (off the hook thread).
-fn note_left_down(h: &MsLl) {
+fn note_left_down(x: i32, y: i32) {
     let seq = DRAG_GEN.fetch_add(1, Relaxed) + 1;
     if !DRAG_FILES.load(Relaxed) || EDGES.load(Relaxed) == 0 {
         return;
     }
     if let Some(tx) = DRAG_TX.get() {
-        let _ = tx.send(DragReq::Sel {
-            seq,
-            x: h.x,
-            y: h.y,
-        });
+        let _ = tx.send(DragReq::Sel { seq, x, y });
     }
 }
 
@@ -581,11 +579,12 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
     let s = vscreen();
     if !CAPTURING.load(Relaxed) {
         if msg == WM_LBUTTONDOWN {
-            note_left_down(h);
+            note_left_down(h.x, h.y);
             return false;
         }
         if msg == WM_LBUTTONUP {
             DRAG_GEN.fetch_add(1, Relaxed);
+            emit(CaptureEvent::LocalLeftUp);
             return false;
         }
         let mask = EDGES.load(Relaxed);
@@ -630,11 +629,12 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             && left
             && !right
             && DRAG_FILES.load(Relaxed)
-            && DRAG_READY_GEN.load(Relaxed) == DRAG_GEN.load(Relaxed)
-            && DRAG_PATHS
-                .try_lock()
-                .map(|p| !p.is_empty())
-                .unwrap_or(false);
+            && (CARRYING.load(Relaxed)
+                || (DRAG_READY_GEN.load(Relaxed) == DRAG_GEN.load(Relaxed)
+                    && DRAG_PATHS
+                        .try_lock()
+                        .map(|p| !p.is_empty())
+                        .unwrap_or(false)));
         let button_down = (left || right) && !carrying;
         if hit == 0 || button_down || GAME_ACTIVE.load(Relaxed) {
             AT_BIT.store(0, Relaxed);
@@ -1167,6 +1167,19 @@ impl Platform for WinPlatform {
                 }
             }
             InputEvent::Button { button, down } => {
+                if *button == Button::Left {
+                    // The other computer's mouse is the one dragging here: our own hook
+                    // never sees injected clicks, so look at what was picked up now.
+                    if *down {
+                        let mut p = POINT::default();
+                        unsafe {
+                            let _ = GetCursorPos(&mut p);
+                        }
+                        note_left_down(p.x, p.y);
+                    } else {
+                        DRAG_GEN.fetch_add(1, Relaxed);
+                    }
+                }
                 let (f, data) = button_flags(*button, *down);
                 send(&[mouse_input(0, 0, data, f)]);
                 let mut p = self.pressed.lock().unwrap();
@@ -1314,6 +1327,23 @@ impl Platform for WinPlatform {
         } else if let Some(tx) = DRAG_TX.get() {
             let _ = tx.send(DragReq::Stop);
         }
+    }
+
+    fn take_drag_files(&self) -> Option<Vec<PathBuf>> {
+        if !DRAG_FILES.load(Relaxed) || DRAG_READY_GEN.load(Relaxed) != DRAG_GEN.load(Relaxed) {
+            return None;
+        }
+        let mut p = DRAG_PATHS.lock().ok()?;
+        let v = std::mem::take(&mut *p);
+        (!v.is_empty()).then_some(v)
+    }
+
+    fn cancel_drag(&self) {
+        cancel_local_drag();
+    }
+
+    fn set_carrying(&self, on: bool) {
+        CARRYING.store(on, Relaxed);
     }
 
     fn drop_dir_at(&self, x: i32, y: i32) -> Option<PathBuf> {

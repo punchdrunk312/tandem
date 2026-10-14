@@ -162,6 +162,24 @@ pub fn move_into(paths: &[PathBuf], dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A drag that stays on one computer: moves `paths` into `dir` (like Explorer does on the
+/// same drive), and copies instead — leaving the originals — when a move is not possible.
+pub fn move_or_copy(paths: &[PathBuf], dir: &Path) -> std::io::Result<()> {
+    for p in paths {
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if dir.starts_with(p) {
+            continue; // a folder dropped into itself
+        }
+        let target = dir.join(unique_name(dir, name));
+        if std::fs::rename(p, &target).is_err() {
+            copy_tree(p, &target)?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     if from.is_dir() {
         std::fs::create_dir_all(to)?;

@@ -599,6 +599,10 @@ impl Node {
             carry: None,
             drops: HashMap::new(),
             early_release: None,
+            held: None,
+            holding_local: false,
+            left_down: false,
+            just_left: None,
             clip: clipboard_worker(sh.platform.clone(), ev_tx.clone()),
         };
         tokio::spawn(actor.run(ev_rx));
@@ -943,6 +947,14 @@ struct Actor {
     /// The button went up before the offer for the files reached us (folder under the
     /// cursor at that moment); applies to the offer that follows in the same crossing.
     early_release: Option<PathBuf>,
+    /// Our own files that went across, while the other computer still has the cursor.
+    held: Option<Held>,
+    /// The cursor came back with `held` still in hand: it shows under the cursor again.
+    holding_local: bool,
+    /// Whether the left button is down, as far as the input we send or receive says.
+    left_down: bool,
+    /// The computer whose cursor just handed control back to us, and when.
+    just_left: Option<(String, Instant)>,
     /// Clipboard reads / writes run on their own thread: the clipboard can be held by
     /// another app for a moment and a big image takes a while to copy, and the actor
     /// that forwards mouse movement must never wait for either.
@@ -950,6 +962,14 @@ struct Actor {
 }
 
 /// Files a computer is carrying over with its mouse, waiting for the button to be let go.
+/// Files picked up on this computer and taken across the edge: if the cursor comes back
+/// with the button still held, they stay in hand and are dropped here.
+struct Held {
+    peer: String,
+    paths: Vec<PathBuf>,
+    view: CarryView,
+}
+
 struct Carry {
     id: u64,
     peer: String,
@@ -1412,11 +1432,22 @@ impl Actor {
                 };
                 if let Some(pid) = target {
                     self.last_peer = Some(pid.clone());
+                    let again = self
+                        .held
+                        .as_ref()
+                        .filter(|h| self.holding_local && h.peer == pid)
+                        .map(|h| h.paths.clone());
+                    self.holding_local = false;
                     self.set_control(Control::Remote {
                         peer: pid.clone(),
                         edge,
                     });
                     self.send_to(&pid, Msg::Enter { edge, frac });
+                    if let Some(paths) = again {
+                        // Still holding the files we brought back: take them over again.
+                        self.build_offer(paths, OfferKind::Carry, pid);
+                    }
+                    self.sync_carry();
                 } else {
                     // Raced with a disconnect or a layout change: give the user their mouse back.
                     let (x, y) = self.center();
@@ -1442,6 +1473,13 @@ impl Actor {
                     });
                     self.send_to(&pid, Msg::Enter { edge, frac });
                     let n = paths.len();
+                    self.left_down = true;
+                    self.held = Some(Held {
+                        peer: pid.clone(),
+                        view: carry_view(&paths),
+                        paths: paths.clone(),
+                    });
+                    self.holding_local = false;
                     self.build_offer(paths, OfferKind::Carry, pid);
                     self.notify(&format!(
                         "Carrying {n} item{} — let go on the other screen to drop",
@@ -1452,7 +1490,22 @@ impl Actor {
                     self.sh.platform.end_capture(x, y);
                 }
             }
+            CaptureEvent::LocalLeftUp => {
+                let was_down = std::mem::replace(&mut self.left_down, false);
+                if self.holding_local {
+                    self.drop_held_locally();
+                } else if let Some(peer) = self.carry.as_ref().map(|c| c.peer.clone()) {
+                    self.on_carry_release(&peer);
+                } else if let Some((peer, at)) = self.just_left.clone() {
+                    // The button went up before the files' offer reached us (only when it
+                    // was held down the whole way back, not for an ordinary click).
+                    if was_down && at.elapsed() < Duration::from_secs(2) {
+                        self.on_carry_release(&peer);
+                    }
+                }
+            }
             CaptureEvent::Input(ev) => {
+                self.track_button(&ev);
                 if let Control::Remote { peer, .. } = &self.control {
                     if let Some(s) = self.sessions.get(peer) {
                         let _ = s.tx.send(Msg::Input(ev));
@@ -1557,8 +1610,14 @@ impl Actor {
             Msg::Enter { edge, frac } => {
                 if self.control == Control::Local {
                     self.carry = None;
-                    self.sync_carry();
                     self.early_release = None;
+                    // Our own files, brought back with the button still down, are in hand again.
+                    self.holding_local =
+                        self.left_down && self.held.as_ref().is_some_and(|h| h.peer == from);
+                    if !self.holding_local {
+                        self.held = None;
+                    }
+                    self.sync_carry();
                     let (x, y) = edge_point(plat.screen(), edge.opposite(), frac);
                     plat.set_cursor(x, y);
                     self.set_control(Control::Controlled {
@@ -1575,7 +1634,21 @@ impl Actor {
                         let (x, y) = edge_point(plat.screen(), edge, frac);
                         plat.end_capture(x, y);
                         self.set_control(Control::Local);
+                        self.just_left = Some((from.to_string(), Instant::now()));
+                        self.holding_local =
+                            self.left_down && self.held.as_ref().is_some_and(|h| h.peer == from);
+                        if !self.holding_local {
+                            self.held = None;
+                        }
+                        self.sync_carry();
                     }
+                }
+            }
+            Msg::CarryEnd => {
+                if self.held.as_ref().is_some_and(|h| h.peer == from) {
+                    self.held = None;
+                    self.holding_local = false;
+                    self.sync_carry();
                 }
             }
             Msg::Release => match self.control.clone() {
@@ -1595,13 +1668,18 @@ impl Actor {
                     Control::Controlled { peer, ret } if peer == from => *ret,
                     _ => return,
                 };
+                self.track_button(&ev);
                 plat.inject(&ev);
                 if let InputEvent::Button {
                     button: Button::Left,
                     down: false,
                 } = ev
                 {
-                    self.on_carry_release(from);
+                    if self.holding_local {
+                        self.drop_held_locally();
+                    } else {
+                        self.on_carry_release(from);
+                    }
                 }
                 if let InputEvent::MouseMove { dx, dy } = ev {
                     let s = plat.screen();
@@ -1633,9 +1711,37 @@ impl Actor {
                             .then_some(0.5),
                     };
                     if let Some(frac) = leaving {
+                        // Leaving with files in hand (picked up on this computer): take
+                        // them to the other one and stop the drag here.
+                        let files = if self.left_down
+                            && !self.holding_local
+                            && self.sh.persisted.lock().unwrap().drag_files
+                        {
+                            plat.take_drag_files().filter(|p| !p.is_empty())
+                        } else {
+                            None
+                        };
+                        let mine = self.holding_local;
                         plat.release_all();
+                        if files.is_some() {
+                            plat.cancel_drag();
+                        }
                         self.set_control(Control::Local);
                         self.send_to(from, Msg::Leave { frac });
+                        if mine {
+                            // Our own files go back over with the cursor.
+                            self.holding_local = false;
+                            self.sync_carry();
+                        }
+                        if let Some(paths) = files {
+                            self.held = Some(Held {
+                                peer: from.to_string(),
+                                view: carry_view(&paths),
+                                paths: paths.clone(),
+                            });
+                            self.build_offer(paths, OfferKind::Carry, from.to_string());
+                            self.notify("Carrying files — let go on the other screen to drop");
+                        }
                     }
                 }
             }
@@ -2038,7 +2144,15 @@ impl Actor {
         }
         if kind == OfferKind::Carry {
             // Only while that computer's mouse is the one on our screen.
-            let ours = matches!(&self.control, Control::Controlled { peer, .. } if peer == from);
+            let ours = match &self.control {
+                Control::Controlled { peer, .. } => peer == from,
+                // The other computer's cursor just came back to us with files in hand.
+                Control::Local => self
+                    .just_left
+                    .as_ref()
+                    .is_some_and(|(p, at)| p == from && at.elapsed() < Duration::from_secs(3)),
+                Control::Remote { .. } => false,
+            };
             if !ours || !per.drag_files {
                 return;
             }
@@ -2117,6 +2231,9 @@ impl Actor {
         };
         let taken = self.carry.take();
         self.sync_carry();
+        if taken.as_ref().is_some_and(|c| c.peer == from) {
+            self.send_to(from, Msg::CarryEnd);
+        }
         match taken {
             Some(c) if c.peer == from => {
                 let dir = dir();
@@ -2160,9 +2277,60 @@ impl Actor {
         }
     }
 
+    /// Keeps `left_down` in step with the mouse input we forward or receive. A new press
+    /// starts a new gesture, so files held from an earlier one are forgotten.
+    fn track_button(&mut self, ev: &InputEvent) {
+        if let InputEvent::Button {
+            button: Button::Left,
+            down,
+        } = ev
+        {
+            self.left_down = *down;
+            if *down {
+                self.held = None;
+                self.holding_local = false;
+                self.sync_carry();
+            } else if !self.holding_local {
+                self.held = None;
+            }
+        }
+    }
+
+    /// The button went up while our own files were in hand: they land in the folder under
+    /// the cursor (nothing happens when that is the folder they came from).
+    fn drop_held_locally(&mut self) {
+        let held = self.held.take();
+        self.holding_local = false;
+        self.sync_carry();
+        let Some(h) = held else { return };
+        let (x, y) = self.sh.platform.cursor_pos();
+        let Some(dir) = self.sh.platform.drop_dir_at(x, y) else {
+            return;
+        };
+        if h.paths.first().and_then(|p| p.parent()) == Some(dir.as_path()) {
+            return;
+        }
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.notify(&format!("Dropped into {name}"));
+        tokio::task::spawn_blocking(move || {
+            let _ = files::move_or_copy(&h.paths, &dir);
+        });
+    }
+
     /// Tells the UI whether files are being carried to this computer right now.
     fn sync_carry(&self) {
-        self.sh.status.lock().unwrap().carry = self.carry.as_ref().map(|c| c.view.clone());
+        let view = self.carry.as_ref().map(|c| c.view.clone()).or_else(|| {
+            if self.holding_local {
+                self.held.as_ref().map(|h| h.view.clone())
+            } else {
+                None
+            }
+        });
+        self.sh.platform.set_carrying(view.is_some());
+        self.sh.status.lock().unwrap().carry = view;
         self.sh.publish();
     }
 
@@ -2176,6 +2344,19 @@ impl Actor {
             }
             self.sh.remove_transfer(c.id, "in");
         }
+    }
+}
+
+/// What the little picture under the cursor shows for these files.
+fn carry_view(paths: &[PathBuf]) -> CarryView {
+    let first = paths.first();
+    CarryView {
+        name: first
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        count: paths.len(),
+        folder: first.is_some_and(|p| p.is_dir()),
     }
 }
 
