@@ -10,7 +10,7 @@ use crate::platform::*;
 use crate::proto::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -600,6 +600,7 @@ impl Node {
             drops: HashMap::new(),
             early_release: None,
             held: None,
+            called_off: HashSet::new(),
             holding_local: false,
             left_down: false,
             just_left: None,
@@ -949,6 +950,8 @@ struct Actor {
     early_release: Option<PathBuf>,
     /// Our own files that went across, while the other computer still has the cursor.
     held: Option<Held>,
+    /// Offers called off before their file list was even built.
+    called_off: HashSet<u64>,
     /// The cursor came back with `held` still in hand: it shows under the cursor again.
     holding_local: bool,
     /// Whether the left button is down, as far as the input we send or receive says.
@@ -966,6 +969,8 @@ struct Actor {
 /// with the button still held, they stay in hand and are dropped here.
 struct Held {
     peer: String,
+    /// The offer that carries these files (cancelled when the cursor comes back).
+    offer: u64,
     paths: Vec<PathBuf>,
     view: CarryView,
 }
@@ -976,6 +981,10 @@ struct Carry {
     view: CarryView,
     /// Set once everything has arrived (in a staging folder).
     staged: Option<Vec<PathBuf>>,
+    /// The download, so it can be stopped if the cursor goes back.
+    fetch: Option<tokio::task::AbortHandle>,
+    /// Where it is being downloaded to.
+    dir: Option<PathBuf>,
 }
 
 enum ClipJob {
@@ -1445,7 +1454,10 @@ impl Actor {
                     self.send_to(&pid, Msg::Enter { edge, frac });
                     if let Some(paths) = again {
                         // Still holding the files we brought back: take them over again.
-                        self.build_offer(paths, OfferKind::Carry, pid);
+                        let offer = self.build_offer(paths, OfferKind::Carry, pid);
+                        if let Some(h) = self.held.as_mut() {
+                            h.offer = offer;
+                        }
                     }
                     self.sync_carry();
                 } else {
@@ -1474,13 +1486,14 @@ impl Actor {
                     self.send_to(&pid, Msg::Enter { edge, frac });
                     let n = paths.len();
                     self.left_down = true;
+                    let offer = self.build_offer(paths.clone(), OfferKind::Carry, pid.clone());
                     self.held = Some(Held {
                         peer: pid.clone(),
+                        offer,
                         view: carry_view(&paths),
-                        paths: paths.clone(),
+                        paths,
                     });
                     self.holding_local = false;
-                    self.build_offer(paths, OfferKind::Carry, pid);
                     self.notify(&format!(
                         "Carrying {n} item{} — let go on the other screen to drop",
                         if n == 1 { "" } else { "s" }
@@ -1513,6 +1526,8 @@ impl Actor {
                 }
             }
             CaptureEvent::Failsafe => {
+                self.cancel_outgoing();
+                self.held = None;
                 if let Control::Remote { peer, .. } = self.control.clone() {
                     self.set_control(Control::Local);
                     self.send_to(&peer, Msg::Release);
@@ -1637,6 +1652,8 @@ impl Actor {
                         self.just_left = Some((from.to_string(), Instant::now()));
                         self.holding_local =
                             self.left_down && self.held.as_ref().is_some_and(|h| h.peer == from);
+                        // The files never left: stop sending them over.
+                        self.cancel_outgoing();
                         if !self.holding_local {
                             self.held = None;
                         }
@@ -1656,6 +1673,8 @@ impl Actor {
                     let (x, y) = self.center();
                     plat.end_capture(x, y);
                     self.set_control(Control::Local);
+                    self.cancel_outgoing();
+                    self.held = None;
                 }
                 Control::Controlled { peer, .. } if peer == from => {
                     plat.release_all();
@@ -1734,12 +1753,14 @@ impl Actor {
                             self.sync_carry();
                         }
                         if let Some(paths) = files {
+                            let offer =
+                                self.build_offer(paths.clone(), OfferKind::Carry, from.to_string());
                             self.held = Some(Held {
                                 peer: from.to_string(),
+                                offer,
                                 view: carry_view(&paths),
-                                paths: paths.clone(),
+                                paths,
                             });
-                            self.build_offer(paths, OfferKind::Carry, from.to_string());
                             self.notify("Carrying files — let go on the other screen to drop");
                         }
                     }
@@ -2025,7 +2046,7 @@ impl Actor {
         }
     }
 
-    fn build_offer(&mut self, paths: Vec<PathBuf>, kind: OfferKind, target: String) {
+    fn build_offer(&mut self, paths: Vec<PathBuf>, kind: OfferKind, target: String) -> u64 {
         let id: u64 = rand::thread_rng().gen();
         let ev_tx = self.ev_tx.clone();
         tokio::task::spawn_blocking(move || {
@@ -2037,6 +2058,7 @@ impl Actor {
                 res,
             });
         });
+        id
     }
 
     fn on_offer_built(
@@ -2046,6 +2068,9 @@ impl Actor {
         target: String,
         res: std::io::Result<Offer>,
     ) {
+        if self.called_off.remove(&id) {
+            return;
+        }
         let offer = match res {
             Ok(o) if !o.items.is_empty() => Arc::new(o),
             Ok(_) => return,
@@ -2167,6 +2192,8 @@ impl Actor {
                         .is_some_and(|i| i.is_dir && !i.path.contains('/')),
                 },
                 staged: None,
+                fetch: None,
+                dir: None,
             });
             self.sync_carry();
             self.notify("Files incoming — let go of the mouse where you want them");
@@ -2195,7 +2222,8 @@ impl Actor {
             }
         }
         let (sh, ev_tx) = (self.sh.clone(), self.ev_tx.clone());
-        tokio::spawn(async move {
+        let fetch_dest = dest.clone();
+        let task = tokio::spawn(async move {
             let res = fetch_files(&sh, addr, key, id, &items, &dest).await;
             match res {
                 Ok(paths) => {
@@ -2217,6 +2245,12 @@ impl Actor {
                 Err(e) => sh.transfer_finish(id, "in", Err(e.to_string())),
             }
         });
+        if kind == OfferKind::Carry {
+            if let Some(c) = self.carry.as_mut().filter(|c| c.id == id) {
+                c.fetch = Some(task.abort_handle());
+                c.dir = Some(fetch_dest);
+            }
+        }
     }
 
     /// The left button went up while `from`'s mouse is on our screen: if it was carrying
@@ -2275,6 +2309,20 @@ impl Actor {
                 self.sh.remove_transfer(id, "in");
             }
         }
+    }
+
+    /// Calls off the files we sent over with a drag: the transfer row goes away and the
+    /// offer can no longer be fetched.
+    fn cancel_outgoing(&mut self) {
+        let Some(id) = self.held.as_ref().map(|h| h.offer) else {
+            return;
+        };
+        self.called_off.insert(id);
+        if self.called_off.len() > 32 {
+            self.called_off.clear();
+        }
+        self.sh.offers.lock().unwrap().retain(|(i, _)| *i != id);
+        self.sh.remove_transfer(id, "out");
     }
 
     /// Keeps `left_down` in step with the mouse input we forward or receive. A new press
@@ -2339,6 +2387,14 @@ impl Actor {
         let taken = self.carry.take();
         self.sync_carry();
         if let Some(c) = taken {
+            if let Some(f) = &c.fetch {
+                f.abort(); // stop downloading what nobody wants any more
+            }
+            if let (None, Some(dir)) = (&c.staged, c.dir.clone()) {
+                tokio::task::spawn_blocking(move || {
+                    let _ = std::fs::remove_dir_all(dir);
+                });
+            }
             if let Some(paths) = &c.staged {
                 discard_staged(paths);
             }

@@ -819,3 +819,56 @@ async fn bringing_dragged_files_back_keeps_them_in_hand() {
     assert!(!original.exists(), "moved, not copied");
     until("A done", || a.node.snapshot().carry.is_none()).await;
 }
+
+#[tokio::test]
+async fn bringing_files_back_stops_the_upload() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    // Big enough that it is still going when the cursor turns round.
+    let (_keep, file) = make_file("big.bin", &vec![1u8; 40_000_000]);
+
+    a.plat.user_drag_to_edge(Edge::Left, 0.5, vec![file]);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    until("A shows the upload", || {
+        a.node
+            .snapshot()
+            .transfers
+            .iter()
+            .any(|t| t.direction == "out")
+    })
+    .await;
+    // Back out of B without letting go.
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 5000,
+        dy: 0,
+    }));
+    until("A local again", || a.node.snapshot().control == "local").await;
+    until("upload row gone on A", || {
+        a.node
+            .snapshot()
+            .transfers
+            .iter()
+            .all(|t| t.direction != "out")
+    })
+    .await;
+    until("download row gone on B", || {
+        b.node
+            .snapshot()
+            .transfers
+            .iter()
+            .all(|t| t.direction != "in")
+    })
+    .await;
+    until("B staging cleaned", || {
+        std::fs::read_dir(b._tmp.path())
+            .unwrap()
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("carry-"))
+    })
+    .await;
+    // And nothing reappears as a failure.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(a.node.snapshot().transfers.is_empty());
+    assert!(b.node.snapshot().transfers.is_empty());
+}
