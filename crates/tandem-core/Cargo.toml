@@ -17,6 +17,7 @@ sha2 = "0.10"
 rand = "0.8"
 log = "0.4"
 thiserror = "2"
+png = { version = "0.17", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

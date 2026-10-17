@@ -31,6 +31,7 @@ export interface Snapshot {
   game_mode: boolean;
   /** Carry files that are being dragged across the screen edge. */
   drag_files: boolean;
+  move_apps: boolean;
   /** Files being carried to this computer right now (shown under the cursor). */
   carry: { name: string; count: number; folder: boolean } | null;
   switch_delay_ms: number;

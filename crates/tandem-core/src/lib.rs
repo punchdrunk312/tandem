@@ -2,6 +2,7 @@ pub mod channel;
 pub mod discovery;
 pub mod error;
 pub mod files;
+pub mod image;
 pub mod mock;
 pub mod node;
 pub mod platform;

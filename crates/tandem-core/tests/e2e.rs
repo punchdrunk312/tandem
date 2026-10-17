@@ -872,3 +872,163 @@ async fn bringing_files_back_stops_the_upload() {
     assert!(a.node.snapshot().transfers.is_empty());
     assert!(b.node.snapshot().transfers.is_empty());
 }
+
+fn app(exe: &str, url: Option<&str>) -> AppRef {
+    AppRef {
+        name: exe.trim_end_matches(".exe").to_string(),
+        exe: exe.to_string(),
+        url: url.map(Into::into),
+    }
+}
+
+/// B's right edge leads to A. Both have the option on unless a test says otherwise.
+async fn pair_with_apps(a_on: bool, b_on: bool) -> (Side, Side) {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    a.node.set_move_apps(a_on);
+    b.node.set_move_apps(b_on);
+    until("options reach the platforms", || {
+        a.plat.st.lock().unwrap().move_apps == a_on && b.plat.st.lock().unwrap().move_apps == b_on
+    })
+    .await;
+    pair(&a, &b).await;
+    (a, b)
+}
+
+#[tokio::test]
+async fn dragging_discord_across_opens_it_there_and_closes_it_here() {
+    let (a, b) = pair_with_apps(true, true).await;
+    b.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
+    until("A opened it", || {
+        !a.plat.st.lock().unwrap().launched.is_empty()
+    })
+    .await;
+    assert_eq!(a.plat.st.lock().unwrap().confirm_asked.len(), 1);
+    assert_eq!(a.plat.st.lock().unwrap().confirm_asked[0].0, "PC-B");
+    until("B closed its own copy", || {
+        !b.plat.st.lock().unwrap().closed.is_empty()
+    })
+    .await;
+    assert_eq!(b.plat.st.lock().unwrap().closed[0].exe, "Discord.exe");
+    // The cursor came over like any crossing.
+    assert_eq!(a.node.snapshot().control, "controlled");
+}
+
+#[tokio::test]
+async fn a_program_that_is_not_on_the_safe_list_stays_open_here() {
+    let (a, b) = pair_with_apps(true, true).await;
+    b.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("notepad.exe", None));
+    until("A opened it", || {
+        !a.plat.st.lock().unwrap().launched.is_empty()
+    })
+    .await;
+    until("B said so", || {
+        b.node
+            .snapshot()
+            .notice
+            .map(|n| n.contains("still open here"))
+            .unwrap_or(false)
+    })
+    .await;
+    assert!(b.plat.st.lock().unwrap().closed.is_empty());
+}
+
+#[tokio::test]
+async fn a_browser_window_sends_its_page_and_is_left_alone() {
+    let (a, b) = pair_with_apps(true, true).await;
+    let page = "https://www.youtube.com/watch?v=abc&t=42";
+    b.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("chrome.exe", Some(page)));
+    until("A opened the page", || {
+        !a.plat.st.lock().unwrap().launched.is_empty()
+    })
+    .await;
+    assert_eq!(
+        a.plat.st.lock().unwrap().launched[0].url.as_deref(),
+        Some(page)
+    );
+    until("B reported it", || {
+        b.node
+            .snapshot()
+            .notice
+            .map(|n| n.contains("Opened the page"))
+            .unwrap_or(false)
+    })
+    .await;
+    assert!(
+        b.plat.st.lock().unwrap().closed.is_empty(),
+        "never closes a browser"
+    );
+}
+
+#[tokio::test]
+async fn saying_no_on_the_other_computer_keeps_the_app_where_it_is() {
+    let (a, b) = pair_with_apps(true, true).await;
+    a.plat.st.lock().unwrap().confirm_move = false;
+    b.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
+    until("B told it was declined", || {
+        b.node
+            .snapshot()
+            .notice
+            .map(|n| n.contains("said no"))
+            .unwrap_or(false)
+    })
+    .await;
+    assert!(a.plat.st.lock().unwrap().launched.is_empty());
+    assert!(b.plat.st.lock().unwrap().closed.is_empty());
+}
+
+#[tokio::test]
+async fn an_app_that_cannot_be_found_there_is_not_closed_here() {
+    let (a, b) = pair_with_apps(true, true).await;
+    a.plat.st.lock().unwrap().launch_error = Some("Discord isn't installed on PC-A".into());
+    b.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
+    until("B told why", || {
+        b.node
+            .snapshot()
+            .notice
+            .map(|n| n.contains("isn't installed"))
+            .unwrap_or(false)
+    })
+    .await;
+    assert!(b.plat.st.lock().unwrap().closed.is_empty());
+}
+
+#[tokio::test]
+async fn the_option_must_be_on_at_both_ends_and_refuses_dangerous_names() {
+    // Off on the receiving side: nothing opens, nothing closes, and the sender is told.
+    let (a, b) = pair_with_apps(false, true).await;
+    b.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
+    until("B told it is off there", || {
+        b.node
+            .snapshot()
+            .notice
+            .map(|n| n.contains("turned off"))
+            .unwrap_or(false)
+    })
+    .await;
+    assert!(a.plat.st.lock().unwrap().launched.is_empty());
+    assert!(a.plat.st.lock().unwrap().confirm_asked.is_empty());
+    assert!(b.plat.st.lock().unwrap().closed.is_empty());
+
+    // Off on the sending side: the drag is not a hand-off at all.
+    let (a2, b2) = pair_with_apps(true, false).await;
+    b2.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(a2.plat.st.lock().unwrap().confirm_asked.is_empty());
+    assert_eq!(a2.node.snapshot().control, "local");
+
+    // A shell is never moved, even when both ends are willing.
+    let (a3, b3) = pair_with_apps(true, true).await;
+    b3.plat
+        .user_drag_app_to_edge(Edge::Right, 0.5, app("cmd.exe", None));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(a3.plat.st.lock().unwrap().launched.is_empty());
+    assert!(a3.plat.st.lock().unwrap().confirm_asked.is_empty());
+}

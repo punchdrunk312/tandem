@@ -53,6 +53,13 @@ pub enum CaptureEvent {
     /// The physical left button went up while not swallowing input (the end of a drag
     /// that came back to this computer).
     LocalLeftUp,
+    /// A program's window was dragged (Shift held) to a screen edge and the cursor is
+    /// going over: open that program on the next computer.
+    AppDragCrossed {
+        edge: Edge,
+        frac: f32,
+        app: crate::proto::AppRef,
+    },
 }
 
 pub trait Platform: Send + Sync + 'static {
@@ -89,6 +96,19 @@ pub trait Platform: Send + Sync + 'static {
     fn cancel_drag(&self) {}
     /// Files are being carried: pushing against an edge with the button down may cross.
     fn set_carrying(&self, _on: bool) {}
+    /// Moving programs by dragging their window across the edge (off by default).
+    fn set_move_apps(&self, _on: bool) {}
+    /// Ask the person at this computer whether to take `app` over from `from`.
+    /// Blocks until they answer, so it is only called off the engine's thread.
+    fn confirm_move_app(&self, _from: &str, _app: &crate::proto::AppRef) -> bool {
+        false
+    }
+    /// Open `app` here (blocking). Errors are shown to the person on the other computer.
+    fn launch_app(&self, _app: &crate::proto::AppRef) -> Result<(), String> {
+        Err("Moving apps isn't supported on this computer".into())
+    }
+    /// Close `app` here (it has opened on the other computer).
+    fn close_app(&self, _app: &crate::proto::AppRef) {}
     /// How long the cursor must keep pushing against the edge before it crosses.
     fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.

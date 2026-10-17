@@ -236,6 +236,11 @@ fn set_drag_files(st: State<'_, AppState>, on: bool) {
 }
 
 #[tauri::command]
+fn set_move_apps(st: State<'_, AppState>, on: bool) {
+    st.node.set_move_apps(on);
+}
+
+#[tauri::command]
 fn set_game_mode(st: State<'_, AppState>, on: bool) {
     st.node.set_game_mode(on);
 }
@@ -944,6 +949,7 @@ pub fn run() {
             log_js,
             set_game_mode,
             set_drag_files,
+            set_move_apps,
             ghost_show,
             set_switch_delay,
             ui_get,

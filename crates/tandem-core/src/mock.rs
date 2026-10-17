@@ -1,7 +1,7 @@
 //! In-memory `Platform` for tests (and for developing the UI without hooks).
 
 use crate::platform::*;
-use crate::proto::{Edge, InputEvent};
+use crate::proto::{AppRef, Edge, InputEvent};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -21,6 +21,13 @@ pub struct MockState {
     pub drag_ready: Option<Vec<std::path::PathBuf>>,
     pub carrying: bool,
     pub drag_cancels: u32,
+    pub move_apps: bool,
+    /// What `confirm_move_app` answers (the person at this computer, in a test).
+    pub confirm_move: bool,
+    pub confirm_asked: Vec<(String, AppRef)>,
+    pub launched: Vec<AppRef>,
+    pub launch_error: Option<String>,
+    pub closed: Vec<AppRef>,
 }
 
 pub struct MockPlatform {
@@ -50,6 +57,12 @@ impl MockPlatform {
                 drag_ready: None,
                 carrying: false,
                 drag_cancels: 0,
+                move_apps: false,
+                confirm_move: true,
+                confirm_asked: vec![],
+                launched: vec![],
+                launch_error: None,
+                closed: vec![],
             }),
             sink: Mutex::new(None),
         })
@@ -69,6 +82,11 @@ impl MockPlatform {
         self.st.lock().unwrap().capturing = true;
         self.emit(CaptureEvent::DragCrossed { edge, frac, paths });
     }
+    /// Simulate dragging a program's window to a screen edge and over to the next computer.
+    pub fn user_drag_app_to_edge(&self, edge: Edge, frac: f32, app: AppRef) {
+        self.st.lock().unwrap().capturing = true;
+        self.emit(CaptureEvent::AppDragCrossed { edge, frac, app });
+    }
     /// Simulate the hook noticing the cursor pushing through an edge.
     pub fn user_push_edge(&self, edge: Edge, frac: f32) {
         self.st.lock().unwrap().capturing = true;
@@ -77,6 +95,25 @@ impl MockPlatform {
 }
 
 impl Platform for MockPlatform {
+    fn set_move_apps(&self, on: bool) {
+        self.st.lock().unwrap().move_apps = on;
+    }
+    fn confirm_move_app(&self, from: &str, app: &AppRef) -> bool {
+        let mut s = self.st.lock().unwrap();
+        s.confirm_asked.push((from.to_string(), app.clone()));
+        s.confirm_move
+    }
+    fn launch_app(&self, app: &AppRef) -> Result<(), String> {
+        let mut s = self.st.lock().unwrap();
+        if let Some(e) = s.launch_error.clone() {
+            return Err(e);
+        }
+        s.launched.push(app.clone());
+        Ok(())
+    }
+    fn close_app(&self, app: &AppRef) {
+        self.st.lock().unwrap().closed.push(app.clone());
+    }
     fn take_drag_files(&self) -> Option<Vec<std::path::PathBuf>> {
         self.st.lock().unwrap().drag_ready.take()
     }

@@ -19,6 +19,7 @@ const base: Snapshot = {
   clipboard_sync: true,
   game_mode: true,
   drag_files: true,
+  move_apps: false,
   carry: null,
   switch_delay_ms: 0,
   error: null,
@@ -114,6 +115,10 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       return;
     case "set_switch_delay":
       state.switch_delay_ms = Number(args?.ms ?? 0);
+      push();
+      return;
+    case "set_move_apps":
+      state.move_apps = !!args?.on;
       push();
       return;
     case "set_drag_files":
