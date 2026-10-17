@@ -23,7 +23,7 @@ fn i32le(b: &[u8], at: usize) -> Option<i32> {
 /// Handles 24 and 32 bits per pixel, which is what screenshots and "copy image" give.
 pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     let header = u32le(dib, 0)? as usize;
-    if header < 40 || header > 124 || dib.len() < header {
+    if !(40..=124).contains(&header) || dib.len() < header {
         return None;
     }
     let width = i32le(dib, 4)?;
@@ -71,8 +71,8 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     // Many apps leave the fourth byte at zero: that means "no transparency", not
     // "invisible".
     if !any_alpha {
-        for px in rgba.chunks_exact_mut(4) {
-            px[3] = 255;
+        for i in (3..rgba.len()).step_by(4) {
+            rgba[i] = 255;
         }
     }
     encode_png(&rgba, w as u32, h as u32)
@@ -158,7 +158,9 @@ mod tests {
     }
 
     fn pixels(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
-        let mut r = png::Decoder::new(Cursor::new(png_bytes)).read_info().unwrap();
+        let mut r = png::Decoder::new(Cursor::new(png_bytes))
+            .read_info()
+            .unwrap();
         let mut buf = vec![0u8; r.output_buffer_size()];
         let i = r.next_frame(&mut buf).unwrap();
         (i.width, i.height, buf[..i.buffer_size()].to_vec())
