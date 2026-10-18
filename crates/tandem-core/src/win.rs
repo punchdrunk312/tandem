@@ -99,9 +99,6 @@ static APP_GEN: AtomicU32 = AtomicU32::new(0);
 /// 0 = nothing to move, 1 = a browser's page is still being read, 2 = ready.
 static APP_STATE: AtomicU8 = AtomicU8::new(0);
 static APP_DRAG: Mutex<Option<AppRef>> = Mutex::new(None);
-/// How long a dragged window must be held against the edge before it is offered, so
-/// snapping a window to the side of the screen never triggers it by accident.
-const APP_DWELL_US: u64 = 500_000;
 
 #[derive(Clone, Copy)]
 enum ShellKind {
@@ -1097,10 +1094,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             return false;
         }
         // Optional hold-to-cross delay, to stop accidental switches.
-        let mut delay_us = SWITCH_DELAY_MS.load(Relaxed) as u64 * 1000;
-        if app_wanted {
-            delay_us = delay_us.max(APP_DWELL_US);
-        }
+        let delay_us = SWITCH_DELAY_MS.load(Relaxed) as u64 * 1000;
         if now.saturating_sub(EDGE_SINCE_US.load(Relaxed)) < delay_us {
             return false;
         }
@@ -1124,8 +1118,9 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             _ => (Edge::Bottom, fx),
         };
         if app_wanted {
-            // Not a crossing: the cursor stays here. Put the dragged window back (Esc ends
-            // its move) and offer it to the computer on that side.
+            // Not a crossing: the cursor stays here. Esc ends the window's move, which also
+            // dismisses the snap preview Windows shows at a screen edge, and puts the window
+            // back where it was. Then the program is offered to the computer on that side.
             let app = APP_DRAG.try_lock().ok().and_then(|mut a| a.take());
             APP_STATE.store(0, Relaxed);
             DRAG_GEN.fetch_add(1, Relaxed);
