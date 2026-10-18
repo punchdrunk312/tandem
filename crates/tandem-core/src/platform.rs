@@ -53,6 +53,13 @@ pub enum CaptureEvent {
     /// The physical left button went up while not swallowing input (the end of a drag
     /// that came back to this computer).
     LocalLeftUp,
+    /// A program's window (or a browser tab) was dragged to a connected edge and held
+    /// there: offer to move that program to the computer on that side. The platform has
+    /// already put the dragged window back; the cursor stays on this computer.
+    AppDragged {
+        edge: Edge,
+        app: crate::proto::AppRef,
+    },
 }
 
 pub trait Platform: Send + Sync + 'static {
@@ -91,11 +98,6 @@ pub trait Platform: Send + Sync + 'static {
     fn set_carrying(&self, _on: bool) {}
     /// Moving programs by dragging their window across the edge (off by default).
     fn set_move_apps(&self, _on: bool) {}
-    /// The program whose window is in front right now (for a browser, with its page).
-    /// Can take a moment, so it is only called off the engine's thread.
-    fn foreground_app(&self) -> Result<crate::proto::AppRef, String> {
-        Err("Moving apps isn't supported on this computer".into())
-    }
     /// Ask the person here whether to move `app` over to the computer called `to`.
     /// Blocks until they answer, so it is only called off the engine's thread.
     fn confirm_move_app(&self, _to: &str, _app: &crate::proto::AppRef) -> bool {

@@ -895,10 +895,9 @@ async fn pair_with_apps(a_on: bool, b_on: bool) -> (Side, Side) {
     (a, b)
 }
 
-/// The person at B has `window` in front and presses the hand-off hotkey towards A.
+/// The person at B has `window` in front and drags it against the edge that leads to A.
 fn hand_off(b: &Side, window: AppRef) {
-    b.plat.st.lock().unwrap().foreground = Ok(window);
-    b.node.send_foreground_app(Edge::Right);
+    b.plat.user_drag_app_to_edge(Edge::Right, window);
 }
 
 fn notice_has(s: &Side, text: &'static str) -> bool {
@@ -996,10 +995,10 @@ async fn the_option_must_be_on_at_both_ends_and_dangerous_names_are_refused() {
     assert!(a.plat.st.lock().unwrap().launched.is_empty());
     assert!(b.plat.st.lock().unwrap().closed.is_empty());
 
-    // Off on the sending side: the hotkey only says how to turn it on.
+    // Off on the sending side: dragging does nothing at all.
     let (a2, b2) = pair_with_apps(true, false).await;
     hand_off(&b2, app("Discord.exe", None));
-    until("B2 is told", || notice_has(&b2, "Turn on")).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(b2.plat.st.lock().unwrap().confirm_asked.is_empty());
     assert!(a2.plat.st.lock().unwrap().launched.is_empty());
 
@@ -1012,15 +1011,11 @@ async fn the_option_must_be_on_at_both_ends_and_dangerous_names_are_refused() {
 }
 
 #[tokio::test]
-async fn a_side_with_no_computer_and_an_unreadable_window_only_show_messages() {
+async fn a_side_with_no_computer_only_shows_a_message() {
     let (a, b) = pair_with_apps(true, true).await;
     // Nothing is set on B's left.
-    b.plat.st.lock().unwrap().foreground = Ok(app("Discord.exe", None));
-    b.node.send_foreground_app(Edge::Left);
+    b.plat
+        .user_drag_app_to_edge(Edge::Left, app("Discord.exe", None));
     until("B told", || notice_has(&b, "No computer is set")).await;
-    // The window in front cannot be read (a browser that would not show its page).
-    b.plat.st.lock().unwrap().foreground = Err("Couldn't read the page address".into());
-    b.node.send_foreground_app(Edge::Right);
-    until("B told why", || notice_has(&b, "Couldn't read")).await;
     assert!(a.plat.st.lock().unwrap().launched.is_empty());
 }

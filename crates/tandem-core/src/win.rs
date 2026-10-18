@@ -86,10 +86,22 @@ static DRAG_TX: OnceLock<std::sync::mpsc::Sender<DragReq>> = OnceLock::new();
 
 // ------------------------------------------------------ moving a program across
 //
-// A hotkey (Ctrl+Alt+Shift+arrow, set up by the app) hands the window in front over to
-// the computer on that side: the other computer opens its own copy and, for chat and
-// music programs, this one closes. Nothing here runs in the mouse hook, so it cannot
-// disturb normal mouse sharing; anything that goes wrong is just a message.
+// Dragging a program's window (or a browser tab) against an edge that leads to another
+// computer and holding it there for a moment offers to move the program: the other
+// computer opens its own copy and, for chat and music programs, this one closes. Which
+// program is under the press is worked out the instant the button goes down, off the
+// hook thread; a browser's page is read from its address bar while the drag is still on
+// its way. Anything that goes wrong just means nothing is offered.
+
+static MOVE_APPS: AtomicBool = AtomicBool::new(false);
+/// The press the program under it was worked out for.
+static APP_GEN: AtomicU32 = AtomicU32::new(0);
+/// 0 = nothing to move, 1 = a browser's page is still being read, 2 = ready.
+static APP_STATE: AtomicU8 = AtomicU8::new(0);
+static APP_DRAG: Mutex<Option<AppRef>> = Mutex::new(None);
+/// How long a dragged window must be held against the edge before it is offered, so
+/// snapping a window to the side of the screen never triggers it by accident.
+const APP_DWELL_US: u64 = 500_000;
 
 #[derive(Clone, Copy)]
 enum ShellKind {
@@ -114,9 +126,10 @@ enum DragReq {
         x: i32,
         y: i32,
     },
-    Url {
-        hwnd: isize,
-        reply: std::sync::mpsc::Sender<Option<String>>,
+    App {
+        seq: u32,
+        x: i32,
+        y: i32,
     },
     Dir {
         kind: ShellKind,
@@ -343,18 +356,47 @@ fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
                     DRAG_READY_GEN.store(seq, Relaxed);
                 }
             }
-            DragReq::Url { hwnd, reply } => {
-                // The page open in that browser window, read from its address bar. The
-                // first look can come back empty while the browser wakes its accessibility.
-                let mut url = None;
-                for _ in 0..2 {
-                    url = parse_url(ask_ps_for(&mut ps, &format!("URL {hwnd}"), 4000));
-                    if url.is_some() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(200));
+            DragReq::App { seq, x, y } => {
+                if DRAG_GEN.load(Relaxed) != seq {
+                    continue;
                 }
-                let _ = reply.send(url.map(|u| format!("OK|{u}")));
+                let Some((hwnd, mut app)) = window_app_at(x, y) else {
+                    continue;
+                };
+                let still = || DRAG_GEN.load(Relaxed) == seq;
+                if app.is_browser() {
+                    // Wait for the page to be read before the edge may offer anything.
+                    APP_GEN.store(seq, Relaxed);
+                    APP_STATE.store(1, Relaxed);
+                    let mut url = None;
+                    for _ in 0..2 {
+                        url = parse_url(ask_ps_for(&mut ps, &format!("URL {hwnd}"), 4000));
+                        if url.is_some() || !still() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    if url.is_none() {
+                        log::info!("app drag: could not read the page address of {}", app.exe);
+                        if APP_GEN.load(Relaxed) == seq {
+                            APP_STATE.store(0, Relaxed);
+                        }
+                        continue;
+                    }
+                    app.url = url;
+                }
+                if !app.is_sane() || !still() {
+                    if APP_GEN.load(Relaxed) == seq {
+                        APP_STATE.store(0, Relaxed);
+                    }
+                    continue;
+                }
+                log::info!("app drag: {} ready", app.exe);
+                if let Ok(mut a) = APP_DRAG.lock() {
+                    *a = Some(app);
+                    APP_GEN.store(seq, Relaxed);
+                    APP_STATE.store(2, Relaxed);
+                }
             }
             DragReq::Dir { kind, reply } => {
                 let r = ask_ps(&mut ps, &format!("DIR {}", kind.arg()));
@@ -411,12 +453,20 @@ fn ensure_drag_thread() {
 
 /// Opens a file, a shortcut or a web address the way double-clicking it would.
 fn shell_open(target: &str) -> Result<(), ()> {
+    shell_open_with(target, None)
+}
+
+fn shell_open_with(target: &str, params: Option<&str>) -> Result<(), ()> {
     unsafe {
+        let params = params.map(HSTRING::from);
         let r = ShellExecuteW(
             None,
             w!("open"),
             &HSTRING::from(target),
-            PCWSTR::null(),
+            match &params {
+                Some(p) => PCWSTR(p.as_ptr()),
+                None => PCWSTR::null(),
+            },
             PCWSTR::null(),
             SW_SHOWNORMAL,
         );
@@ -428,21 +478,37 @@ fn shell_open(target: &str) -> Result<(), ()> {
     }
 }
 
-/// Where to start `app` from on this computer: its Start menu shortcut, else the
-/// shortcut that points at its program, else the program itself if Windows has it
-/// registered. Never anything the sender chose beyond the program's name.
-fn find_program(app: &AppRef) -> Option<String> {
+/// How to start a program: the file to open and, for a few, the arguments.
+struct Launch {
+    file: String,
+    params: Option<String>,
+}
+
+fn env_dir(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var).map(PathBuf::from)
+}
+
+/// Where to start `app` from on this computer. Only ever looks for the program by its
+/// file name (already checked to be plain), in the places programs are installed:
+/// Start menu shortcuts, the usual install folders (including the self-updating
+/// per-user kind Discord uses), Windows' list of installed apps (which also has Store
+/// apps), and programs Windows has registered by name.
+fn find_program(app: &AppRef) -> Option<Launch> {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
+    let exe = app.exe.clone();
+    let stem = exe[..exe.len() - 4].to_string();
+    let lower = stem.to_ascii_lowercase();
+
+    // 1. A Start menu shortcut named like the program ("Discord.lnk", "Discord Inc/Discord.lnk").
     let mut menus: Vec<PathBuf> = Vec::new();
     for var in ["ProgramData", "APPDATA"] {
-        if let Some(base) = std::env::var_os(var) {
-            menus.push(PathBuf::from(base).join(r"Microsoft\Windows\Start Menu\Programs"));
+        if let Some(base) = env_dir(var) {
+            menus.push(base.join(r"Microsoft\Windows\Start Menu\Programs"));
         }
     }
-    // 1. A shortcut named like the program ("Discord.lnk").
-    let wanted = app.name.to_ascii_lowercase();
-    let mut budget = 6000usize;
+    let mut budget = 8000usize;
+    let mut loose: Option<String> = None;
     let mut stack: Vec<(PathBuf, u8)> = menus.iter().cloned().map(|m| (m, 0)).collect();
     while let Some((dir, depth)) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
@@ -458,25 +524,73 @@ fn find_program(app: &AppRef) -> Option<String> {
                 if depth < 3 {
                     stack.push((path, depth + 1));
                 }
-            } else if path
+                continue;
+            }
+            if !path
                 .extension()
                 .is_some_and(|x| x.eq_ignore_ascii_case("lnk"))
-                && path
-                    .file_stem()
-                    .is_some_and(|n| n.to_string_lossy().to_ascii_lowercase() == wanted)
             {
-                return Some(path.to_string_lossy().into_owned());
+                continue;
+            }
+            let name = path
+                .file_stem()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            if name == lower {
+                return Some(Launch {
+                    file: path.to_string_lossy().into_owned(),
+                    params: None,
+                });
+            }
+            if loose.is_none() && name.starts_with(&lower) && !name.contains("uninstall") {
+                loose = Some(path.to_string_lossy().into_owned());
             }
         }
     }
-    // 2. A shortcut whose target is that program (the file name was checked to be plain).
+    if let Some(file) = loose {
+        return Some(Launch { file, params: None });
+    }
+
+    // 2. The usual install folders. Squirrel apps (Discord, older Slack and Teams) live in
+    //    %LOCALAPPDATA%\<Name> and are started through their Update.exe.
+    let local = env_dir("LOCALAPPDATA");
+    if let Some(local) = &local {
+        let update = local.join(&stem).join("Update.exe");
+        if update.is_file() {
+            return Some(Launch {
+                file: update.to_string_lossy().into_owned(),
+                params: Some(format!("--processStart {exe}")),
+            });
+        }
+    }
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if let Some(l) = &local {
+        bases.push(l.clone());
+        bases.push(l.join("Programs"));
+    }
+    for var in ["APPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+        bases.extend(env_dir(var));
+    }
+    for base in bases {
+        let direct = base.join(&stem).join(&exe);
+        if direct.is_file() {
+            return Some(Launch {
+                file: direct.to_string_lossy().into_owned(),
+                params: None,
+            });
+        }
+    }
+
+    // 3. One PowerShell look: a shortcut that points at the program, else Windows' list of
+    //    installed apps (classic and Store) by name.
     let script = format!(
         "$w = New-Object -ComObject WScript.Shell; \
          $d = @($env:ProgramData, $env:APPDATA) | % {{ Join-Path $_ 'Microsoft\\Windows\\Start Menu\\Programs' }}; \
          foreach ($f in Get-ChildItem $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {{ \
            $t = $w.CreateShortcut($f.FullName).TargetPath; \
-           if ($t -and ([IO.Path]::GetFileName($t) -ieq '{}')) {{ $f.FullName; break }} }}",
-        app.exe
+           if ($t -and ([IO.Path]::GetFileName($t) -ieq '{exe}')) {{ 'LNK|' + $f.FullName; exit }} }}; \
+         $a = Get-StartApps | ? {{ $_.Name -like '*{stem}*' }} | select -First 1; \
+         if ($a) {{ 'APP|' + $a.AppID }}"
     );
     if let Ok(mut child) = Command::new("powershell.exe")
         .args([
@@ -496,7 +610,7 @@ fn find_program(app: &AppRef) -> Option<String> {
         loop {
             match child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) if start.elapsed() < std::time::Duration::from_secs(10) => {
+                Ok(None) if start.elapsed() < std::time::Duration::from_secs(15) => {
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 _ => {
@@ -510,17 +624,35 @@ fn find_program(app: &AppRef) -> Option<String> {
             let mut text = String::new();
             let _ = out.read_to_string(&mut text);
             let line = text.lines().next().unwrap_or("").trim().to_string();
-            if line.to_ascii_lowercase().ends_with(".lnk") && std::path::Path::new(&line).exists() {
-                return Some(line);
+            if let Some(p) = line.strip_prefix("LNK|") {
+                if std::path::Path::new(p).exists() {
+                    return Some(Launch {
+                        file: p.to_string(),
+                        params: None,
+                    });
+                }
+            } else if let Some(id) = line.strip_prefix("APP|") {
+                let ok = !id.is_empty()
+                    && id.chars().all(|c| {
+                        c.is_ascii_alphanumeric()
+                            || matches!(
+                                c,
+                                '.' | '_' | '!' | '{' | '}' | '-' | '\\' | ':' | ' ' | '(' | ')'
+                            )
+                    });
+                if ok {
+                    return Some(Launch {
+                        file: format!(r"shell:AppsFolder\{id}"),
+                        params: None,
+                    });
+                }
             }
         }
     }
-    // 3. Registered with Windows ("App Paths"): the bare file name starts it.
+
+    // 4. Registered with Windows by name ("App Paths"): the bare file name starts it.
     for root in ["HKCU", "HKLM"] {
-        let key = format!(
-            r"{root}\Software\Microsoft\Windows\CurrentVersion\App Paths\{}",
-            app.exe
-        );
+        let key = format!(r"{root}\Software\Microsoft\Windows\CurrentVersion\App Paths\{exe}");
         let found = Command::new("reg")
             .args(["query", &key, "/ve"])
             .creation_flags(0x0800_0000)
@@ -528,9 +660,13 @@ fn find_program(app: &AppRef) -> Option<String> {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if found {
-            return Some(app.exe.clone());
+            return Some(Launch {
+                file: exe,
+                params: None,
+            });
         }
     }
+    log::info!("app move: no way found to start {}", app.exe);
     None
 }
 
@@ -581,14 +717,63 @@ fn app_of_window(root: HWND) -> Option<AppRef> {
     }
 }
 
-/// Left button went down: if it is on a file, find out which files (off the hook thread).
+/// The program whose window is being grabbed at this point, if it may be moved: the
+/// title bar of any program, or for a browser the strip along the top that holds the
+/// tabs and the empty space beside them. Only the press is looked at here; nothing
+/// happens unless the drag then reaches an edge.
+fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
+    unsafe {
+        let hwnd = WindowFromPoint(POINT { x, y });
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        if root.0.is_null() {
+            return None;
+        }
+        let app = app_of_window(root)?;
+        let mut grabbed = false;
+        if app.is_browser() {
+            let mut r = RECT::default();
+            if GetWindowRect(root, &mut r).is_ok() {
+                let strip = 48 * GetDpiForWindow(root) as i32 / 96;
+                grabbed = y >= r.top && y - r.top <= strip;
+            }
+        }
+        if !grabbed {
+            let mut hit: usize = 0;
+            let lparam =
+                LPARAM((((y as u32 & 0xFFFF) << 16) | (x as u32 & 0xFFFF)) as i32 as isize);
+            let ok = SendMessageTimeoutW(
+                root,
+                WM_NCHITTEST,
+                WPARAM(0),
+                lparam,
+                SMTO_ABORTIFHUNG,
+                100,
+                Some(&mut hit),
+            );
+            grabbed = ok.0 != 0 && hit == 2; // HTCAPTION
+        }
+        grabbed.then_some((root.0 as isize, app))
+    }
+}
+
+/// Left button went down: if it is on a file, find out which files; if it is on a
+/// program's title bar, which program (both off the hook thread).
 fn note_left_down(x: i32, y: i32) {
     let seq = DRAG_GEN.fetch_add(1, Relaxed) + 1;
-    if !DRAG_FILES.load(Relaxed) || EDGES.load(Relaxed) == 0 {
+    APP_STATE.store(0, Relaxed);
+    if EDGES.load(Relaxed) == 0 {
         return;
     }
     if let Some(tx) = DRAG_TX.get() {
-        let _ = tx.send(DragReq::Sel { seq, x, y });
+        if DRAG_FILES.load(Relaxed) {
+            let _ = tx.send(DragReq::Sel { seq, x, y });
+        }
+        if MOVE_APPS.load(Relaxed) {
+            let _ = tx.send(DragReq::App { seq, x, y });
+        }
     }
 }
 
@@ -877,6 +1062,21 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
                         .try_lock()
                         .map(|p| !p.is_empty())
                         .unwrap_or(false)));
+        // A program's window held by its title bar (or a browser tab) may be held at the
+        // edge with the button down too, to offer it to the other computer.
+        let files_carry = carrying;
+        let app_state = if hit != 0
+            && left
+            && !right
+            && MOVE_APPS.load(Relaxed)
+            && APP_GEN.load(Relaxed) == DRAG_GEN.load(Relaxed)
+        {
+            APP_STATE.load(Relaxed)
+        } else {
+            0
+        };
+        let app_wanted = !files_carry && (app_state == 1 || app_state == 2);
+        let carrying = files_carry || app_wanted;
         let button_down = (left || right) && !carrying;
         if hit == 0 || button_down || GAME_ACTIVE.load(Relaxed) {
             AT_BIT.store(0, Relaxed);
@@ -897,8 +1097,15 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             return false;
         }
         // Optional hold-to-cross delay, to stop accidental switches.
-        let delay_us = SWITCH_DELAY_MS.load(Relaxed) as u64 * 1000;
+        let mut delay_us = SWITCH_DELAY_MS.load(Relaxed) as u64 * 1000;
+        if app_wanted {
+            delay_us = delay_us.max(APP_DWELL_US);
+        }
         if now.saturating_sub(EDGE_SINCE_US.load(Relaxed)) < delay_us {
+            return false;
+        }
+        // The browser's page is still being read: keep holding, the next move asks again.
+        if app_wanted && app_state == 1 {
             return false;
         }
         AT_BIT.store(0, Relaxed);
@@ -916,6 +1123,18 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             EDGE_BR => (Edge::BottomRight, 0.5),
             _ => (Edge::Bottom, fx),
         };
+        if app_wanted {
+            // Not a crossing: the cursor stays here. Put the dragged window back (Esc ends
+            // its move) and offer it to the computer on that side.
+            let app = APP_DRAG.try_lock().ok().and_then(|mut a| a.take());
+            APP_STATE.store(0, Relaxed);
+            DRAG_GEN.fetch_add(1, Relaxed);
+            if let Some(app) = app {
+                emit(CaptureEvent::AppDragged { edge, app });
+                cancel_local_drag();
+            }
+            return false;
+        }
         reset_move();
         set_capturing(true);
         let (cx, cy) = s.center();
@@ -1568,54 +1787,14 @@ impl Platform for WinPlatform {
     }
 
     fn set_move_apps(&self, on: bool) {
+        MOVE_APPS.store(on, Relaxed);
+        APP_STATE.store(0, Relaxed);
         if on {
             ensure_drag_thread();
-            // Starts the helper now, so the first hand-off does not wait for it.
+            // Starts the helper now, so the first browser page is read quickly.
             if let Some(tx) = DRAG_TX.get() {
                 let _ = tx.send(DragReq::Warm);
             }
-        }
-    }
-
-    fn foreground_app(&self) -> Result<AppRef, String> {
-        let root = unsafe {
-            let fg = GetForegroundWindow();
-            if fg.0.is_null() {
-                return Err("No window is in front".into());
-            }
-            GetAncestor(fg, GA_ROOT)
-        };
-        let Some(mut app) = (!root.0.is_null()).then(|| app_of_window(root)).flatten() else {
-            return Err("That window can't be moved".into());
-        };
-        if app.is_browser() {
-            let (rtx, rrx) = std::sync::mpsc::channel();
-            DRAG_TX
-                .get()
-                .ok_or("Moving apps isn't ready yet")?
-                .send(DragReq::Url {
-                    hwnd: root.0 as isize,
-                    reply: rtx,
-                })
-                .map_err(|_| "Moving apps isn't ready yet")?;
-            let reply = rrx
-                .recv_timeout(std::time::Duration::from_millis(9000))
-                .ok()
-                .flatten();
-            app.url = reply
-                .as_deref()
-                .and_then(|r| parse_url(Some(r.to_string())));
-            if app.url.is_none() {
-                return Err(
-                    "Couldn't read the page address — click inside the browser and try again"
-                        .into(),
-                );
-            }
-        }
-        if app.is_sane() {
-            Ok(app)
-        } else {
-            Err("That window can't be moved".into())
         }
     }
 
@@ -1652,7 +1831,7 @@ impl Platform for WinPlatform {
             return shell_open(url).map_err(|_| "Couldn't open the page on that computer".into());
         }
         match find_program(app) {
-            Some(target) => shell_open(&target)
+            Some(l) => shell_open_with(&l.file, l.params.as_deref())
                 .map_err(|_| format!("{} wouldn't start on that computer", app.name)),
             None => Err(format!("{} isn't installed on that computer", app.name)),
         }

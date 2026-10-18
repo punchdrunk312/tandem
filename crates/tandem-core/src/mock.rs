@@ -24,8 +24,6 @@ pub struct MockState {
     pub move_apps: bool,
     /// What `confirm_move_app` answers (the person at this computer, in a test).
     pub confirm_move: bool,
-    /// The program in front, as `foreground_app` reports it.
-    pub foreground: Result<AppRef, String>,
     pub confirm_asked: Vec<(String, AppRef)>,
     pub launched: Vec<AppRef>,
     pub launch_error: Option<String>,
@@ -61,7 +59,6 @@ impl MockPlatform {
                 drag_cancels: 0,
                 move_apps: false,
                 confirm_move: true,
-                foreground: Err("nothing in front".into()),
                 confirm_asked: vec![],
                 launched: vec![],
                 launch_error: None,
@@ -85,6 +82,10 @@ impl MockPlatform {
         self.st.lock().unwrap().capturing = true;
         self.emit(CaptureEvent::DragCrossed { edge, frac, paths });
     }
+    /// Simulate dragging a program's window to a connected edge and holding it there.
+    pub fn user_drag_app_to_edge(&self, edge: Edge, app: AppRef) {
+        self.emit(CaptureEvent::AppDragged { edge, app });
+    }
     /// Simulate the hook noticing the cursor pushing through an edge.
     pub fn user_push_edge(&self, edge: Edge, frac: f32) {
         self.st.lock().unwrap().capturing = true;
@@ -95,9 +96,6 @@ impl MockPlatform {
 impl Platform for MockPlatform {
     fn set_move_apps(&self, on: bool) {
         self.st.lock().unwrap().move_apps = on;
-    }
-    fn foreground_app(&self) -> Result<AppRef, String> {
-        self.st.lock().unwrap().foreground.clone()
     }
     fn confirm_move_app(&self, to: &str, app: &AppRef) -> bool {
         let mut s = self.st.lock().unwrap();

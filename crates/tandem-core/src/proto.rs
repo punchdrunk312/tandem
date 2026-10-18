@@ -259,10 +259,7 @@ impl AppRef {
         if !plain(&exe, 64) || !exe.ends_with(".exe") || NEVER_MOVE.contains(&exe.as_str()) {
             return false;
         }
-        if self.name.is_empty()
-            || self.name.chars().count() > 64
-            || self.name.chars().any(|c| c.is_control())
-        {
+        if !plain(&self.name, 64) {
             return false;
         }
         match &self.url {
