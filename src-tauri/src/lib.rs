@@ -236,8 +236,9 @@ fn set_drag_files(st: State<'_, AppState>, on: bool) {
 }
 
 #[tauri::command]
-fn set_move_apps(st: State<'_, AppState>, on: bool) {
+fn set_move_apps(app: AppHandle, st: State<'_, AppState>, on: bool) {
     st.node.set_move_apps(on);
+    move_hotkeys(&app, on);
 }
 
 #[tauri::command]
@@ -612,6 +613,38 @@ fn quit_app(app: AppHandle) {
 /// A hotkey / tray entry for the bar. `what` is "bar" (control bar, Ctrl+Alt+Z) or
 /// "pill" (transfer bar, Ctrl+Alt+U). If the bar is switched off in the settings there is
 /// nothing to show: the control bar's key opens the settings window instead.
+/// Ctrl+Alt+Shift plus an arrow key hands the window in front over to the computer on
+/// that side; Home, PgUp, End and PgDn are the four corners. Only registered while
+/// "Move apps" is on, so the keys stay free for other programs otherwise.
+const HAND_OFF_KEYS: [(Code, Edge); 8] = [
+    (Code::ArrowLeft, Edge::Left),
+    (Code::ArrowRight, Edge::Right),
+    (Code::ArrowUp, Edge::Top),
+    (Code::ArrowDown, Edge::Bottom),
+    (Code::Home, Edge::TopLeft),
+    (Code::PageUp, Edge::TopRight),
+    (Code::End, Edge::BottomLeft),
+    (Code::PageDown, Edge::BottomRight),
+];
+
+fn move_hotkeys(app: &AppHandle, on: bool) {
+    let gs = app.global_shortcut();
+    for (code, _) in HAND_OFF_KEYS {
+        let sc = Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
+            code,
+        );
+        let done = if on {
+            gs.register(sc)
+        } else {
+            gs.unregister(sc)
+        };
+        if let Err(e) = done {
+            log_line(app, &format!("hand-off hotkey {code:?}: {e}"));
+        }
+    }
+}
+
 fn bar_hotkey(app: &AppHandle, what: &'static str) {
     let Some(sh) = app.try_state::<Shared>() else {
         return;
@@ -739,6 +772,16 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
+                    if shortcut.mods.contains(Modifiers::SHIFT) {
+                        if let Some((_, edge)) =
+                            HAND_OFF_KEYS.iter().find(|(c, _)| *c == shortcut.key)
+                        {
+                            if let Some(st) = app.try_state::<AppState>() {
+                                st.node.send_foreground_app(*edge);
+                            }
+                        }
+                        return;
+                    }
                     match shortcut.key {
                         Code::KeyZ => bar_hotkey(app, "bar"),
                         Code::KeyU => bar_hotkey(app, "pill"),
@@ -855,6 +898,10 @@ pub fn run() {
                         &format!("hotkey Ctrl+Alt+{label} not registered: {e}"),
                     );
                 }
+            }
+
+            if app.state::<AppState>().node.snapshot().move_apps {
+                move_hotkeys(app.handle(), true);
             }
 
             // Keep the right-click entry pointing at this copy of the program.

@@ -451,6 +451,8 @@ enum Cmd {
     SetSwitchDelay(u32),
     SetDragFiles(bool),
     SetMoveApps(bool),
+    /// Hand the window in front over to the computer on this side.
+    SendApp(Edge),
     SetName(String),
     NewCode,
     Engage(Option<String>),
@@ -678,6 +680,11 @@ impl Node {
         self.cmd(Cmd::SetMoveApps(on));
     }
 
+    /// Hand the window in front over to the computer on `edge` (a hotkey).
+    pub fn send_foreground_app(&self, edge: Edge) {
+        self.cmd(Cmd::SendApp(edge));
+    }
+
     pub fn set_drag_files(&self, on: bool) {
         self.cmd(Cmd::SetDragFiles(on))
     }
@@ -722,7 +729,13 @@ enum Ev {
         res: std::io::Result<Offer>,
     },
     ClipFiles(Vec<PathBuf>),
-    /// The person answered (and the program was opened or not) for a `MoveApp` we got.
+    /// The window in front was looked at (and the person asked) before a hand-off.
+    /// `Err("")` means they said no.
+    AppPicked {
+        to: String,
+        res: std::result::Result<AppRef, String>,
+    },
+    /// A `MoveApp` we got was acted on (the program opened or not).
     AppMoved {
         from: String,
         id: u64,
@@ -1338,6 +1351,25 @@ impl Actor {
                 let _ = self.clip.send(ClipJob::Write(c));
             }
             Ev::ClipRead(c) => self.on_clip_read(c),
+            Ev::AppPicked { to, res } => match res {
+                Ok(app) => {
+                    // The computer may have gone away while the question was open.
+                    if !self.sessions.contains_key(&to) {
+                        return;
+                    }
+                    let who = self
+                        .sessions
+                        .get(&to)
+                        .map(|s| s.peer.name.clone())
+                        .unwrap_or_default();
+                    let id: u64 = rand::thread_rng().gen();
+                    self.notify(&format!("Moving {} to {who}…", app.name));
+                    self.pending_app = Some((id, to.clone(), app.clone()));
+                    self.send_to(&to, Msg::MoveApp { id, app });
+                }
+                Err(e) if e.is_empty() => {}
+                Err(e) => self.notify(&e),
+            },
             Ev::AppMoved {
                 from,
                 id,
@@ -1537,41 +1569,6 @@ impl Actor {
                 } else {
                     let (x, y) = self.center();
                     self.sh.platform.end_capture(x, y);
-                }
-            }
-            CaptureEvent::AppDragCrossed { edge, frac, app } => {
-                let target = if self.control == Control::Local
-                    && self.sh.persisted.lock().unwrap().move_apps
-                    && app.is_sane()
-                {
-                    self.sessions
-                        .iter()
-                        .find(|(_, s)| s.side == edge)
-                        .map(|(id, _)| id.clone())
-                } else {
-                    None
-                };
-                match target {
-                    Some(pid) => {
-                        // The cursor goes over like any other crossing; the window that
-                        // was being dragged has already been put back by the platform.
-                        self.on_capture(CaptureEvent::Crossed { edge, frac });
-                        let went =
-                            matches!(&self.control, Control::Remote { peer, .. } if *peer == pid);
-                        if went {
-                            let id: u64 = rand::thread_rng().gen();
-                            self.notify(&format!(
-                                "Moving {} — confirm on the other computer",
-                                app.name
-                            ));
-                            self.pending_app = Some((id, pid.clone(), app.clone()));
-                            self.send_to(&pid, Msg::MoveApp { id, app });
-                        }
-                    }
-                    None => {
-                        let (x, y) = self.center();
-                        self.sh.platform.end_capture(x, y);
-                    }
                 }
             }
             CaptureEvent::LocalLeftUp => {
@@ -1884,23 +1881,14 @@ impl Actor {
                     refuse(self, "That app can't be moved");
                     return;
                 }
-                let who = self
-                    .sessions
-                    .get(from)
-                    .map(|s| s.peer.name.clone())
-                    .unwrap_or_default();
                 let plat = self.sh.platform.clone();
                 let ev_tx = self.ev_tx.clone();
                 let from = from.to_string();
-                // The question waits for a person: never on the engine's thread.
+                // Finding the program can take a moment: never on the engine's thread.
                 tokio::task::spawn_blocking(move || {
-                    let (ok, note) = if !plat.confirm_move_app(&who, &app) {
-                        (false, "You said no on that computer".to_string())
-                    } else {
-                        match plat.launch_app(&app) {
-                            Ok(()) => (true, String::new()),
-                            Err(e) => (false, e),
-                        }
+                    let (ok, note) = match plat.launch_app(&app) {
+                        Ok(()) => (true, String::new()),
+                        Err(e) => (false, e),
                     };
                     let _ = ev_tx.send(Ev::AppMoved {
                         from,
@@ -2092,6 +2080,37 @@ impl Actor {
                 self.sh.platform.set_game_mode(on);
                 self.sh.save();
                 self.sh.publish();
+            }
+            Cmd::SendApp(edge) => {
+                if !self.sh.persisted.lock().unwrap().move_apps {
+                    self.notify("Turn on “Move apps” in Settings first");
+                    return;
+                }
+                let Some((to, who)) = self
+                    .sessions
+                    .iter()
+                    .find(|(_, s)| s.side == edge)
+                    .map(|(id, s)| (id.clone(), s.peer.name.clone()))
+                else {
+                    self.notify("No computer is set on that side");
+                    return;
+                };
+                let plat = self.sh.platform.clone();
+                let ev_tx = self.ev_tx.clone();
+                // Looking at the window (a browser takes a moment) and asking the person
+                // both wait, so neither runs on the engine's thread.
+                tokio::task::spawn_blocking(move || {
+                    let res = plat.foreground_app().and_then(|app| {
+                        if !app.is_sane() {
+                            Err("That window can't be moved".to_string())
+                        } else if plat.confirm_move_app(&who, &app) {
+                            Ok(app)
+                        } else {
+                            Err(String::new())
+                        }
+                    });
+                    let _ = ev_tx.send(Ev::AppPicked { to, res });
+                });
             }
             Cmd::SetMoveApps(on) => {
                 self.sh.persisted.lock().unwrap().move_apps = on;

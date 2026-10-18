@@ -406,7 +406,7 @@ function renderSettings(s: Snapshot) {
       setting("Computer name", "Shown to your other computers. Applies after a restart.", name),
       setting("Share clipboard", "Text, images and copied files follow you between computers.", switchEl(s.clipboard_sync, (v) => call("set_clipboard_sync", { on: v }))),
       setting("Drag files across", "Pick a file up in Explorer or on the desktop, push it through the edge and let go on the other computer.", switchEl(s.drag_files, (v) => call("set_drag_files", { on: v }))),
-      setting("Move apps", "Hold Shift and drag a window by its title bar through the edge. Browsers open the same page on the other computer; chat apps like Discord move over and close here. The other computer asks first, and it must be turned on there too.", switchEl(s.move_apps, (v) => call("set_move_apps", { on: v }))),
+      setting("Move apps", "Press Ctrl+Alt+Shift and an arrow key (towards the other computer) to send the window in front over: Discord and other chat apps move across and close here, a browser opens the same page there. Corners: Home, PgUp, End, PgDn. You are asked first, and it must be turned on at both computers.", switchEl(s.move_apps, (v) => call("set_move_apps", { on: v }))),
       setting("Game mode", "Don't switch computers while a full-screen app is open.", switchEl(s.game_mode, (v) => call("set_game_mode", { on: v }))),
       setting("Edge delay", "How long to hold at the screen edge before switching.",
         seg([[0, "Instant"], [250, "¼ s"], [500, "½ s"], [1000, "1 s"]] as const, s.switch_delay_ms as 0 | 250 | 500 | 1000, (ms) => call("set_switch_delay", { ms }))),

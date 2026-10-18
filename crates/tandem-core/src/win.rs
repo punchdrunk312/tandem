@@ -86,15 +86,10 @@ static DRAG_TX: OnceLock<std::sync::mpsc::Sender<DragReq>> = OnceLock::new();
 
 // ------------------------------------------------------ moving a program across
 //
-// Holding Shift while dragging a program's window by its title bar into a connected
-// edge hands the *program* over: the other computer opens its own copy and, for chat
-// and music programs, this one closes. Like the file drag, the press is looked at off
-// the hook thread, and anything that goes wrong only means the drag does not cross.
-
-static MOVE_APPS: AtomicBool = AtomicBool::new(false);
-/// The press `APP_DRAG` belongs to.
-static APP_READY_GEN: AtomicU32 = AtomicU32::new(0);
-static APP_DRAG: Mutex<Option<AppRef>> = Mutex::new(None);
+// A hotkey (Ctrl+Alt+Shift+arrow, set up by the app) hands the window in front over to
+// the computer on that side: the other computer opens its own copy and, for chat and
+// music programs, this one closes. Nothing here runs in the mouse hook, so it cannot
+// disturb normal mouse sharing; anything that goes wrong is just a message.
 
 #[derive(Clone, Copy)]
 enum ShellKind {
@@ -119,10 +114,9 @@ enum DragReq {
         x: i32,
         y: i32,
     },
-    App {
-        seq: u32,
-        x: i32,
-        y: i32,
+    Url {
+        hwnd: isize,
+        reply: std::sync::mpsc::Sender<Option<String>>,
     },
     Dir {
         kind: ShellKind,
@@ -156,10 +150,19 @@ while ($true) {
     if ($p[0] -eq 'URL') {
       $el = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][int64]$p[1])
       $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-      foreach ($e in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)) {
-        if ([string]$e.Current.Name -match 'address|url|search|location') {
-          $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
-          if ($v) { $out = 'OK|' + $v; break }
+      $first = $el.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
+      $cands = @()
+      if ($first) { $cands += $first }
+      foreach ($e in $cands) {
+        $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+        if ($v -and [string]$e.Current.Name -match 'address|url|search|location') { $out = 'OK|' + $v }
+      }
+      if ($out -eq 'NONE') {
+        foreach ($e in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)) {
+          if ([string]$e.Current.Name -match 'address|url|search|location') {
+            $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+            if ($v) { $out = 'OK|' + $v; break }
+          }
         }
       }
     } else {
@@ -340,40 +343,18 @@ fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
                     DRAG_READY_GEN.store(seq, Relaxed);
                 }
             }
-            DragReq::App { seq, x, y } => {
-                std::thread::sleep(std::time::Duration::from_millis(60));
-                let held = unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 };
-                if !held || DRAG_GEN.load(Relaxed) != seq {
-                    continue;
-                }
-                let Some((hwnd, mut app)) = window_app_at(x, y) else {
-                    continue;
-                };
-                if app.is_browser() {
-                    // The page open in that window, read from its address bar. The first
-                    // look can come back empty while the browser wakes its accessibility.
-                    let mut url = None;
-                    for _ in 0..2 {
-                        url = parse_url(ask_ps_for(&mut ps, &format!("URL {hwnd}"), 4000));
-                        if url.is_some() || DRAG_GEN.load(Relaxed) != seq {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(250));
+            DragReq::Url { hwnd, reply } => {
+                // The page open in that browser window, read from its address bar. The
+                // first look can come back empty while the browser wakes its accessibility.
+                let mut url = None;
+                for _ in 0..2 {
+                    url = parse_url(ask_ps_for(&mut ps, &format!("URL {hwnd}"), 4000));
+                    if url.is_some() {
+                        break;
                     }
-                    if url.is_none() {
-                        log::info!("app drag: could not read the page address of {}", app.exe);
-                        continue;
-                    }
-                    app.url = url;
+                    std::thread::sleep(std::time::Duration::from_millis(200));
                 }
-                if !app.is_sane() || DRAG_GEN.load(Relaxed) != seq {
-                    continue;
-                }
-                log::info!("app drag: {} ready", app.exe);
-                if let Ok(mut a) = APP_DRAG.lock() {
-                    *a = Some(app);
-                    APP_READY_GEN.store(seq, Relaxed);
-                }
+                let _ = reply.send(url.map(|u| format!("OK|{u}")));
             }
             DragReq::Dir { kind, reply } => {
                 let r = ask_ps(&mut ps, &format!("DIR {}", kind.arg()));
@@ -553,10 +534,6 @@ fn find_program(app: &AppRef) -> Option<String> {
     None
 }
 
-fn shift_down() -> bool {
-    unsafe { GetAsyncKeyState(VK_SHIFT.0 as i32) < 0 }
-}
-
 /// The address a browser reported, made into a full web address (or nothing).
 fn parse_url(reply: Option<String>) -> Option<String> {
     let v = reply?.strip_prefix("OK|")?.trim().to_string();
@@ -571,33 +548,9 @@ fn parse_url(reply: Option<String>) -> Option<String> {
     (url.starts_with("https://") || url.starts_with("http://")).then_some(url)
 }
 
-/// The program whose *title bar* is at this point (and the window's handle), if it is
-/// one that may be moved. Only a press on the title bar counts, so clicking inside a
-/// window is never mistaken for dragging the window.
-fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
+/// The program a top-level window belongs to, if it is one that may be moved.
+fn app_of_window(root: HWND) -> Option<AppRef> {
     unsafe {
-        let hwnd = WindowFromPoint(POINT { x, y });
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let root = GetAncestor(hwnd, GA_ROOT);
-        if root.0.is_null() {
-            return None;
-        }
-        let mut hit: usize = 0;
-        let lparam = LPARAM((((y as u32 & 0xFFFF) << 16) | (x as u32 & 0xFFFF)) as i32 as isize);
-        let ok = SendMessageTimeoutW(
-            root,
-            WM_NCHITTEST,
-            WPARAM(0),
-            lparam,
-            SMTO_ABORTIFHUNG,
-            100,
-            Some(&mut hit),
-        );
-        if ok.0 == 0 || hit != 2 {
-            return None; // not HTCAPTION: not a title bar
-        }
         let mut pid = 0u32;
         GetWindowThreadProcessId(root, Some(&mut pid));
         if pid == 0 || pid == GetCurrentProcessId() {
@@ -624,25 +577,18 @@ fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
             exe,
             url: None,
         };
-        // Browsers get their page filled in by the caller before this is checked again.
-        app.is_sane().then_some((root.0 as isize, app))
+        app.is_sane().then_some(app)
     }
 }
 
-/// Left button went down: if it is on a file, find out which files; if Shift is held
-/// and it is on a title bar, which program (both off the hook thread).
+/// Left button went down: if it is on a file, find out which files (off the hook thread).
 fn note_left_down(x: i32, y: i32) {
     let seq = DRAG_GEN.fetch_add(1, Relaxed) + 1;
-    if EDGES.load(Relaxed) == 0 {
+    if !DRAG_FILES.load(Relaxed) || EDGES.load(Relaxed) == 0 {
         return;
     }
     if let Some(tx) = DRAG_TX.get() {
-        if DRAG_FILES.load(Relaxed) {
-            let _ = tx.send(DragReq::Sel { seq, x, y });
-        }
-        if MOVE_APPS.load(Relaxed) && shift_down() {
-            let _ = tx.send(DragReq::App { seq, x, y });
-        }
+        let _ = tx.send(DragReq::Sel { seq, x, y });
     }
 }
 
@@ -931,15 +877,6 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
                         .try_lock()
                         .map(|p| !p.is_empty())
                         .unwrap_or(false)));
-        // A program's window held by its title bar with Shift down may cross too.
-        let app_ready = hit != 0
-            && left
-            && !right
-            && MOVE_APPS.load(Relaxed)
-            && shift_down()
-            && APP_READY_GEN.load(Relaxed) == DRAG_GEN.load(Relaxed)
-            && APP_DRAG.try_lock().map(|a| a.is_some()).unwrap_or(false);
-        let carrying = carrying || app_ready;
         let button_down = (left || right) && !carrying;
         if hit == 0 || button_down || GAME_ACTIVE.load(Relaxed) {
             AT_BIT.store(0, Relaxed);
@@ -993,16 +930,6 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             if !paths.is_empty() {
                 DRAG_GEN.fetch_add(1, Relaxed);
                 emit(CaptureEvent::DragCrossed { edge, frac, paths });
-                cancel_local_drag();
-                return true;
-            }
-        }
-        if app_ready {
-            let app = APP_DRAG.try_lock().ok().and_then(|mut a| a.take());
-            if let Some(app) = app {
-                DRAG_GEN.fetch_add(1, Relaxed);
-                emit(CaptureEvent::AppDragCrossed { edge, frac, app });
-                // Esc ends the window's move and puts it back where it was.
                 cancel_local_drag();
                 return true;
             }
@@ -1641,26 +1568,69 @@ impl Platform for WinPlatform {
     }
 
     fn set_move_apps(&self, on: bool) {
-        MOVE_APPS.store(on, Relaxed);
         if on {
             ensure_drag_thread();
-        } else if let Ok(mut a) = APP_DRAG.lock() {
-            *a = None;
+            // Starts the helper now, so the first hand-off does not wait for it.
+            if let Some(tx) = DRAG_TX.get() {
+                let _ = tx.send(DragReq::Warm);
+            }
         }
     }
 
-    fn confirm_move_app(&self, from: &str, app: &AppRef) -> bool {
+    fn foreground_app(&self) -> Result<AppRef, String> {
+        let root = unsafe {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() {
+                return Err("No window is in front".into());
+            }
+            GetAncestor(fg, GA_ROOT)
+        };
+        let Some(mut app) = (!root.0.is_null()).then(|| app_of_window(root)).flatten() else {
+            return Err("That window can't be moved".into());
+        };
+        if app.is_browser() {
+            let (rtx, rrx) = std::sync::mpsc::channel();
+            DRAG_TX
+                .get()
+                .ok_or("Moving apps isn't ready yet")?
+                .send(DragReq::Url {
+                    hwnd: root.0 as isize,
+                    reply: rtx,
+                })
+                .map_err(|_| "Moving apps isn't ready yet")?;
+            let reply = rrx
+                .recv_timeout(std::time::Duration::from_millis(9000))
+                .ok()
+                .flatten();
+            app.url = reply
+                .as_deref()
+                .and_then(|r| parse_url(Some(r.to_string())));
+            if app.url.is_none() {
+                return Err(
+                    "Couldn't read the page address — click inside the browser and try again"
+                        .into(),
+                );
+            }
+        }
+        if app.is_sane() {
+            Ok(app)
+        } else {
+            Err("That window can't be moved".into())
+        }
+    }
+
+    fn confirm_move_app(&self, to: &str, app: &AppRef) -> bool {
         let text = match &app.url {
             Some(u) => {
                 let shown: String = u.chars().take(160).collect();
-                format!("{from} wants to open this page on this computer:\n\n{shown}\n\nOpen it?")
+                format!("Open this page on {to}?\n\n{shown}")
             }
             None if app.may_close() => format!(
-                "{from} wants to move {} here.\n\n{} will open on this computer and close on {from}.",
+                "Move {} to {to}?\n\n{} will open on {to} and close on this computer.",
                 app.name, app.name
             ),
             None => format!(
-                "{from} wants to open {} on this computer.\n\nIt stays open on {from} too.",
+                "Open {} on {to}?\n\nIt stays open on this computer too.",
                 app.name
             ),
         };

@@ -895,43 +895,51 @@ async fn pair_with_apps(a_on: bool, b_on: bool) -> (Side, Side) {
     (a, b)
 }
 
+/// The person at B has `window` in front and presses the hand-off hotkey towards A.
+fn hand_off(b: &Side, window: AppRef) {
+    b.plat.st.lock().unwrap().foreground = Ok(window);
+    b.node.send_foreground_app(Edge::Right);
+}
+
+fn notice_has(s: &Side, text: &'static str) -> bool {
+    s.node
+        .snapshot()
+        .notice
+        .map(|n| n.contains(text))
+        .unwrap_or(false)
+}
+
 #[tokio::test]
-async fn dragging_discord_across_opens_it_there_and_closes_it_here() {
+async fn handing_discord_over_opens_it_there_and_closes_it_here() {
     let (a, b) = pair_with_apps(true, true).await;
-    b.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
+    hand_off(&b, app("Discord.exe", None));
     until("A opened it", || {
         !a.plat.st.lock().unwrap().launched.is_empty()
     })
     .await;
-    assert_eq!(a.plat.st.lock().unwrap().confirm_asked.len(), 1);
-    assert_eq!(a.plat.st.lock().unwrap().confirm_asked[0].0, "PC-B");
+    // The person was asked where they are (B), not where the app opens.
+    assert_eq!(b.plat.st.lock().unwrap().confirm_asked.len(), 1);
+    assert_eq!(b.plat.st.lock().unwrap().confirm_asked[0].0, "PC-A");
+    assert!(a.plat.st.lock().unwrap().confirm_asked.is_empty());
     until("B closed its own copy", || {
         !b.plat.st.lock().unwrap().closed.is_empty()
     })
     .await;
     assert_eq!(b.plat.st.lock().unwrap().closed[0].exe, "Discord.exe");
-    // The cursor came over like any crossing.
-    assert_eq!(a.node.snapshot().control, "controlled");
+    // The cursor stays where it is: this is not a crossing.
+    assert_eq!(a.node.snapshot().control, "local");
+    assert_eq!(b.node.snapshot().control, "local");
 }
 
 #[tokio::test]
 async fn a_program_that_is_not_on_the_safe_list_stays_open_here() {
     let (a, b) = pair_with_apps(true, true).await;
-    b.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("notepad.exe", None));
+    hand_off(&b, app("notepad.exe", None));
     until("A opened it", || {
         !a.plat.st.lock().unwrap().launched.is_empty()
     })
     .await;
-    until("B said so", || {
-        b.node
-            .snapshot()
-            .notice
-            .map(|n| n.contains("still open here"))
-            .unwrap_or(false)
-    })
-    .await;
+    until("B said so", || notice_has(&b, "still open here")).await;
     assert!(b.plat.st.lock().unwrap().closed.is_empty());
 }
 
@@ -939,8 +947,7 @@ async fn a_program_that_is_not_on_the_safe_list_stays_open_here() {
 async fn a_browser_window_sends_its_page_and_is_left_alone() {
     let (a, b) = pair_with_apps(true, true).await;
     let page = "https://www.youtube.com/watch?v=abc&t=42";
-    b.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("chrome.exe", Some(page)));
+    hand_off(&b, app("chrome.exe", Some(page)));
     until("A opened the page", || {
         !a.plat.st.lock().unwrap().launched.is_empty()
     })
@@ -949,14 +956,7 @@ async fn a_browser_window_sends_its_page_and_is_left_alone() {
         a.plat.st.lock().unwrap().launched[0].url.as_deref(),
         Some(page)
     );
-    until("B reported it", || {
-        b.node
-            .snapshot()
-            .notice
-            .map(|n| n.contains("Opened the page"))
-            .unwrap_or(false)
-    })
-    .await;
+    until("B reported it", || notice_has(&b, "Opened the page")).await;
     assert!(
         b.plat.st.lock().unwrap().closed.is_empty(),
         "never closes a browser"
@@ -964,19 +964,15 @@ async fn a_browser_window_sends_its_page_and_is_left_alone() {
 }
 
 #[tokio::test]
-async fn saying_no_on_the_other_computer_keeps_the_app_where_it_is() {
+async fn saying_no_keeps_the_app_where_it_is_and_nothing_is_sent() {
     let (a, b) = pair_with_apps(true, true).await;
-    a.plat.st.lock().unwrap().confirm_move = false;
-    b.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
-    until("B told it was declined", || {
-        b.node
-            .snapshot()
-            .notice
-            .map(|n| n.contains("said no"))
-            .unwrap_or(false)
+    b.plat.st.lock().unwrap().confirm_move = false;
+    hand_off(&b, app("Discord.exe", None));
+    until("B was asked", || {
+        !b.plat.st.lock().unwrap().confirm_asked.is_empty()
     })
     .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(a.plat.st.lock().unwrap().launched.is_empty());
     assert!(b.plat.st.lock().unwrap().closed.is_empty());
 }
@@ -984,51 +980,47 @@ async fn saying_no_on_the_other_computer_keeps_the_app_where_it_is() {
 #[tokio::test]
 async fn an_app_that_cannot_be_found_there_is_not_closed_here() {
     let (a, b) = pair_with_apps(true, true).await;
-    a.plat.st.lock().unwrap().launch_error = Some("Discord isn't installed on PC-A".into());
-    b.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
-    until("B told why", || {
-        b.node
-            .snapshot()
-            .notice
-            .map(|n| n.contains("isn't installed"))
-            .unwrap_or(false)
-    })
-    .await;
+    a.plat.st.lock().unwrap().launch_error =
+        Some("Discord isn't installed on that computer".into());
+    hand_off(&b, app("Discord.exe", None));
+    until("B told why", || notice_has(&b, "isn't installed")).await;
     assert!(b.plat.st.lock().unwrap().closed.is_empty());
 }
 
 #[tokio::test]
-async fn the_option_must_be_on_at_both_ends_and_refuses_dangerous_names() {
+async fn the_option_must_be_on_at_both_ends_and_dangerous_names_are_refused() {
     // Off on the receiving side: nothing opens, nothing closes, and the sender is told.
     let (a, b) = pair_with_apps(false, true).await;
-    b.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
-    until("B told it is off there", || {
-        b.node
-            .snapshot()
-            .notice
-            .map(|n| n.contains("turned off"))
-            .unwrap_or(false)
-    })
-    .await;
+    hand_off(&b, app("Discord.exe", None));
+    until("B told it is off there", || notice_has(&b, "turned off")).await;
     assert!(a.plat.st.lock().unwrap().launched.is_empty());
-    assert!(a.plat.st.lock().unwrap().confirm_asked.is_empty());
     assert!(b.plat.st.lock().unwrap().closed.is_empty());
 
-    // Off on the sending side: the drag is not a hand-off at all.
+    // Off on the sending side: the hotkey only says how to turn it on.
     let (a2, b2) = pair_with_apps(true, false).await;
-    b2.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("Discord.exe", None));
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(a2.plat.st.lock().unwrap().confirm_asked.is_empty());
-    assert_eq!(a2.node.snapshot().control, "local");
+    hand_off(&b2, app("Discord.exe", None));
+    until("B2 is told", || notice_has(&b2, "Turn on")).await;
+    assert!(b2.plat.st.lock().unwrap().confirm_asked.is_empty());
+    assert!(a2.plat.st.lock().unwrap().launched.is_empty());
 
     // A shell is never moved, even when both ends are willing.
     let (a3, b3) = pair_with_apps(true, true).await;
-    b3.plat
-        .user_drag_app_to_edge(Edge::Right, 0.5, app("cmd.exe", None));
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    hand_off(&b3, app("cmd.exe", None));
+    until("B3 is told", || notice_has(&b3, "can't be moved")).await;
+    assert!(b3.plat.st.lock().unwrap().confirm_asked.is_empty());
     assert!(a3.plat.st.lock().unwrap().launched.is_empty());
-    assert!(a3.plat.st.lock().unwrap().confirm_asked.is_empty());
+}
+
+#[tokio::test]
+async fn a_side_with_no_computer_and_an_unreadable_window_only_show_messages() {
+    let (a, b) = pair_with_apps(true, true).await;
+    // Nothing is set on B's left.
+    b.plat.st.lock().unwrap().foreground = Ok(app("Discord.exe", None));
+    b.node.send_foreground_app(Edge::Left);
+    until("B told", || notice_has(&b, "No computer is set")).await;
+    // The window in front cannot be read (a browser that would not show its page).
+    b.plat.st.lock().unwrap().foreground = Err("Couldn't read the page address".into());
+    b.node.send_foreground_app(Edge::Right);
+    until("B told why", || notice_has(&b, "Couldn't read")).await;
+    assert!(a.plat.st.lock().unwrap().launched.is_empty());
 }
