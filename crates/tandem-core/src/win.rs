@@ -13,7 +13,9 @@ use crate::proto::{AppRef, Button, Edge, InputEvent};
 use std::collections::HashSet;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicU8, Ordering::Relaxed};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, AtomicU8, Ordering::Relaxed,
+};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc::UnboundedSender;
 use windows::core::{w, HSTRING, PCWSTR, PWSTR};
@@ -99,6 +101,7 @@ static APP_GEN: AtomicU32 = AtomicU32::new(0);
 /// 0 = nothing to move, 1 = a browser's page is still being read, 2 = ready.
 static APP_STATE: AtomicU8 = AtomicU8::new(0);
 static APP_DRAG: Mutex<Option<AppRef>> = Mutex::new(None);
+static LOGGED_GEN: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy)]
 enum ShellKind {
@@ -728,14 +731,19 @@ fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
         if root.0.is_null() {
             return None;
         }
-        let app = app_of_window(root)?;
+        let Some(app) = app_of_window(root) else {
+            log::info!("app drag: the window under the press can't be moved");
+            return None;
+        };
+        // The band along the top of the window: browsers keep their tabs there, and
+        // apps that draw their own title bar (Discord, Spotify, Teams…) report it as
+        // their own area instead of a title bar.
         let mut grabbed = false;
-        if app.is_browser() {
-            let mut r = RECT::default();
-            if GetWindowRect(root, &mut r).is_ok() {
-                let strip = 48 * GetDpiForWindow(root) as i32 / 96;
-                grabbed = y >= r.top && y - r.top <= strip;
-            }
+        let mut r = RECT::default();
+        if GetWindowRect(root, &mut r).is_ok() {
+            let dpi = GetDpiForWindow(root).max(96) as i32;
+            let band = if app.is_browser() { 48 } else { 40 } * dpi / 96;
+            grabbed = y >= r.top && y - r.top <= band && x >= r.left && x <= r.right;
         }
         if !grabbed {
             let mut hit: usize = 0;
@@ -752,6 +760,16 @@ fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
             );
             grabbed = ok.0 != 0 && hit == 2; // HTCAPTION
         }
+        log::info!(
+            "app drag: press on {} ({}), {}",
+            app.exe,
+            if app.is_browser() { "browser" } else { "app" },
+            if grabbed {
+                "title bar: ready to move"
+            } else {
+                "not on the title bar"
+            }
+        );
         grabbed.then_some((root.0 as isize, app))
     }
 }
@@ -1073,6 +1091,18 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             0
         };
         let app_wanted = !files_carry && (app_state == 1 || app_state == 2);
+        if hit != 0 && left && !right && MOVE_APPS.load(Relaxed) && !app_wanted && !files_carry {
+            // Once per press: why a window held at the edge isn't being offered.
+            let gen = DRAG_GEN.load(Relaxed);
+            if LOGGED_GEN.swap(gen, Relaxed) != gen {
+                log::info!(
+                    "app drag: at the edge with the button down, but no window is ready (state {}, press {} vs {})",
+                    APP_STATE.load(Relaxed),
+                    APP_GEN.load(Relaxed),
+                    gen
+                );
+            }
+        }
         let carrying = files_carry || app_wanted;
         let button_down = (left || right) && !carrying;
         if hit == 0 || button_down || GAME_ACTIVE.load(Relaxed) {
@@ -1118,6 +1148,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             _ => (Edge::Bottom, fx),
         };
         if app_wanted {
+            log::info!("app drag: held at the edge, offering it");
             // Not a crossing: the cursor stays here. Esc ends the window's move, which also
             // dismisses the snap preview Windows shows at a screen edge, and puts the window
             // back where it was. Then the program is offered to the computer on that side.
@@ -1419,6 +1450,7 @@ fn hook_thread() {
             None,
         ) {
             Ok(hwnd) => {
+                CLIP_HWND.store(hwnd.0 as isize, Relaxed);
                 if let Err(e) = AddClipboardFormatListener(hwnd) {
                     log::error!("clipboard listener: {e}");
                 }
@@ -1742,10 +1774,12 @@ impl Platform for WinPlatform {
                     }
                 }
                 ClipContent::Image(png) => {
+                    log::info!("clipboard: writing a picture ({} KB)", png.len() / 1024);
                     // The classic bitmap first: Paint, Word, Discord and most apps
                     // paste from it, and Windows derives the other bitmap formats.
-                    if let Some(dib) = crate::image::png_to_dib(png) {
-                        put(CF_DIB, &dib);
+                    match crate::image::png_to_dib(png) {
+                        Some(dib) => put(CF_DIB, &dib),
+                        None => log::warn!("clipboard: the received picture could not be decoded"),
                     }
                     // And the PNG, for apps that read it (keeps transparency).
                     let fmt = RegisterClipboardFormatW(w!("PNG"));
@@ -1909,9 +1943,16 @@ impl Platform for WinPlatform {
 /// Runs on the clipboard worker thread (never on the engine), so it can afford to wait
 /// for an app that is still holding the clipboard open — Explorer does for a moment
 /// after a copy.
+/// Our message-only window. Opening the clipboard with it (not with no window) makes us
+/// the clipboard's owner when we write, which Windows needs for SetClipboardData to
+/// work reliably with large data such as pictures.
+static CLIP_HWND: AtomicIsize = AtomicIsize::new(0);
+
 unsafe fn open_clipboard() -> bool {
+    let owner = CLIP_HWND.load(Relaxed);
+    let owner = (owner != 0).then_some(HWND(owner as *mut core::ffi::c_void));
     for _ in 0..30 {
-        if OpenClipboard(None).is_ok() {
+        if OpenClipboard(owner).is_ok() {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -1930,7 +1971,13 @@ unsafe fn put(format: u32, bytes: &[u8]) {
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
     let _ = GlobalUnlock(h);
-    let _ = SetClipboardData(format, Some(HANDLE(h.0)));
+    if let Err(e) = SetClipboardData(format, Some(HANDLE(h.0))) {
+        log::warn!(
+            "clipboard: format {format} ({} bytes) was refused: {e}",
+            bytes.len()
+        );
+        let _ = GlobalFree(Some(h));
+    }
 }
 
 unsafe fn read_clipboard() -> Option<ClipContent> {
@@ -1958,34 +2005,53 @@ unsafe fn read_clipboard() -> Option<ClipContent> {
             Some(ClipContent::Files(out))
         };
     }
-    if IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {
-        let h = GetClipboardData(CF_UNICODETEXT).ok()?;
-        let g = HGLOBAL(h.0);
-        let p = GlobalLock(g) as *const u16;
-        if p.is_null() {
-            return None;
+    let text = if IsClipboardFormatAvailable(CF_UNICODETEXT).is_ok() {
+        read_text()
+    } else {
+        None
+    };
+    let has_picture = IsClipboardFormatAvailable(CF_DIB).is_ok()
+        || IsClipboardFormatAvailable(CF_DIBV5).is_ok()
+        || {
+            let f = RegisterClipboardFormatW(w!("PNG"));
+            f != 0 && IsClipboardFormatAvailable(f).is_ok()
+        };
+    // "Copy image" in a browser or chat app also puts the picture's link on the
+    // clipboard as text; the picture is what the person meant. Real text that comes
+    // with a picture (Word, Excel) is kept as text.
+    let lone_link = |t: &str| {
+        let t = t.trim();
+        !t.contains(char::is_whitespace)
+            && (t.starts_with("http://")
+                || t.starts_with("https://")
+                || t.starts_with("data:image"))
+    };
+    match text {
+        Some(t) if !(has_picture && (t.trim().is_empty() || lone_link(&t))) => {
+            return Some(ClipContent::Text(t));
         }
-        let max = GlobalSize(g) / 2;
-        let mut len = 0usize;
-        while len < max && *p.add(len) != 0 {
-            len += 1;
-        }
-        let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
-        let _ = GlobalUnlock(g);
-        return Some(ClipContent::Text(s));
+        _ => {}
+    }
+    if !has_picture {
+        return None;
     }
     // Screenshots and "copy image": apps that offer the compressed "PNG" format.
     let png_fmt = RegisterClipboardFormatW(w!("PNG"));
     if png_fmt != 0 && IsClipboardFormatAvailable(png_fmt).is_ok() {
-        let h = GetClipboardData(png_fmt).ok()?;
-        let g = HGLOBAL(h.0);
-        let p = GlobalLock(g) as *const u8;
-        if p.is_null() {
-            return None;
+        if let Ok(h) = GetClipboardData(png_fmt) {
+            let g = HGLOBAL(h.0);
+            let p = GlobalLock(g) as *const u8;
+            if !p.is_null() {
+                let raw = std::slice::from_raw_parts(p, GlobalSize(g)).to_vec();
+                let _ = GlobalUnlock(g);
+                // The memory block is often a little bigger than the PNG: cut it at the
+                // end of the image so the same picture always gives the same bytes.
+                if let Some(png) = crate::image::trim_png(&raw) {
+                    log::info!("clipboard: read a PNG picture ({} KB)", png.len() / 1024);
+                    return Some(ClipContent::Image(png));
+                }
+            }
         }
-        let bytes = std::slice::from_raw_parts(p, GlobalSize(g)).to_vec();
-        let _ = GlobalUnlock(g);
-        return Some(ClipContent::Image(bytes));
     }
     // Everything else that is a picture (Paint, Snipping Tool, "copy image" in many
     // apps) is a device-independent bitmap.
@@ -2003,9 +2069,36 @@ unsafe fn read_clipboard() -> Option<ClipContent> {
         }
         let dib = std::slice::from_raw_parts(p, GlobalSize(g)).to_vec();
         let _ = GlobalUnlock(g);
-        if let Some(png) = crate::image::dib_to_png(&dib) {
-            return Some(ClipContent::Image(png));
+        match crate::image::dib_to_png(&dib) {
+            Some(png) => {
+                log::info!(
+                    "clipboard: read a bitmap picture ({} KB as PNG)",
+                    png.len() / 1024
+                );
+                return Some(ClipContent::Image(png));
+            }
+            None => log::warn!(
+                "clipboard: a picture in format {fmt} could not be converted (header {:?})",
+                dib.get(..20)
+            ),
         }
     }
     None
+}
+
+unsafe fn read_text() -> Option<String> {
+    let h = GetClipboardData(CF_UNICODETEXT).ok()?;
+    let g = HGLOBAL(h.0);
+    let p = GlobalLock(g) as *const u16;
+    if p.is_null() {
+        return None;
+    }
+    let max = GlobalSize(g) / 2;
+    let mut len = 0usize;
+    while len < max && *p.add(len) != 0 {
+        len += 1;
+    }
+    let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+    let _ = GlobalUnlock(g);
+    Some(s)
 }

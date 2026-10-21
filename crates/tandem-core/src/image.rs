@@ -78,6 +78,29 @@ pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
     encode_png(&rgba, w as u32, h as u32)
 }
 
+/// A PNG read from the clipboard, cut right after its last chunk. The clipboard's memory
+/// block is usually rounded up, so without this the same picture would come back with
+/// a few extra bytes each time and look like a new copy. `None` if it isn't a PNG.
+pub fn trim_png(raw: &[u8]) -> Option<Vec<u8>> {
+    const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    if raw.len() < 8 || raw[..8] != SIG {
+        return None;
+    }
+    let mut at = 8usize;
+    while at + 12 <= raw.len() {
+        let len = u32::from_be_bytes(raw[at..at + 4].try_into().ok()?) as usize;
+        let end = at.checked_add(12)?.checked_add(len)?;
+        if end > raw.len() {
+            return None;
+        }
+        if &raw[at + 4..at + 8] == b"IEND" {
+            return Some(raw[..end].to_vec());
+        }
+        at = end;
+    }
+    None
+}
+
 fn encode_png(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     {
@@ -146,6 +169,17 @@ pub fn png_to_dib(png_bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_png_cuts_the_padding_and_rejects_other_data() {
+        let png = sample_png(3, 2);
+        let mut padded = png.clone();
+        padded.extend_from_slice(&[0u8; 13]);
+        assert_eq!(trim_png(&padded), Some(png.clone()));
+        assert_eq!(trim_png(&png), Some(png.clone()));
+        assert_eq!(trim_png(b"not a png at all"), None);
+        assert_eq!(trim_png(&png[..png.len() - 5]), None);
+    }
 
     fn sample_png(w: u32, h: u32) -> Vec<u8> {
         let mut rgba = Vec::new();

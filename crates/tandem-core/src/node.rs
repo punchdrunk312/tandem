@@ -605,6 +605,7 @@ impl Node {
             no_auto: HashMap::new(),
             last_peer: None,
             last_clip_sig: None,
+            clip_written_at: None,
             carry: None,
             drops: HashMap::new(),
             early_release: None,
@@ -969,6 +970,9 @@ struct Actor {
     /// The computer the cursor last went to: what Scroll Lock jumps to.
     last_peer: Option<String>,
     last_clip_sig: Option<u64>,
+    /// When we last put something on this computer's clipboard ourselves: the change
+    /// that write causes is our own echo, not something the person copied.
+    clip_written_at: Option<Instant>,
     /// Files being carried to us while the other computer's mouse holds them.
     carry: Option<Carry>,
     /// Carries that were let go before they finished arriving: id -> folder to drop in.
@@ -1356,12 +1360,16 @@ impl Actor {
                         .map(|s| s.peer.name.clone())
                         .unwrap_or_default();
                     let id: u64 = rand::thread_rng().gen();
+                    log::info!("app move: sending {} to {who}", app.exe);
                     self.notify(&format!("Moving {} to {who}…", app.name));
                     self.pending_app = Some((id, to.clone(), app.clone()));
                     self.send_to(&to, Msg::MoveApp { id, app });
                 }
-                Err(e) if e.is_empty() => {}
-                Err(e) => self.notify(&e),
+                Err(e) if e.is_empty() => log::info!("app move: the person said no"),
+                Err(e) => {
+                    log::info!("app move: {e}");
+                    self.notify(&e)
+                }
             },
             Ev::AppMoved {
                 from,
@@ -1370,6 +1378,10 @@ impl Actor {
                 ok,
                 note,
             } => {
+                log::info!(
+                    "app move: opening {name} here: {}",
+                    if ok { "done".to_string() } else { note.clone() }
+                );
                 if ok {
                     self.notify(&format!("{name} opened here"));
                 }
@@ -1568,6 +1580,7 @@ impl Actor {
                 if !self.sh.persisted.lock().unwrap().move_apps {
                     return;
                 }
+                log::info!("app move: {} dragged to the {edge:?} edge", app.exe);
                 let Some((to, who)) = self
                     .sessions
                     .iter()
@@ -1864,12 +1877,14 @@ impl Actor {
                         return;
                     }
                     self.last_clip_sig = Some(s);
+
                     let _ = self.clip.send(ClipJob::Write(c));
                     // A computer in the middle passes it on to the others.
                     self.send_all_but(Some(from), &Msg::ClipText(t));
                 }
             }
             Msg::ClipImage(png) => {
+                log::info!("clipboard: received a picture ({} KB)", png.len() / 1024);
                 let on = self.sh.persisted.lock().unwrap().clipboard_sync;
                 if on && !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
                     let c = ClipContent::Image(png.clone());
@@ -1878,11 +1893,13 @@ impl Actor {
                         return;
                     }
                     self.last_clip_sig = Some(s);
+                    self.clip_written_at = Some(Instant::now());
                     let _ = self.clip.send(ClipJob::Write(c));
                     self.send_all_but(Some(from), &Msg::ClipImage(png));
                 }
             }
             Msg::MoveApp { id, app } => {
+                log::info!("app move: {} asked to open {}", from, app.exe);
                 let refuse = |me: &Self, note: &str| {
                     me.send_to(
                         from,
@@ -2190,6 +2207,15 @@ impl Actor {
             return; // our own echo, or unchanged
         }
         self.last_clip_sig = Some(s);
+        // A picture we just wrote coming back a moment later, re-encoded by Windows:
+        // remember it, but don't send it back.
+        if matches!(c, ClipContent::Image(_))
+            && self
+                .clip_written_at
+                .is_some_and(|w| w.elapsed() < Duration::from_millis(700))
+        {
+            return;
+        }
         match c {
             ClipContent::Text(t) => {
                 if !t.is_empty() && t.len() <= MAX_CLIP_TEXT {
@@ -2205,7 +2231,14 @@ impl Actor {
             }
             ClipContent::Image(png) => {
                 if !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
+                    log::info!("clipboard: sending a picture ({} KB)", png.len() / 1024);
                     self.send_all_but(None, &Msg::ClipImage(png));
+                } else {
+                    log::info!(
+                        "clipboard: picture too big to sync ({} KB)",
+                        png.len() / 1024
+                    );
+                    self.notify("That picture is too big to copy across");
                 }
             }
         }

@@ -502,6 +502,50 @@ fn log_line(app: &AppHandle, msg: &str) {
     }
 }
 
+/// Sends the engine's own notes (clipboard, app moves…) to the same tandem.log, so a
+/// problem on someone's PC can be read afterwards.
+struct FileLog(std::path::PathBuf);
+impl log::Log for FileLog {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Info && m.target().starts_with("tandem")
+    }
+    fn log(&self, r: &log::Record) {
+        use std::io::Write;
+        if !self.enabled(r.metadata()) {
+            return;
+        }
+        if std::fs::metadata(&self.0)
+            .map(|m| m.len() > 262_144)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&self.0);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.0)
+        {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{secs}] {} {}", r.level(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn start_file_log(app: &AppHandle) {
+    let Ok(dir) = app.path().app_config_dir() else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let logger: &'static FileLog = Box::leak(Box::new(FileLog(dir.join("tandem.log"))));
+    if log::set_logger(logger).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+}
+
 // ------------------------------------------------------------------ island
 
 #[tauri::command]
@@ -753,6 +797,7 @@ pub fn run() {
             Some(vec!["--hidden"]),
         ))
         .setup(|app| {
+            start_file_log(app.handle());
             let cfg_dir = app.path().app_config_dir()?;
             let download_dir = app
                 .path()
