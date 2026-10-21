@@ -24,6 +24,8 @@ use tokio::task::AbortHandle;
 const MAX_CLIP_TEXT: usize = 8 * 1024 * 1024;
 const MAX_CLIP_IMAGE: usize = 12 * 1024 * 1024;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5);
+/// The same while one computer's mouse is on the other (pings go every second).
+const SESSION_TIMEOUT_BUSY: Duration = Duration::from_millis(2600);
 const NEARBY_TTL: Duration = Duration::from_secs(8);
 
 // ---------------------------------------------------------------- config
@@ -606,6 +608,7 @@ impl Node {
             last_peer: None,
             last_clip_sig: None,
             clip_written_at: None,
+            last_dial_err: None,
             carry: None,
             drops: HashMap::new(),
             early_release: None,
@@ -973,6 +976,7 @@ struct Actor {
     /// When we last put something on this computer's clipboard ourselves: the change
     /// that write causes is our own echo, not something the person copied.
     clip_written_at: Option<Instant>,
+    last_dial_err: Option<String>,
     /// Files being carried to us while the other computer's mouse holds them.
     carry: Option<Carry>,
     /// Carries that were let go before they finished arriving: id -> folder to drop in.
@@ -1202,7 +1206,16 @@ impl Actor {
         let mut dead = Vec::new();
         for (id, s) in &self.sessions {
             let _ = s.tx.send(Msg::Ping);
-            if s.last_rx.elapsed() > SESSION_TIMEOUT {
+            // While the mouse is on the other computer (or theirs is here), a dead link
+            // is noticed sooner, so the mouse comes back instead of feeling frozen.
+            let busy = matches!(&self.control,
+                Control::Remote { peer, .. } | Control::Controlled { peer, .. } if peer == id);
+            let limit = if busy {
+                SESSION_TIMEOUT_BUSY
+            } else {
+                SESSION_TIMEOUT
+            };
+            if s.last_rx.elapsed() > limit {
                 dead.push(id.clone());
             }
         }
@@ -1320,7 +1333,11 @@ impl Actor {
             Ev::DialFailed { ip, err } => {
                 self.dialing.remove(&ip);
                 // Quiet during background reconnects; loud only when nothing else is going on.
-                log::info!("dial failed: {err}");
+                // Once per kind of failure, not every few seconds while the other PC is off.
+                if self.last_dial_err.as_deref() != Some(err.as_str()) {
+                    log::info!("dial failed: {err}");
+                    self.last_dial_err = Some(err.clone());
+                }
                 self.sh.set_error(Some(err));
             }
             Ev::OfferBuilt {
@@ -1481,6 +1498,7 @@ impl Actor {
             }
         }
         self.sh.save();
+        self.last_dial_err = None;
         self.sessions.insert(
             pid.clone(),
             Session {

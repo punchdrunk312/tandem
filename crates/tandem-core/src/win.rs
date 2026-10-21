@@ -767,6 +767,22 @@ fn app_of_window(root: HWND) -> Option<AppRef> {
 
 /// Ask every visible main window of the program `exe` to close (WM_CLOSE).
 fn close_windows_of(exe: &str) -> usize {
+    let found = windows_of(exe);
+    unsafe {
+        for &h in &found {
+            let _ = PostMessageW(
+                Some(HWND(h as *mut core::ffi::c_void)),
+                WM_CLOSE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+    found.len()
+}
+
+/// The visible main windows of the program `exe`.
+fn windows_of(exe: &str) -> Vec<isize> {
     struct Ctx {
         exe: String,
         found: Vec<isize>,
@@ -792,16 +808,8 @@ fn close_windows_of(exe: &str) -> usize {
     };
     unsafe {
         let _ = EnumWindows(Some(each), LPARAM(&mut ctx as *mut Ctx as isize));
-        for &h in &ctx.found {
-            let _ = PostMessageW(
-                Some(HWND(h as *mut core::ffi::c_void)),
-                WM_CLOSE,
-                WPARAM(0),
-                LPARAM(0),
-            );
-        }
     }
-    ctx.found.len()
+    ctx.found
 }
 
 /// The program whose window is being grabbed at this point, if it may be moved: the
@@ -1988,6 +1996,17 @@ impl Platform for WinPlatform {
         // to save unsaved work.
         let n = close_windows_of(&app.exe);
         log::info!("app move: asked {n} window(s) of {} to close", app.exe);
+        // Many apps (Claude, Teams, Steam…) only hide in the tray when asked to close.
+        // If every window is gone but the program is still running, it hid: end it.
+        // A program asking "save changes?" still shows a window, so it is left alone.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if windows_of(&app.exe).is_empty() && running() {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/IM", &app.exe, "/T", "/F"])
+                .creation_flags(0x0800_0000)
+                .output();
+            log::info!("app move: {} hid in the tray, ended it", app.exe);
+        }
     }
 
     fn app_hold(&self) -> AppHold {

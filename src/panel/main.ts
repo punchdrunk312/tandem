@@ -429,7 +429,32 @@ function renderSettings(s: Snapshot) {
 let elev: ElevState = { elevated: false, autostart: false };
 let elevBusy = "";
 let elevError = "";
+// ---------------------------------------------------------------- Mac permissions
+interface PlatformInfo { os: string; perms_ok: boolean }
+let plat: PlatformInfo = { os: "windows", perms_ok: true };
+const isMac = () => plat.os === "macos";
+function renderMacPerms() {
+  update(admin, "admin", [plat], () => {
+    const open = (which: string) => h("button", { onclick: () => void call("open_mac_privacy", { which }) }, "Open settings");
+    return [
+      h("h2", {}, "Mac permissions"),
+      ...(plat.perms_ok
+        ? [h("div", { class: "note" }, h("span", {}, "CubeCursor is allowed to use the keyboard and mouse. All set."))]
+        : [
+            h("div", { class: "err", role: "alert" }, "macOS needs your OK before CubeCursor can share this Mac's keyboard and mouse."),
+            setting("Accessibility", "Lets CubeCursor move the cursor and type when another computer is in control. Turn CubeCursor on in the list.", open("accessibility")),
+            setting("Input Monitoring", "Lets CubeCursor see your keyboard and mouse so they can go to another computer. Turn CubeCursor on in the list.", open("input")),
+            h("div", { class: "note" }, h("span", {}, "It starts by itself a few seconds after you allow both. No restart needed.")),
+          ]),
+    ];
+  });
+}
+function platState() {
+  void call<PlatformInfo>("platform_info").then((v) => { if (v) { plat = v; if (snap) render(snap); else renderAdmin(); } }).catch(() => {});
+}
+
 function renderAdmin() {
+  if (isMac()) return renderMacPerms();
   update(admin, "admin", [elev, elevBusy, elevError], () => {
     const restart = h("button", { class: "primary", disabled: elev.elevated || !!elevBusy, onclick: async () => {
       elevBusy = "Waiting for Windows…";
@@ -490,7 +515,7 @@ let ui: UiOptions = { enabled: true, hide_fullscreen: true, monitor_cursor: fals
 let shellMenu = false;
 function renderTopBar() {
   const is = islandSettings();
-  update(topbar, "topbar", [ui, is, shellMenu], () => {
+  update(topbar, "topbar", [ui, is, shellMenu, plat], () => {
     const setUi = (patch: Partial<UiOptions>) => {
       ui = { ...ui, ...patch };
       void call("ui_set", { opts: ui });
@@ -504,11 +529,11 @@ function renderTopBar() {
       setting("Collapse after", "How long the bar stays open when you leave it alone.",
         seg([[5, "5 s"], [15, "15 s"], [30, "30 s"], [60, "1 min"]] as const, is.autoCloseInterval as 5 | 15 | 30 | 60, (sec) => { saveIsland({ autoCloseInterval: sec }); renderTopBar(); })),
       h("h2", { style: "margin-top:22px" }, "Shortcuts"),
-      setting("Control bar", null, h("kbd", {}, "Ctrl+Alt+Z")),
-      setting("Transfer bar", "Open or close the small transfer bar any time.", h("kbd", {}, "Ctrl+Alt+U")),
-      setting("Explorer right-click menu", "Adds “Send with CubeCursor” to files and folders.", switchEl(shellMenu, (v) => {
+      setting("Control bar", null, h("kbd", {}, isMac() ? "⌃⌥Z" : "Ctrl+Alt+Z")),
+      setting("Transfer bar", "Open or close the small transfer bar any time.", h("kbd", {}, isMac() ? "⌃⌥U" : "Ctrl+Alt+U")),
+      ...(isMac() ? [] : [setting("Explorer right-click menu", "Adds “Send with CubeCursor” to files and folders.", switchEl(shellMenu, (v) => {
         void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });
-      })),
+      }))]),
       h("div", { class: "note" }, h("span", {}, "To send by drag: pick a file up, press "), h("kbd", {}, "Space"), h("span", {}, ", and drop it on the bar. Let go anywhere else and the bar closes again.")),
     ];
   });
@@ -533,6 +558,9 @@ onFileDrop(
 );
 void call<UiOptions>("ui_get").then((v) => { if (v) { ui = v; renderTopBar(); } }).catch(() => {});
 elevState();
+platState();
+// While macOS permissions are missing, check again every few seconds.
+setInterval(() => { if (isMac() && !plat.perms_ok) platState(); }, 3000);
 void call<boolean>("shell_menu_get").then((v) => { shellMenu = !!v; renderTopBar(); }).catch(() => {});
 void call<boolean>("autostart_get").then((v) => { autostart = v; if (snap) renderSettings(snap); });
 void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });

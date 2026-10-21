@@ -591,6 +591,52 @@ struct ElevState {
     autostart: bool,
 }
 
+#[derive(serde::Serialize)]
+struct PlatformInfo {
+    os: &'static str,
+    perms_ok: bool,
+}
+
+/// Which system this is, and (on a Mac) whether its privacy permissions are given.
+#[tauri::command]
+fn platform_info() -> PlatformInfo {
+    #[cfg(target_os = "macos")]
+    {
+        PlatformInfo {
+            os: "macos",
+            perms_ok: tandem_core::mac::permissions_granted(),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PlatformInfo {
+            os: std::env::consts::OS,
+            perms_ok: true,
+        }
+    }
+}
+
+/// Opens the page of System Settings where CubeCursor is allowed in (Mac only).
+#[tauri::command]
+fn open_mac_privacy(which: String) {
+    #[cfg(target_os = "macos")]
+    {
+        tandem_core::mac::request_permissions();
+        let pane = if which == "input" {
+            "Privacy_ListenEvent"
+        } else {
+            "Privacy_Accessibility"
+        };
+        let _ = std::process::Command::new("open")
+            .arg(format!(
+                "x-apple.systempreferences:com.apple.preference.security?{pane}"
+            ))
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = which;
+}
+
 #[tauri::command]
 fn elevation_state() -> ElevState {
     ElevState {
@@ -971,6 +1017,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            platform_info,
+            open_mac_privacy,
             sound_register,
             sound_play,
             snapshot,

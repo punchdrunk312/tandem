@@ -59,7 +59,8 @@
         "x": 0,
         "y": 0
       }
-    ]
+    ],
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
@@ -94,7 +95,11 @@
     "homepage": "https://cubecursor.shop",
     "copyright": "Copyright © 2026 CubeCursor. All rights reserved.",
     "licenseFile": "installer/EULA.txt",
-    "longDescription": "CubeCursor shares one mouse and keyboard across your Windows PCs over your own network. Move the cursor off the edge of one screen and it appears on the next, with a shared clipboard and drag-and-drop file transfer."
+    "longDescription": "CubeCursor shares one mouse and keyboard across your Windows PCs over your own network. Move the cursor off the edge of one screen and it appears on the next, with a shared clipboard and drag-and-drop file transfer.",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    }
   },
   "mainBinaryName": "CubeCursor"
 }

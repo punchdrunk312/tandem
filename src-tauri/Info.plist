@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Lives in the menu bar and the top bar, not in the Dock. -->
+  <key>LSUIElement</key>
+  <true/>
+  <!-- macOS asks before an app may find and talk to other computers on the network. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>CubeCursor finds your other computers on this network and connects to them to share the mouse, keyboard, clipboard and files.</string>
+</dict>
+</plist>
