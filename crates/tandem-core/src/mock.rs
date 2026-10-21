@@ -28,6 +28,8 @@ pub struct MockState {
     pub launched: Vec<AppRef>,
     pub launch_error: Option<String>,
     pub closed: Vec<AppRef>,
+    /// A window held by its title bar while this computer is being controlled.
+    pub app_hold: Option<AppRef>,
 }
 
 pub struct MockPlatform {
@@ -63,6 +65,7 @@ impl MockPlatform {
                 launched: vec![],
                 launch_error: None,
                 closed: vec![],
+                app_hold: None,
             }),
             sink: Mutex::new(None),
         })
@@ -112,6 +115,12 @@ impl Platform for MockPlatform {
     }
     fn close_app(&self, app: &AppRef) {
         self.st.lock().unwrap().closed.push(app.clone());
+    }
+    fn app_hold(&self) -> crate::platform::AppHold {
+        match self.st.lock().unwrap().app_hold.take() {
+            Some(a) => crate::platform::AppHold::Ready(a),
+            None => crate::platform::AppHold::Nothing,
+        }
     }
     fn take_drag_files(&self) -> Option<Vec<std::path::PathBuf>> {
         self.st.lock().unwrap().drag_ready.take()

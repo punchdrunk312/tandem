@@ -109,8 +109,22 @@ pub trait Platform: Send + Sync + 'static {
     }
     /// Close `app` here (it has opened on the other computer).
     fn close_app(&self, _app: &crate::proto::AppRef) {}
+    /// While the other computer's mouse is dragging here: is a program's window being
+    /// held by its title bar? `Ready` hands it over (and forgets it).
+    fn app_hold(&self) -> AppHold {
+        AppHold::Nothing
+    }
     /// How long the cursor must keep pushing against the edge before it crosses.
     fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>);
+}
+
+/// What the press under the cursor is holding, for moving programs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppHold {
+    Nothing,
+    /// A browser's page address is still being read.
+    Reading,
+    Ready(crate::proto::AppRef),
 }

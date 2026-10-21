@@ -931,15 +931,52 @@ async fn handing_discord_over_opens_it_there_and_closes_it_here() {
 }
 
 #[tokio::test]
-async fn a_program_that_is_not_on_the_safe_list_stays_open_here() {
+async fn any_program_is_closed_here_once_it_opened_there() {
     let (a, b) = pair_with_apps(true, true).await;
     hand_off(&b, app("notepad.exe", None));
     until("A opened it", || {
         !a.plat.st.lock().unwrap().launched.is_empty()
     })
     .await;
-    until("B said so", || notice_has(&b, "still open here")).await;
-    assert!(b.plat.st.lock().unwrap().closed.is_empty());
+    until("closed on B", || {
+        !b.plat.st.lock().unwrap().closed.is_empty()
+    })
+    .await;
+    until("B said so", || notice_has(&b, "Moved notepad")).await;
+}
+
+#[tokio::test]
+async fn a_window_on_the_controlled_computer_can_be_dragged_back() {
+    let (a, b) = pair_with_apps(true, true).await;
+    b.plat.st.lock().unwrap().confirm_move = true;
+    // A's mouse is on B (A's left edge leads to B).
+    a.plat.user_push_edge(Edge::Left, 0.5);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    // The button goes down on a window's title bar there and drags it back towards A.
+    b.plat.st.lock().unwrap().app_hold = Some(app("Discord.exe", None));
+    a.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: true,
+    }));
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 5000,
+        dy: 0,
+    }));
+    until("A opened it", || {
+        !a.plat.st.lock().unwrap().launched.is_empty()
+    })
+    .await;
+    // The question was asked where the cursor was (on B), and the mouse stayed there.
+    assert_eq!(b.plat.st.lock().unwrap().confirm_asked[0].0, "PC-A");
+    assert_eq!(b.node.snapshot().control, "controlled");
+    assert!(
+        b.plat.st.lock().unwrap().drag_cancels >= 1,
+        "the window drag on B ended"
+    );
+    until("closed on B", || {
+        !b.plat.st.lock().unwrap().closed.is_empty()
+    })
+    .await;
 }
 
 #[tokio::test]

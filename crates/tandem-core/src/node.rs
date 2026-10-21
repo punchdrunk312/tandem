@@ -1581,28 +1581,16 @@ impl Actor {
                     return;
                 }
                 log::info!("app move: {} dragged to the {edge:?} edge", app.exe);
-                let Some((to, who)) = self
+                let Some(to) = self
                     .sessions
                     .iter()
                     .find(|(_, s)| s.side == edge)
-                    .map(|(id, s)| (id.clone(), s.peer.name.clone()))
+                    .map(|(id, _)| id.clone())
                 else {
                     self.notify("No computer is set on that side");
                     return;
                 };
-                let plat = self.sh.platform.clone();
-                let ev_tx = self.ev_tx.clone();
-                // The question waits for a person: never on the engine's thread.
-                tokio::task::spawn_blocking(move || {
-                    let res = if !app.is_sane() {
-                        Err("That window can't be moved".to_string())
-                    } else if plat.confirm_move_app(&who, &app) {
-                        Ok(app)
-                    } else {
-                        Err(String::new())
-                    };
-                    let _ = ev_tx.send(Ev::AppPicked { to, res });
-                });
+                self.offer_app(to, app);
             }
             CaptureEvent::LocalLeftUp => {
                 let was_down = std::mem::replace(&mut self.left_down, false);
@@ -1830,6 +1818,24 @@ impl Actor {
                             && (dx > 0 || dy > 0))
                             .then_some(0.5),
                     };
+                    // The other computer's mouse is dragging a program's window here
+                    // against the way back: offer to move the program over there instead
+                    // of leaving (the cursor stays here so the person can answer).
+                    if leaving.is_some()
+                        && self.left_down
+                        && self.sh.persisted.lock().unwrap().move_apps
+                    {
+                        match plat.app_hold() {
+                            AppHold::Reading => return,
+                            AppHold::Ready(app) => {
+                                log::info!("app move: {} dragged back towards {from}", app.exe);
+                                plat.cancel_drag();
+                                self.offer_app(from.to_string(), app);
+                                return;
+                            }
+                            AppHold::Nothing => {}
+                        }
+                    }
                     if let Some(frac) = leaving {
                         // Leaving with files in hand (picked up on this computer): take
                         // them to the other one and stop the drag here.
@@ -1958,20 +1964,35 @@ impl Actor {
                     self.notify(&m);
                 } else if app.url.is_some() {
                     self.notify(&format!("Opened the page on {who}"));
-                } else if app.may_close() {
+                } else {
                     let plat = self.sh.platform.clone();
                     let a = app.clone();
                     tokio::task::spawn_blocking(move || plat.close_app(&a));
                     self.notify(&format!("Moved {} to {who}", app.name));
-                } else {
-                    self.notify(&format!(
-                        "Opened {} on {who} — it's still open here",
-                        app.name
-                    ));
                 }
             }
             Msg::FileOffer { id, kind, items } => self.on_file_offer(from, id, kind, items),
         }
+    }
+
+    /// Ask the person here whether to move `app` to the computer `to`, then send it.
+    fn offer_app(&mut self, to: String, app: AppRef) {
+        let Some(who) = self.sessions.get(&to).map(|s| s.peer.name.clone()) else {
+            return;
+        };
+        let plat = self.sh.platform.clone();
+        let ev_tx = self.ev_tx.clone();
+        // The question waits for a person: never on the engine's thread.
+        tokio::task::spawn_blocking(move || {
+            let res = if !app.is_sane() {
+                Err("That window can't be moved".to_string())
+            } else if plat.confirm_move_app(&who, &app) {
+                Ok(app)
+            } else {
+                Err(String::new())
+            };
+            let _ = ev_tx.send(Ev::AppPicked { to, res });
+        });
     }
 
     fn announce_side(&self, pid: &str) {

@@ -717,6 +717,45 @@ fn app_of_window(root: HWND) -> Option<AppRef> {
     }
 }
 
+/// Ask every visible main window of the program `exe` to close (WM_CLOSE).
+fn close_windows_of(exe: &str) -> usize {
+    struct Ctx {
+        exe: String,
+        found: Vec<isize>,
+    }
+    unsafe extern "system" fn each(h: HWND, lp: LPARAM) -> windows::core::BOOL {
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        if IsWindowVisible(h).as_bool()
+            && GetWindow(h, GW_OWNER)
+                .map(|o| o.0.is_null())
+                .unwrap_or(true)
+        {
+            if let Some(app) = app_of_window(h) {
+                if app.exe.eq_ignore_ascii_case(&ctx.exe) {
+                    ctx.found.push(h.0 as isize);
+                }
+            }
+        }
+        TRUE
+    }
+    let mut ctx = Ctx {
+        exe: exe.to_string(),
+        found: Vec::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut ctx as *mut Ctx as isize));
+        for &h in &ctx.found {
+            let _ = PostMessageW(
+                Some(HWND(h as *mut core::ffi::c_void)),
+                WM_CLOSE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+    ctx.found.len()
+}
+
 /// The program whose window is being grabbed at this point, if it may be moved: the
 /// title bar of any program, or for a browser the strip along the top that holds the
 /// tabs and the empty space beside them. Only the press is looked at here; nothing
@@ -1833,13 +1872,9 @@ impl Platform for WinPlatform {
                 let shown: String = u.chars().take(160).collect();
                 format!("Open this page on {to}?\n\n{shown}")
             }
-            None if app.may_close() => format!(
+            None => format!(
                 "Move {} to {to}?\n\n{} will open on {to} and close on this computer.",
                 app.name, app.name
-            ),
-            None => format!(
-                "Open {} on {to}?\n\nIt stays open on this computer too.",
-                app.name
             ),
         };
         unsafe {
@@ -1868,15 +1903,62 @@ impl Platform for WinPlatform {
 
     fn close_app(&self, app: &AppRef) {
         use std::os::windows::process::CommandExt;
-        if !app.is_sane() || !app.may_close() {
+        if !app.is_sane() || app.url.is_some() {
             return;
         }
-        // Chat and music programs hide in the tray when their window is closed, so the
-        // whole program is ended.
-        let _ = std::process::Command::new("taskkill")
-            .args(["/IM", &app.exe, "/F"])
-            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-            .output();
+        let running = || {
+            std::process::Command::new("tasklist")
+                .args(["/FI", &format!("IMAGENAME eq {}", app.exe), "/NH"])
+                .creation_flags(0x0800_0000)
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .to_ascii_lowercase()
+                        .contains(&app.exe.to_ascii_lowercase())
+                })
+                .unwrap_or(false)
+        };
+        if app.may_close() {
+            // Chat and music programs only hide in the tray when their window is
+            // closed, so the whole program (and its helper processes) is ended. Some
+            // take a moment to let go, so it is checked and tried once more.
+            for attempt in 0..3 {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/IM", &app.exe, "/T", "/F"])
+                    .creation_flags(0x0800_0000)
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(700));
+                if !running() {
+                    log::info!("app move: closed {} here", app.exe);
+                    return;
+                }
+                log::info!("app move: {} still running (try {})", app.exe, attempt + 1);
+            }
+            return;
+        }
+        // Anything else is closed the polite way, like clicking its X: it can still ask
+        // to save unsaved work.
+        let n = close_windows_of(&app.exe);
+        log::info!("app move: asked {n} window(s) of {} to close", app.exe);
+    }
+
+    fn app_hold(&self) -> AppHold {
+        if !MOVE_APPS.load(Relaxed) || APP_GEN.load(Relaxed) != DRAG_GEN.load(Relaxed) {
+            return AppHold::Nothing;
+        }
+        match APP_STATE.load(Relaxed) {
+            1 => AppHold::Reading,
+            2 => {
+                let app = APP_DRAG.lock().ok().and_then(|mut a| a.take());
+                APP_STATE.store(0, Relaxed);
+                DRAG_GEN.fetch_add(1, Relaxed);
+                match app {
+                    Some(a) => AppHold::Ready(a),
+                    None => AppHold::Nothing,
+                }
+            }
+            _ => AppHold::Nothing,
+        }
     }
 
     fn take_drag_files(&self) -> Option<Vec<PathBuf>> {
