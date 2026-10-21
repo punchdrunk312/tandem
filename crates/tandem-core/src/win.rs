@@ -102,6 +102,44 @@ static APP_GEN: AtomicU32 = AtomicU32::new(0);
 static APP_STATE: AtomicU8 = AtomicU8::new(0);
 static APP_DRAG: Mutex<Option<AppRef>> = Mutex::new(None);
 static LOGGED_GEN: AtomicU32 = AtomicU32::new(0);
+/// The window under the press, for state 3 (pressed somewhere that may be a title bar).
+static APP_HWND: AtomicIsize = AtomicIsize::new(0);
+
+fn still_gen(seq: u32) -> bool {
+    DRAG_GEN.load(Relaxed) == seq
+}
+
+/// Is Windows moving this window right now (it is being dragged by its title bar)?
+fn being_moved(hwnd: isize) -> bool {
+    unsafe {
+        let h = HWND(hwnd as *mut core::ffi::c_void);
+        let tid = GetWindowThreadProcessId(h, None);
+        if tid == 0 {
+            return false;
+        }
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        if GetGUIThreadInfo(tid, &mut info).is_err() {
+            return false;
+        }
+        info.flags.contains(GUI_INMOVESIZE)
+            && !info.hwndMoveSize.0.is_null()
+            && GetAncestor(info.hwndMoveSize, GA_ROOT).0 as isize == hwnd
+    }
+}
+
+/// A state-3 press whose window is now being moved becomes a ready app (state 2).
+fn promote_if_moving() -> u8 {
+    let st = APP_STATE.load(Relaxed);
+    if st == 3 && being_moved(APP_HWND.load(Relaxed)) {
+        APP_STATE.store(2, Relaxed);
+        log::info!("app drag: the window is being moved: ready");
+        return 2;
+    }
+    st
+}
 
 #[derive(Clone, Copy)]
 enum ShellKind {
@@ -163,21 +201,17 @@ while ($true) {
     if ($p[0] -eq 'URL') {
       $el = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][int64]$p[1])
       $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-      $first = $el.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
-      $cands = @()
-      if ($first) { $cands += $first }
-      foreach ($e in $cands) {
-        $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
-        if ($v -and [string]$e.Current.Name -match 'address|url|search|location') { $out = 'OK|' + $v }
-      }
-      if ($out -eq 'NONE') {
-        foreach ($e in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)) {
-          if ([string]$e.Current.Name -match 'address|url|search|location') {
-            $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
-            if ($v) { $out = 'OK|' + $v; break }
-          }
+      # The address bar: its name depends on the language of the browser, so look at
+      # what it holds. The first box holding an address wins, named ones first.
+      $named = $null; $any = $null
+      foreach ($e in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)) {
+        try { $v = [string]$e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { $v = '' }
+        if ($v -match '^(https?://)?[^\s/]+\.[^\s]+$') {
+          if (-not $any) { $any = $v }
+          if ([string]$e.Current.Name -match 'address|url|search|location') { $named = $v; break }
         }
       }
+      if ($named) { $out = 'OK|' + $named } elseif ($any) { $out = 'OK|' + $any }
     } else {
     $docs = Docs $p[1] ([int64]$p[2])
     if ($p[0] -eq 'SEL') {
@@ -360,9 +394,23 @@ fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
                 if DRAG_GEN.load(Relaxed) != seq {
                     continue;
                 }
-                let Some((hwnd, mut app)) = window_app_at(x, y) else {
+                let Some((hwnd, mut app, grabbed)) = window_app_at(x, y) else {
                     continue;
                 };
+                if !grabbed {
+                    // Apps that draw their own title bar (Discord, Spotify…) don't say
+                    // where it is. Remember the window: if Windows starts moving it, the
+                    // press was on its title bar after all (checked at the edge).
+                    if !app.is_browser() && still_gen(seq) {
+                        if let Ok(mut a) = APP_DRAG.lock() {
+                            *a = Some(app);
+                            APP_HWND.store(hwnd, Relaxed);
+                            APP_GEN.store(seq, Relaxed);
+                            APP_STATE.store(3, Relaxed);
+                        }
+                    }
+                    continue;
+                }
                 let still = || DRAG_GEN.load(Relaxed) == seq;
                 if app.is_browser() {
                     // Wait for the page to be read before the edge may offer anything.
@@ -760,7 +808,7 @@ fn close_windows_of(exe: &str) -> usize {
 /// title bar of any program, or for a browser the strip along the top that holds the
 /// tabs and the empty space beside them. Only the press is looked at here; nothing
 /// happens unless the drag then reaches an edge.
-fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
+fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef, bool)> {
     unsafe {
         let hwnd = WindowFromPoint(POINT { x, y });
         if hwnd.0.is_null() {
@@ -809,7 +857,7 @@ fn window_app_at(x: i32, y: i32) -> Option<(isize, AppRef)> {
                 "not on the title bar"
             }
         );
-        grabbed.then_some((root.0 as isize, app))
+        Some((root.0 as isize, app, grabbed))
     }
 }
 
@@ -1125,7 +1173,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             && MOVE_APPS.load(Relaxed)
             && APP_GEN.load(Relaxed) == DRAG_GEN.load(Relaxed)
         {
-            APP_STATE.load(Relaxed)
+            promote_if_moving()
         } else {
             0
         };
@@ -1946,7 +1994,7 @@ impl Platform for WinPlatform {
         if !MOVE_APPS.load(Relaxed) || APP_GEN.load(Relaxed) != DRAG_GEN.load(Relaxed) {
             return AppHold::Nothing;
         }
-        match APP_STATE.load(Relaxed) {
+        match promote_if_moving() {
             1 => AppHold::Reading,
             2 => {
                 let app = APP_DRAG.lock().ok().and_then(|mut a| a.take());
