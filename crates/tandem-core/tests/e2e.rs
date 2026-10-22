@@ -1167,7 +1167,6 @@ async fn losing_the_licence_disconnects_the_free_computers() {
 fn drag_across(b: &Side, window: AppRef, crossed: i32) {
     b.plat.emit(CaptureEvent::SpanBegin {
         edge: Edge::Right,
-        app: window,
         w: 1200,
         h: 800,
     });
@@ -1181,7 +1180,11 @@ fn drag_across(b: &Side, window: AppRef, crossed: i32) {
     }
     b.plat.emit(CaptureEvent::SpanFrame(vec![0xFF, 0xD8, 0xFF]));
     let moved = crossed * 2 > 1200;
-    b.plat.emit(CaptureEvent::SpanEnd { moved });
+    b.plat.emit(CaptureEvent::SpanEnd {
+        moved,
+        app: Some(window),
+        frac: 0.3,
+    });
     if moved {
         b.plat.emit(CaptureEvent::Crossed {
             edge: Edge::Right,
@@ -1251,4 +1254,93 @@ async fn a_window_that_cannot_open_there_comes_back() {
     .await;
     assert!(b.plat.st.lock().unwrap().closed.is_empty());
     until("B says why", || notice_has(&b, "isn't installed")).await;
+}
+
+#[tokio::test]
+async fn a_window_whose_program_cannot_move_comes_back_with_a_note() {
+    let (_a, b) = pair_with_apps(true, true).await;
+    b.plat.emit(CaptureEvent::SpanBegin {
+        edge: Edge::Right,
+        w: 800,
+        h: 600,
+    });
+    b.plat.emit(CaptureEvent::SpanEnd {
+        moved: true,
+        app: None,
+        frac: 0.5,
+    });
+    until("B put it back", || {
+        b.plat.st.lock().unwrap().span_restores >= 1
+    })
+    .await;
+    until("B says so", || notice_has(&b, "can't be moved")).await;
+}
+
+#[tokio::test]
+async fn a_window_on_the_controlled_computer_hangs_across_on_the_way_back() {
+    let (a, b) = pair_with_apps(true, true).await;
+    // A's mouse is on B (A's left edge leads to B, so B's way back is its right edge).
+    a.plat.user_push_edge(Edge::Left, 0.5);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    // There, a window is grabbed by its title bar and dragged back towards A.
+    b.plat.st.lock().unwrap().span_window = Some(app("notepad.exe", None));
+    a.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: true,
+    }));
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 5000,
+        dy: 0,
+    }));
+    until("B hangs it across its right edge", || {
+        b.plat.st.lock().unwrap().span_taken == Some(Edge::Right)
+    })
+    .await;
+    // The mouse keeps going: B moves the window instead of the cursor, and A shows it.
+    for _ in 0..4 {
+        a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+            dx: 200,
+            dy: 0,
+        }));
+    }
+    until("A shows it coming in", || {
+        a.plat
+            .st
+            .lock()
+            .unwrap()
+            .span_shown
+            .last()
+            .is_some_and(|v| v.crossed >= 800)
+    })
+    .await;
+    assert_eq!(
+        a.plat.st.lock().unwrap().span_shown.last().unwrap().entry,
+        Edge::Left
+    );
+    assert_eq!(
+        b.node.snapshot().control,
+        "controlled",
+        "still on B while dragging"
+    );
+    // Let go over A: it opens on A, closes on B, and the mouse is back on A.
+    a.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: false,
+    }));
+    until("A opened it", || {
+        !a.plat.st.lock().unwrap().launched.is_empty()
+    })
+    .await;
+    until("closed on B", || {
+        !b.plat.st.lock().unwrap().closed.is_empty()
+    })
+    .await;
+    until("the mouse is back on A", || {
+        a.node.snapshot().control == "local"
+    })
+    .await;
+    assert!(
+        b.plat.st.lock().unwrap().confirm_asked.is_empty(),
+        "nobody was asked"
+    );
 }

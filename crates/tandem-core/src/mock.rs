@@ -36,6 +36,10 @@ pub struct MockState {
     /// Each `span_hide`, with its delay.
     pub span_hidden: Vec<u32>,
     pub span_restores: u32,
+    /// A window held by the other computer's mouse here, that can hang across.
+    pub span_window: Option<AppRef>,
+    pub span_taken: Option<Edge>,
+    pub span_moved_x: i32,
 }
 
 pub struct MockPlatform {
@@ -76,6 +80,9 @@ impl MockPlatform {
                 span_frames: 0,
                 span_hidden: vec![],
                 span_restores: 0,
+                span_window: None,
+                span_taken: None,
+                span_moved_x: 0,
             }),
             sink: Mutex::new(None),
         })
@@ -204,6 +211,59 @@ impl Platform for MockPlatform {
     }
     fn span_restore(&self) {
         self.st.lock().unwrap().span_restores += 1;
+    }
+    fn span_take(&self, edge: Edge) -> bool {
+        let mut st = self.st.lock().unwrap();
+        if st.span_window.is_none() {
+            return false;
+        }
+        st.span_taken = Some(edge);
+        st.span_moved_x = 0;
+        drop(st);
+        self.emit(CaptureEvent::SpanBegin {
+            edge,
+            w: 1200,
+            h: 800,
+        });
+        true
+    }
+    fn span_move(&self, dx: i32, _dy: i32) {
+        let mut st = self.st.lock().unwrap();
+        if st.span_taken.is_some() {
+            st.span_moved_x += dx.abs();
+            let c = st.span_moved_x;
+            drop(st);
+            self.emit(CaptureEvent::SpanMove {
+                crossed: c,
+                along: 0.5,
+                gx: 300,
+                gy: 15,
+            });
+        }
+    }
+    fn span_release(&self) {
+        let mut st = self.st.lock().unwrap();
+        if st.span_taken.take().is_none() {
+            return;
+        }
+        // Let go more than halfway over the 1200-px window: it moves.
+        let moved = st.span_moved_x * 2 > 1200;
+        let app = st.span_window.take();
+        drop(st);
+        self.emit(CaptureEvent::SpanEnd {
+            moved,
+            app,
+            frac: 0.5,
+        });
+    }
+    fn span_cancel(&self) {
+        if self.st.lock().unwrap().span_taken.take().is_some() {
+            self.emit(CaptureEvent::SpanEnd {
+                moved: false,
+                app: None,
+                frac: 0.0,
+            });
+        }
     }
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {
         *self.sink.lock().unwrap() = Some(tx);

@@ -632,6 +632,7 @@ impl Node {
             just_left: None,
             pending_app: None,
             span_out: None,
+            span_driving: false,
             span_in: None,
             clip: clipboard_worker(sh.platform.clone(), ev_tx.clone()),
         };
@@ -1024,7 +1025,9 @@ struct Actor {
     /// The program we sent across by dragging its window: id, computer, program.
     pending_app: Option<(u64, String, AppRef)>,
     /// A window of ours hanging across an edge: the computer on that side, and the program.
-    span_out: Option<(String, AppRef)>,
+    span_out: Option<String>,
+    /// The other computer's mouse is dragging one of our windows across (we are controlled).
+    span_driving: bool,
     /// A window another computer is dragging over to us: that computer, and its size.
     span_in: Option<(String, u32, u32)>,
     /// Clipboard reads / writes run on their own thread: the clipboard can be held by
@@ -1275,6 +1278,11 @@ impl Actor {
             self.span_in = None;
             self.sh.platform.span_hide(0);
         }
+        if self.span_out.as_deref() == Some(pid) {
+            self.span_out = None;
+            self.span_driving = false;
+            self.sh.platform.span_cancel();
+        }
         match &self.control {
             Control::Remote { peer, .. } if peer == pid => {
                 let (x, y) = self.center();
@@ -1467,6 +1475,7 @@ impl Actor {
                 Ok(app) => {
                     // The computer may have gone away while the question was open.
                     if !self.sessions.contains_key(&to) {
+                        self.sh.platform.span_restore();
                         return;
                     }
                     let who = self
@@ -1713,19 +1722,16 @@ impl Actor {
                 };
                 self.offer_app(to, app);
             }
-            CaptureEvent::SpanBegin { edge, app, w, h } => {
+            CaptureEvent::SpanBegin { edge, w, h } => {
                 let to = self
                     .sessions
                     .iter()
                     .find(|(_, s)| s.side == edge)
                     .map(|(id, _)| id.clone());
-                log::info!(
-                    "app span: {} hangs across the {edge:?} edge ({w}x{h})",
-                    app.exe
-                );
+                log::info!("app span: a {w}x{h} window crosses the {edge:?} edge");
                 if let Some(to) = to {
                     self.send_to(&to, Msg::SpanBegin { w, h });
-                    self.span_out = Some((to, app));
+                    self.span_out = Some(to);
                 }
             }
             CaptureEvent::SpanMove {
@@ -1734,7 +1740,7 @@ impl Actor {
                 gx,
                 gy,
             } => {
-                if let Some((to, _)) = &self.span_out {
+                if let Some(to) = &self.span_out {
                     self.send_to(
                         to,
                         Msg::SpanPos {
@@ -1747,29 +1753,45 @@ impl Actor {
                 }
             }
             CaptureEvent::SpanFrame(jpeg) => {
-                if let Some((to, _)) = &self.span_out {
+                if let Some(to) = &self.span_out {
                     self.send_to(to, Msg::SpanFrame(jpeg));
                 }
             }
-            CaptureEvent::SpanEnd { moved } => {
-                let Some((to, app)) = self.span_out.take() else {
+            CaptureEvent::SpanEnd { moved, app, frac } => {
+                self.span_driving = false;
+                let Some(to) = self.span_out.take() else {
                     if moved {
                         self.sh.platform.span_restore();
                     }
                     return;
                 };
-                log::info!(
-                    "app span: let go, {}",
-                    if moved { "moving it" } else { "staying here" }
-                );
                 self.send_to(&to, Msg::SpanEnd { moved });
-                if moved {
-                    if !self.sh.persisted.lock().unwrap().move_apps || !app.is_sane() {
-                        self.sh.platform.span_restore();
-                        return;
+                if !moved {
+                    return;
+                }
+                let who = self
+                    .sessions
+                    .get(&to)
+                    .map(|s| s.peer.name.clone())
+                    .unwrap_or_else(|| "the other computer".into());
+                // Driven from there (we are being controlled): the mouse goes back now.
+                if matches!(&self.control, Control::Controlled { peer, .. } if *peer == to) {
+                    self.left_down = false;
+                    self.sh.platform.release_all();
+                    self.set_control(Control::Local);
+                    self.send_to(&to, Msg::Leave { frac });
+                }
+                let movable = app.filter(|a| a.is_sane() && !(a.is_browser() && a.url.is_none()));
+                match movable {
+                    Some(app) if self.sh.persisted.lock().unwrap().move_apps => {
+                        log::info!("app span: let go over {who}: moving {}", app.exe);
+                        // Dragged over on purpose and let go there: no question to ask.
+                        let _ = self.ev_tx.send(Ev::AppPicked { to, res: Ok(app) });
                     }
-                    // Dragged over on purpose and let go there: no question to ask.
-                    let _ = self.ev_tx.send(Ev::AppPicked { to, res: Ok(app) });
+                    _ => {
+                        self.sh.platform.span_restore();
+                        self.notify(&format!("That window can't be moved to {who}"));
+                    }
                 }
             }
             CaptureEvent::LocalLeftUp => {
@@ -1964,8 +1986,41 @@ impl Actor {
                     Control::Controlled { peer, ret } if peer == from => *ret,
                     _ => return,
                 };
+                // One of our windows hangs across the way back: the mouse moves it.
+                if self.span_driving {
+                    match ev {
+                        InputEvent::MouseMove { dx, dy } => plat.span_move(dx, dy),
+                        InputEvent::Button {
+                            button: Button::Left,
+                            down: false,
+                        } => {
+                            self.left_down = false;
+                            plat.span_release();
+                        }
+                        InputEvent::Button {
+                            button: Button::Right,
+                            down: true,
+                        } => plat.span_cancel(),
+                        // Esc (virtual key 0x1B).
+                        InputEvent::Key {
+                            vk: 0x1B,
+                            down: true,
+                            ..
+                        } => plat.span_cancel(),
+                        _ => {}
+                    }
+                    return;
+                }
                 self.track_button(&ev);
                 plat.inject(&ev);
+                if let InputEvent::Button {
+                    button: Button::Left,
+                    down: false,
+                } = ev
+                {
+                    // Let go during a preview: the other computer stops showing it.
+                    plat.span_release();
+                }
                 if let InputEvent::Button {
                     button: Button::Left,
                     down: false,
@@ -2006,13 +2061,22 @@ impl Actor {
                             && (dx > 0 || dy > 0))
                             .then_some(0.5),
                     };
-                    // The other computer's mouse is dragging a program's window here
-                    // against the way back: offer to move the program over there instead
+                    let moving_apps = self.left_down && self.sh.persisted.lock().unwrap().move_apps;
+                    // A window being dragged here towards the way back: the other
+                    // computer shows it as soon as part of it is past the edge...
+                    if moving_apps && !ret.is_corner() {
+                        if leaving.is_none() {
+                            plat.span_watch(ret);
+                        } else if plat.span_take(ret) {
+                            // ...and when the pointer gets there, it hangs across.
+                            self.span_driving = true;
+                            return;
+                        }
+                    }
+                    // A program's window (or tab) held against the way back where it
+                    // can't hang across: offer to move the program over there instead
                     // of leaving (the cursor stays here so the person can answer).
-                    if leaving.is_some()
-                        && self.left_down
-                        && self.sh.persisted.lock().unwrap().move_apps
-                    {
+                    if leaving.is_some() && moving_apps {
                         match plat.app_hold() {
                             AppHold::Reading => return,
                             AppHold::Ready(app) => {

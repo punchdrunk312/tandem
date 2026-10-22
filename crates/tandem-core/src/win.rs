@@ -50,6 +50,47 @@ pub(crate) fn set_capturing(on: bool) -> bool {
 }
 /// Edges that lead to a connected computer, one bit each (see `EDGE_*`). 0 = none.
 static EDGES: AtomicU8 = AtomicU8::new(0);
+/// The four sides (not the corners).
+const SIDES: u8 = EDGE_LEFT | EDGE_RIGHT | EDGE_TOP | EDGE_BOTTOM;
+/// The physical left button is down (as this computer's own hook saw it).
+static LEFT_HELD: AtomicBool = AtomicBool::new(false);
+
+/// The active sides, as edges.
+fn side_edges(mask: u8) -> ([Edge; 4], usize) {
+    let mut out = [Edge::Left; 4];
+    let mut n = 0;
+    for (bit, e) in [
+        (EDGE_LEFT, Edge::Left),
+        (EDGE_RIGHT, Edge::Right),
+        (EDGE_TOP, Edge::Top),
+        (EDGE_BOTTOM, Edge::Bottom),
+    ] {
+        if mask & bit != 0 {
+            out[n] = e;
+            n += 1;
+        }
+    }
+    (out, n)
+}
+
+/// The program a window that hung across belongs to, if it is one that can be moved: the
+/// one worked out when the button went down (with a browser's page), or its process.
+pub(crate) fn span_app(hwnd: isize) -> Option<AppRef> {
+    if APP_HWND.load(Relaxed) == hwnd {
+        if let Some(a) = APP_DRAG.lock().ok().and_then(|a| a.clone()) {
+            return Some(a);
+        }
+    }
+    app_of_window(HWND(hwnd as *mut core::ffi::c_void))
+}
+
+/// Hides (or shows again) the pointer without swallowing input: for when the other
+/// computer's mouse drags a window across from here.
+pub(crate) fn hide_pointer(on: bool) {
+    if let Some(tx) = CURSOR_TX.get() {
+        let _ = tx.send(on);
+    }
+}
 /// The edge bit the cursor is currently pushing against (0 = none).
 static AT_BIT: AtomicU8 = AtomicU8::new(0);
 const EDGE_LEFT: u8 = 1;
@@ -1117,10 +1158,16 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
     let s = vscreen();
     if !CAPTURING.load(Relaxed) {
         if msg == WM_LBUTTONDOWN {
+            LEFT_HELD.store(true, Relaxed);
             note_left_down(h.x, h.y);
             return false;
         }
         if msg == WM_LBUTTONUP {
+            LEFT_HELD.store(false, Relaxed);
+            // A window that was going past an edge was let go before the pointer got there.
+            if crate::winspan::showing() {
+                crate::winspan::release();
+            }
             DRAG_GEN.fetch_add(1, Relaxed);
             emit(CaptureEvent::LocalLeftUp);
             return false;
@@ -1128,6 +1175,12 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         let mask = EDGES.load(Relaxed);
         if mask == 0 || msg != WM_MOUSEMOVE {
             return false;
+        }
+        // A window being dragged: show it on the other computer as soon as part of it is
+        // past an edge that leads there (any program; checked a few times a frame).
+        if LEFT_HELD.load(Relaxed) && MOVE_APPS.load(Relaxed) && mask & SIDES != 0 {
+            let (edges, n) = side_edges(mask);
+            crate::winspan::watch(&edges[..n], (h.x, h.y), s, false);
         }
         // Which of the active edges, if any, is the cursor pushing against? A corner
         // (both edges at once) wins over the two edges that make it up.
@@ -1176,6 +1229,21 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         // A program's window held by its title bar (or a browser tab) may be held at the
         // edge with the button down too, to offer it to the other computer.
         let files_carry = carrying;
+        // The pointer reached the edge with a window held: it hangs across from here on.
+        if hit & SIDES != 0 && left && !right && !files_carry && MOVE_APPS.load(Relaxed) {
+            let edge = match hit {
+                EDGE_LEFT => Edge::Left,
+                EDGE_RIGHT => Edge::Right,
+                EDGE_TOP => Edge::Top,
+                _ => Edge::Bottom,
+            };
+            if crate::winspan::take(edge, (h.x, h.y), s, false) {
+                AT_BIT.store(0, Relaxed);
+                AT_EDGE.store(0, Relaxed);
+                EDGE_SINCE_US.store(0, Relaxed);
+                return true;
+            }
+        }
         let app_state = if hit != 0
             && left
             && !right
@@ -1243,30 +1311,6 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             EDGE_BR => (Edge::BottomRight, 0.5),
             _ => (Edge::Bottom, fx),
         };
-        if app_wanted && !edge.is_corner() {
-            // The window itself is being moved (not a tab being torn off): carry on
-            // dragging it across, like onto a second monitor.
-            let win = APP_HWND.load(Relaxed);
-            if win != 0 && being_moved(win) {
-                if let Some((w, ht)) = crate::winspan::begin(win, edge, (h.x, h.y), s) {
-                    let app = APP_DRAG.try_lock().ok().and_then(|mut a| a.take());
-                    APP_STATE.store(0, Relaxed);
-                    DRAG_GEN.fetch_add(1, Relaxed);
-                    match app {
-                        Some(app) => emit(CaptureEvent::SpanBegin {
-                            edge,
-                            app,
-                            w,
-                            h: ht,
-                        }),
-                        None => {
-                            crate::winspan::cancel();
-                        }
-                    }
-                    return true;
-                }
-            }
-        }
         if app_wanted {
             log::info!("app drag: held at the edge, offering it");
             // Not a crossing: the cursor stays here. Esc ends the window's move, which also
@@ -1318,7 +1362,6 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             }
             WM_LBUTTONUP => {
                 if let Some((moved, edge, frac)) = crate::winspan::release() {
-                    emit(CaptureEvent::SpanEnd { moved });
                     if moved {
                         // Still swallowing: the mouse carries on over there.
                         reset_move();
@@ -1405,9 +1448,7 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
 
 /// Keep the window that hangs across an edge on this computer (Esc, right click).
 fn span_cancel() {
-    if crate::winspan::cancel() {
-        emit(CaptureEvent::SpanEnd { moved: false });
-    }
+    crate::winspan::cancel();
 }
 
 unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -2147,6 +2188,28 @@ impl Platform for WinPlatform {
 
     fn span_restore(&self) {
         crate::winspan::restore();
+    }
+
+    fn span_watch(&self, edge: Edge) {
+        crate::winspan::watch(&[edge], self.cursor_pos(), vscreen(), true);
+    }
+
+    fn span_take(&self, edge: Edge) -> bool {
+        crate::winspan::take(edge, self.cursor_pos(), vscreen(), true)
+    }
+
+    fn span_move(&self, dx: i32, dy: i32) {
+        crate::winspan::mouse(dx, dy);
+    }
+
+    fn span_release(&self) {
+        if crate::winspan::showing() {
+            crate::winspan::release();
+        }
+    }
+
+    fn span_cancel(&self) {
+        crate::winspan::cancel();
     }
 
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {

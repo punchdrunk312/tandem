@@ -60,15 +60,9 @@ pub enum CaptureEvent {
         edge: Edge,
         app: crate::proto::AppRef,
     },
-    /// A program's window was pushed through a connected edge and now hangs across it,
-    /// following the mouse (input is being swallowed, but not sent anywhere). `w` x `h`
-    /// is the window's size.
-    SpanBegin {
-        edge: Edge,
-        app: crate::proto::AppRef,
-        w: u32,
-        h: u32,
-    },
+    /// A window being dragged (any program's) has started to go past a connected edge:
+    /// the computer on that side shows the part that is over. `w` x `h` is its size.
+    SpanBegin { edge: Edge, w: u32, h: u32 },
     /// The window moved (see `proto::Msg::SpanPos`).
     SpanMove {
         crossed: i32,
@@ -78,10 +72,15 @@ pub enum CaptureEvent {
     },
     /// A fresh picture of the window, as JPEG.
     SpanFrame(Vec<u8>),
-    /// The button went up. `moved`: more than half the window was over the edge, so the
-    /// program goes to the other computer; the platform then also sends `Crossed`, so the
-    /// mouse carries on over there. Otherwise the window is back on this screen.
-    SpanEnd { moved: bool },
+    /// The drag across ended. `moved`: let go more than halfway over, so the program
+    /// (`app`, if it is one that can be moved) goes to the other computer and the mouse
+    /// carries on there at `frac` along the edge. When this computer's own mouse did it,
+    /// the platform also sends `Crossed`. Otherwise the window stays here.
+    SpanEnd {
+        moved: bool,
+        app: Option<crate::proto::AppRef>,
+        frac: f32,
+    },
 }
 
 /// A window being dragged over from another computer, as this computer shows it.
@@ -158,6 +157,20 @@ pub trait Platform: Send + Sync + 'static {
     /// The program dragged over didn't open there: bring its window fully back on this
     /// screen.
     fn span_restore(&self) {}
+    /// While the other computer's mouse drags a window here (we are being controlled):
+    /// the pointer moved; start or stop showing the window over there as it goes past
+    /// `edge` (the way back) or comes back.
+    fn span_watch(&self, _edge: Edge) {}
+    /// The other computer's mouse pushed a held window against `edge`: carry on moving it
+    /// across with the moves that arrive (see `span_move`). True if that started.
+    fn span_take(&self, _edge: Edge) -> bool {
+        false
+    }
+    fn span_move(&self, _dx: i32, _dy: i32) {}
+    /// The other computer's button went up during a drag across (or a preview).
+    fn span_release(&self) {}
+    /// Esc during a drag across: keep the window here.
+    fn span_cancel(&self) {}
     /// How long the cursor must keep pushing against the edge before it crosses.
     fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.

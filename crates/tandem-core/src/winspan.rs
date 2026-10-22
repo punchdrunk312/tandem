@@ -1,11 +1,17 @@
 //! Windows side of dragging a window across the edge (see `span.rs`).
 //!
-//! Sending: once a window held by its title bar is pushed through a connected edge, this
-//! computer stops Windows' own move (Esc, which also dismisses the snap preview), hides
-//! the pointer like it does when driving another computer, and moves the window itself
-//! with the mouse, letting it hang off the screen. A small arrow stands in for the pointer
-//! while it is over this screen. A thread takes pictures of the window (`PrintWindow`
-//! also draws the part that is off-screen) and hands them to the engine as JPEG.
+//! Two phases, for any window Windows is moving by its title bar:
+//!
+//! * Preview: Windows still moves the window. As soon as part of it goes past an edge
+//!   that leads to another computer, that computer starts showing the part that is over.
+//! * Driven: the pointer reaches the edge. Windows' own move is stopped (Esc, which also
+//!   drops the snap preview) and this computer moves the window itself, letting it hang
+//!   as far over as you push it. The real pointer is hidden and a stand-in arrow follows.
+//!
+//! The mouse driving it is either this computer's own (its hooks feed the moves) or the
+//! other computer's while it controls this one ("remote": the engine feeds the moves that
+//! arrive over the network). A thread takes pictures of the window (`PrintWindow` also
+//! draws the part that is off-screen) and hands them to the engine as JPEG.
 //!
 //! Receiving: a click-through, never-focused, always-on-top layered window shows the
 //! picture where the window would be on this screen.
@@ -16,9 +22,11 @@
 use crate::platform::{CaptureEvent, Screen, SpanView};
 use crate::proto::Edge;
 use crate::span::{self, Geo};
-use crate::win::{emit, key_input, mouse_input, send, set_capturing, vscreen};
+use crate::win::{
+    emit, hide_pointer, key_input, mouse_input, send, set_capturing, span_app, vscreen,
+};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 use windows::core::w;
@@ -32,6 +40,12 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 // ------------------------------------------------------------------ sending
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Phase {
+    Preview,
+    Driven,
+}
+
 struct Out {
     geo: Geo,
     hwnd: isize,
@@ -42,21 +56,33 @@ struct Out {
     /// The pointer as if the screen went on past the edge.
     vx: i32,
     vy: i32,
+    phase: Phase,
+    /// Driven by the other computer's mouse (this one is being controlled).
+    remote: bool,
     /// Windows' own move has been stopped: from now on this computer moves the window.
     settled: bool,
     last_sent: Instant,
 }
 
 static OUT: Mutex<Option<Out>> = Mutex::new(None);
-/// A window hangs across an edge right now (read by the hooks without locking).
+/// The driven phase is on: the hooks route the mouse here (read without locking).
 pub static ACTIVE: AtomicBool = AtomicBool::new(false);
-/// Bumped for every drag, so a picture thread from an earlier one stops.
+/// A preview or a drive is on.
+static SHOWING: AtomicBool = AtomicBool::new(false);
+/// Bumped whenever a drag across ends, so its picture thread stops.
 static GEN: AtomicU32 = AtomicU32::new(0);
+/// When the moving window was last looked at (the hook sees ~1000 moves a second).
+static LAST_WATCH_US: AtomicU64 = AtomicU64::new(0);
 /// The last window that hung across, to put it back if the program didn't open there.
 static LAST: Mutex<Option<(isize, Screen)>> = Mutex::new(None);
 
 fn hwnd(h: isize) -> HWND {
     HWND(h as *mut core::ffi::c_void)
+}
+
+fn now_us() -> u64 {
+    static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    T0.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
 fn window_rect(h: isize) -> Option<RECT> {
@@ -84,19 +110,47 @@ fn visible_rect(h: isize) -> Option<RECT> {
     }
 }
 
-/// The window held at `pt` was pushed through `edge`. Starts the drag across and returns
-/// the window's size, or None (then the usual "hold to move" offer happens instead).
-pub fn begin(h: isize, edge: Edge, pt: (i32, i32), scr: Screen) -> Option<(u32, u32)> {
-    if h == 0 || edge.is_corner() || ACTIVE.load(Relaxed) {
-        return None;
+/// The window Windows is moving by its title bar right now, if any (any program).
+pub fn moving_window() -> Option<isize> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return None;
+        }
+        let tid = GetWindowThreadProcessId(fg, None);
+        if tid == 0 {
+            return None;
+        }
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        GetGUIThreadInfo(tid, &mut info).ok()?;
+        if !info.flags.contains(GUI_INMOVESIZE) || info.hwndMoveSize.0.is_null() {
+            return None;
+        }
+        let root = GetAncestor(info.hwndMoveSize, GA_ROOT);
+        (!root.0.is_null()).then_some(root.0 as isize)
     }
+}
+
+/// A new drag across for window `h` held at `pt`, if part of it is past one of `edges`
+/// (or, with `at_edge`, the pointer itself is at that edge).
+fn start(
+    h: isize,
+    edges: &[Edge],
+    pt: (i32, i32),
+    scr: Screen,
+    remote: bool,
+    at_edge: Option<Edge>,
+) -> Option<Out> {
     let full = window_rect(h)?;
     let vis = visible_rect(h)?;
     let (w, ht) = (vis.right - vis.left, vis.bottom - vis.top);
     if w < 40 || ht < 30 {
         return None;
     }
-    let geo = Geo {
+    let geo_for = |edge: Edge| Geo {
         edge,
         scr,
         w,
@@ -104,28 +158,159 @@ pub fn begin(h: isize, edge: Edge, pt: (i32, i32), scr: Screen) -> Option<(u32, 
         gx: (pt.0 - vis.left).clamp(0, w - 1),
         gy: (pt.1 - vis.top).clamp(0, ht - 1),
     };
-    let out = Out {
-        geo,
+    let edge = match at_edge {
+        Some(e) => e,
+        None => *edges
+            .iter()
+            .find(|e| !e.is_corner() && geo_for(**e).crossed(pt.0, pt.1) > 0)?,
+    };
+    Some(Out {
+        geo: geo_for(edge),
         hwnd: h,
         off_x: vis.left - full.left,
         off_y: vis.top - full.top,
         vx: pt.0,
         vy: pt.1,
+        phase: Phase::Preview,
+        remote,
         settled: false,
-        last_sent: Instant::now(),
-    };
-    let off = (out.off_x, out.off_y);
-    *OUT.lock().ok()? = Some(out);
+        last_sent: Instant::now() - Duration::from_secs(1),
+    })
+}
+
+/// Begins showing `o` on the other computer and starts its pictures.
+fn announce(o: &mut Out) {
     let gen = GEN.fetch_add(1, Relaxed) + 1;
+    SHOWING.store(true, Relaxed);
+    log::info!(
+        "app span: {}x{} window crosses the {:?} edge{}",
+        o.geo.w,
+        o.geo.h,
+        o.geo.edge,
+        if o.remote {
+            " (driven from the other computer)"
+        } else {
+            ""
+        }
+    );
+    emit(CaptureEvent::SpanBegin {
+        edge: o.geo.edge,
+        w: o.geo.w as u32,
+        h: o.geo.h as u32,
+    });
+    report(o, true);
+    let (h, off, w, ht) = (o.hwnd, (o.off_x, o.off_y), o.geo.w, o.geo.h);
+    let _ = std::thread::Builder::new()
+        .name("tandem-span-pics".into())
+        .spawn(move || pictures(gen, h, off, w, ht));
+}
+
+/// Ends the drag across without moving anything: the other computer stops showing it.
+fn finish(o: &Out) {
+    GEN.fetch_add(1, Relaxed);
+    SHOWING.store(false, Relaxed);
+    ACTIVE.store(false, Relaxed);
+    if let Ok(mut l) = LAST.lock() {
+        *l = Some((o.hwnd, o.geo.scr));
+    }
+}
+
+/// While a window is being moved: show it on the other computer as soon as part of it
+/// is past one of `edges`, and stop as soon as it is all back. `pt` is the pointer.
+pub fn watch(edges: &[Edge], pt: (i32, i32), scr: Screen, remote: bool) {
+    if ACTIVE.load(Relaxed) {
+        return;
+    }
+    let now = now_us();
+    if now.saturating_sub(LAST_WATCH_US.load(Relaxed)) < 12_000 {
+        return;
+    }
+    LAST_WATCH_US.store(now, Relaxed);
+    let Ok(mut g) = OUT.try_lock() else {
+        return;
+    };
+    let moving = moving_window();
+    if let Some(o) = g.as_mut() {
+        if o.phase == Phase::Driven {
+            return;
+        }
+        let still = moving == Some(o.hwnd) && {
+            o.vx = pt.0;
+            o.vy = pt.1;
+            o.geo.crossed(pt.0, pt.1) > 0
+        };
+        if still {
+            report(o, false);
+            return;
+        }
+        // Back on this screen (or no longer being moved): the other computer lets go.
+        let o = g.take().unwrap();
+        finish(&o);
+        emit(CaptureEvent::SpanEnd {
+            moved: false,
+            app: None,
+            frac: 0.0,
+        });
+    }
+    let Some(h) = moving else {
+        return;
+    };
+    if let Some(mut o) = start(h, edges, pt, scr, remote, None) {
+        announce(&mut o);
+        *g = Some(o);
+    }
+}
+
+/// The pointer reached `edge` while a window is held: from here this computer moves the
+/// window. True if a drag across is on now (the caller swallows the move).
+pub fn take(edge: Edge, pt: (i32, i32), scr: Screen, remote: bool) -> bool {
+    if edge.is_corner() || ACTIVE.load(Relaxed) {
+        return false;
+    }
+    let Ok(mut g) = OUT.lock() else {
+        return false;
+    };
+    let moving = moving_window();
+    let fresh = match g.as_ref() {
+        Some(o) => o.geo.edge != edge || Some(o.hwnd) != moving,
+        None => true,
+    };
+    if fresh {
+        if let Some(o) = g.take() {
+            finish(&o);
+            emit(CaptureEvent::SpanEnd {
+                moved: false,
+                app: None,
+                frac: 0.0,
+            });
+        }
+        let Some(h) = moving else {
+            return false;
+        };
+        let Some(mut o) = start(h, &[edge], pt, scr, remote, Some(edge)) else {
+            return false;
+        };
+        announce(&mut o);
+        *g = Some(o);
+    }
+    let o = g.as_mut().unwrap();
+    o.phase = Phase::Driven;
+    o.vx = pt.0;
+    o.vy = pt.1;
+    o.settled = false;
     ACTIVE.store(true, Relaxed);
-    // Swallow the mouse from now on and hide the real pointer (parked mid-screen).
-    set_capturing(true);
-    let (cx, cy) = scr.center();
-    unsafe {
-        let _ = SetCursorPos(cx, cy);
+    if remote {
+        hide_pointer(true);
+    } else {
+        // Swallow the mouse from now on and hide the real pointer (parked mid-screen).
+        set_capturing(true);
+        let (cx, cy) = scr.center();
+        unsafe {
+            let _ = SetCursorPos(cx, cy);
+        }
     }
     cursor_overlay(Some(pt));
-    log::info!("app span: {w}x{ht} window pushed through the {edge:?} edge");
+    log::info!("app span: the pointer reached the edge: CubeCursor moves the window now");
     let _ = std::thread::Builder::new()
         .name("tandem-span".into())
         .spawn(move || {
@@ -145,9 +330,8 @@ pub fn begin(h: isize, edge: Edge, pt: (i32, i32), scr: Screen) -> Option<(u32, 
                     place_window(o);
                 }
             }
-            pictures(gen, h, off, w, ht);
         });
-    Some((w as u32, ht as u32))
+    true
 }
 
 fn place_window(o: &Out) {
@@ -183,7 +367,7 @@ fn on_screen(s: Screen, x: i32, y: i32) -> bool {
     x >= s.x && y >= s.y && x < s.x + s.width && y < s.y + s.height
 }
 
-/// The mouse moved by (`dx`, `dy`) while the window hangs across.
+/// The mouse moved by (`dx`, `dy`) while this computer moves the window.
 pub fn mouse(dx: i32, dy: i32) {
     let Ok(mut g) = OUT.try_lock() else {
         return;
@@ -191,6 +375,9 @@ pub fn mouse(dx: i32, dy: i32) {
     let Some(o) = g.as_mut() else {
         return;
     };
+    if o.phase != Phase::Driven {
+        return;
+    }
     let (vx, vy) = o.geo.clamp(o.vx + dx, o.vy + dy);
     if (vx, vy) == (o.vx, o.vy) {
         return;
@@ -205,46 +392,84 @@ pub fn mouse(dx: i32, dy: i32) {
     report(o, false);
 }
 
-/// The button went up. Returns (moved over, edge, where along the edge) when a drag was
-/// on. Not moved: the window is back on this screen and the pointer is given back here.
-/// Moved: input stays swallowed, for the `Crossed` the caller sends next.
+/// The left button went up. During a preview Windows drops the window where it is, so
+/// it is nudged fully back on screen. While driven: let go more than halfway over and
+/// the program moves (the engine is told, with the program, in `SpanEnd`); otherwise the
+/// window comes back and the pointer is given back here. Returns (moved, edge, where
+/// along the edge) for a driven drag: when moved by this computer's own mouse, input
+/// stays swallowed for the `Crossed` the caller sends next.
 pub fn release() -> Option<(bool, Edge, f32)> {
     let mut o = OUT.lock().ok()?.take()?;
-    ACTIVE.store(false, Relaxed);
+    let driven = o.phase == Phase::Driven;
+    finish(&o);
     cursor_overlay(None);
+    if !driven {
+        emit(CaptureEvent::SpanEnd {
+            moved: false,
+            app: None,
+            frac: 0.0,
+        });
+        let (h, s) = (o.hwnd, o.geo.scr);
+        let _ = std::thread::Builder::new().spawn(move || {
+            // Windows finishes its move first.
+            std::thread::sleep(Duration::from_millis(60));
+            restore_window(h, s);
+        });
+        return None;
+    }
     let moved = o.geo.moved(o.vx, o.vy);
     report(&mut o, true);
-    if let Ok(mut l) = LAST.lock() {
-        *l = Some((o.hwnd, o.geo.scr));
-    }
+    let frac = o.geo.frac(o.vx, o.vy);
     log::info!(
-        "app span: let go with {} of {} px over: {}",
+        "app span: let go with {} px over: {}",
         o.geo.crossed(o.vx, o.vy),
-        if matches!(o.geo.edge, Edge::Left | Edge::Right) {
-            o.geo.w
-        } else {
-            o.geo.h
-        },
         if moved {
             "moving the program"
         } else {
             "staying here"
         }
     );
-    if !moved {
+    if moved {
+        if o.remote {
+            hide_pointer(false);
+        }
+        let app = span_app(o.hwnd);
+        if app.is_none() {
+            log::info!("app span: that window's program can't be moved");
+        }
+        emit(CaptureEvent::SpanEnd {
+            moved: true,
+            app,
+            frac,
+        });
+    } else {
         give_back(&mut o);
+        emit(CaptureEvent::SpanEnd {
+            moved: false,
+            app: None,
+            frac,
+        });
     }
-    Some((moved, o.geo.edge, o.geo.frac(o.vx, o.vy)))
+    Some((moved, o.geo.edge, frac))
 }
 
-/// Esc (or the emergency key) during the drag: keep the window here. True if one was on.
+/// Esc, a right click or the emergency key during the drag: keep the window here.
+/// True if one was on.
 pub fn cancel() -> bool {
     let Some(mut o) = OUT.lock().ok().and_then(|mut g| g.take()) else {
         return false;
     };
-    ACTIVE.store(false, Relaxed);
+    let driven = o.phase == Phase::Driven;
+    finish(&o);
     cursor_overlay(None);
-    give_back(&mut o);
+    if driven {
+        give_back(&mut o);
+    }
+    emit(CaptureEvent::SpanEnd {
+        moved: false,
+        app: None,
+        frac: 0.0,
+    });
     true
 }
 
@@ -253,7 +478,11 @@ fn give_back(o: &mut Out) {
     o.vx = bx;
     o.vy = by;
     place_window(o);
-    set_capturing(false);
+    if o.remote {
+        hide_pointer(false);
+    } else {
+        set_capturing(false);
+    }
     let s = o.geo.scr;
     let x = bx.clamp(s.x, s.x + s.width - 1);
     let y = by.clamp(s.y, s.y + s.height - 1);
@@ -264,9 +493,12 @@ fn give_back(o: &mut Out) {
 
 /// The program didn't open on the other computer: bring its window fully back here.
 pub fn restore() {
-    let Some((h, s)) = LAST.lock().ok().and_then(|mut l| l.take()) else {
-        return;
-    };
+    if let Some((h, s)) = LAST.lock().ok().and_then(|mut l| l.take()) {
+        restore_window(h, s);
+    }
+}
+
+fn restore_window(h: isize, s: Screen) {
     let (Some(full), Some(vis)) = (window_rect(h), visible_rect(h)) else {
         return;
     };
@@ -289,10 +521,15 @@ pub fn restore() {
     }
 }
 
+/// Is a preview or drive on (for the hooks, without locking)?
+pub fn showing() -> bool {
+    SHOWING.load(Relaxed)
+}
+
 /// Pictures of the window while it hangs across.
 fn pictures(gen: u32, h: isize, off: (i32, i32), w: i32, ht: i32) {
     let mut sent = 0u32;
-    while GEN.load(Relaxed) == gen && ACTIVE.load(Relaxed) {
+    while GEN.load(Relaxed) == gen {
         let t = Instant::now();
         if let Some(jpg) = grab(h, off, w, ht) {
             sent += 1;
