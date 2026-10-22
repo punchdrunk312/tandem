@@ -11,8 +11,11 @@ pub mod mock;
 pub mod node;
 pub mod platform;
 pub mod proto;
+pub mod span;
 #[cfg(windows)]
 pub mod win;
+#[cfg(windows)]
+mod winspan;
 
 pub use error::{Error, Result};
 

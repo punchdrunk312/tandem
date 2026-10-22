@@ -60,6 +60,41 @@ pub enum CaptureEvent {
         edge: Edge,
         app: crate::proto::AppRef,
     },
+    /// A program's window was pushed through a connected edge and now hangs across it,
+    /// following the mouse (input is being swallowed, but not sent anywhere). `w` x `h`
+    /// is the window's size.
+    SpanBegin {
+        edge: Edge,
+        app: crate::proto::AppRef,
+        w: u32,
+        h: u32,
+    },
+    /// The window moved (see `proto::Msg::SpanPos`).
+    SpanMove {
+        crossed: i32,
+        along: f32,
+        gx: i32,
+        gy: i32,
+    },
+    /// A fresh picture of the window, as JPEG.
+    SpanFrame(Vec<u8>),
+    /// The button went up. `moved`: more than half the window was over the edge, so the
+    /// program goes to the other computer; the platform then also sends `Crossed`, so the
+    /// mouse carries on over there. Otherwise the window is back on this screen.
+    SpanEnd { moved: bool },
+}
+
+/// A window being dragged over from another computer, as this computer shows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpanView {
+    /// The edge of this screen the window comes in through.
+    pub entry: Edge,
+    pub crossed: i32,
+    pub along: f32,
+    pub w: u32,
+    pub h: u32,
+    pub gx: i32,
+    pub gy: i32,
 }
 
 pub trait Platform: Send + Sync + 'static {
@@ -114,6 +149,15 @@ pub trait Platform: Send + Sync + 'static {
     fn app_hold(&self) -> AppHold {
         AppHold::Nothing
     }
+    /// Show (or move) the window another computer is dragging over to this one.
+    fn span_show(&self, _v: SpanView) {}
+    /// A new picture (JPEG) for that window.
+    fn span_frame(&self, _jpeg: Vec<u8>) {}
+    /// Stop showing it, after `after_ms` (the real program may still be opening).
+    fn span_hide(&self, _after_ms: u32) {}
+    /// The program dragged over didn't open there: bring its window fully back on this
+    /// screen.
+    fn span_restore(&self) {}
     /// How long the cursor must keep pushing against the edge before it crosses.
     fn set_switch_delay(&self, _ms: u32) {}
     /// Called once at startup; the platform pushes `CaptureEvent`s here.

@@ -631,6 +631,8 @@ impl Node {
             left_down: false,
             just_left: None,
             pending_app: None,
+            span_out: None,
+            span_in: None,
             clip: clipboard_worker(sh.platform.clone(), ev_tx.clone()),
         };
         tokio::spawn(actor.run(ev_rx));
@@ -1021,6 +1023,10 @@ struct Actor {
     just_left: Option<(String, Instant)>,
     /// The program we sent across by dragging its window: id, computer, program.
     pending_app: Option<(u64, String, AppRef)>,
+    /// A window of ours hanging across an edge: the computer on that side, and the program.
+    span_out: Option<(String, AppRef)>,
+    /// A window another computer is dragging over to us: that computer, and its size.
+    span_in: Option<(String, u32, u32)>,
     /// Clipboard reads / writes run on their own thread: the clipboard can be held by
     /// another app for a moment and a big image takes a while to copy, and the actor
     /// that forwards mouse movement must never wait for either.
@@ -1265,6 +1271,10 @@ impl Actor {
         let Some(sess) = self.sessions.remove(pid) else {
             return;
         };
+        if self.span_in.as_ref().is_some_and(|(p, ..)| p == pid) {
+            self.span_in = None;
+            self.sh.platform.span_hide(0);
+        }
         match &self.control {
             Control::Remote { peer, .. } if peer == pid => {
                 let (x, y) = self.center();
@@ -1703,6 +1713,65 @@ impl Actor {
                 };
                 self.offer_app(to, app);
             }
+            CaptureEvent::SpanBegin { edge, app, w, h } => {
+                let to = self
+                    .sessions
+                    .iter()
+                    .find(|(_, s)| s.side == edge)
+                    .map(|(id, _)| id.clone());
+                log::info!(
+                    "app span: {} hangs across the {edge:?} edge ({w}x{h})",
+                    app.exe
+                );
+                if let Some(to) = to {
+                    self.send_to(&to, Msg::SpanBegin { w, h });
+                    self.span_out = Some((to, app));
+                }
+            }
+            CaptureEvent::SpanMove {
+                crossed,
+                along,
+                gx,
+                gy,
+            } => {
+                if let Some((to, _)) = &self.span_out {
+                    self.send_to(
+                        to,
+                        Msg::SpanPos {
+                            crossed,
+                            along,
+                            gx,
+                            gy,
+                        },
+                    );
+                }
+            }
+            CaptureEvent::SpanFrame(jpeg) => {
+                if let Some((to, _)) = &self.span_out {
+                    self.send_to(to, Msg::SpanFrame(jpeg));
+                }
+            }
+            CaptureEvent::SpanEnd { moved } => {
+                let Some((to, app)) = self.span_out.take() else {
+                    if moved {
+                        self.sh.platform.span_restore();
+                    }
+                    return;
+                };
+                log::info!(
+                    "app span: let go, {}",
+                    if moved { "moving it" } else { "staying here" }
+                );
+                self.send_to(&to, Msg::SpanEnd { moved });
+                if moved {
+                    if !self.sh.persisted.lock().unwrap().move_apps || !app.is_sane() {
+                        self.sh.platform.span_restore();
+                        return;
+                    }
+                    // Dragged over on purpose and let go there: no question to ask.
+                    let _ = self.ev_tx.send(Ev::AppPicked { to, res: Ok(app) });
+                }
+            }
             CaptureEvent::LocalLeftUp => {
                 let was_down = std::mem::replace(&mut self.left_down, false);
                 if self.holding_local {
@@ -2052,6 +2121,7 @@ impl Actor {
                         Ok(()) => (true, String::new()),
                         Err(e) => (false, e),
                     };
+                    plat.span_hide(if ok { 900 } else { 0 });
                     let _ = ev_tx.send(Ev::AppMoved {
                         from,
                         id,
@@ -2075,6 +2145,7 @@ impl Actor {
                     .map(|s| s.peer.name.clone())
                     .unwrap_or_else(|| "the other computer".into());
                 if !ok {
+                    self.sh.platform.span_restore();
                     let m = if note.is_empty() {
                         format!("{} didn't open on {who}", app.name)
                     } else {
@@ -2082,6 +2153,7 @@ impl Actor {
                     };
                     self.notify(&m);
                 } else if app.url.is_some() {
+                    self.sh.platform.span_restore();
                     self.notify(&format!("Opened the page on {who}"));
                 } else {
                     let plat = self.sh.platform.clone();
@@ -2091,6 +2163,49 @@ impl Actor {
                 }
             }
             Msg::FileOffer { id, kind, items } => self.on_file_offer(from, id, kind, items),
+            Msg::SpanBegin { w, h } => {
+                if w == 0 || h == 0 || w > 16384 || h > 16384 {
+                    return;
+                }
+                self.span_in = Some((from.to_string(), w, h));
+            }
+            Msg::SpanPos {
+                crossed,
+                along,
+                gx,
+                gy,
+            } => {
+                let Some((p, w, h)) = self.span_in.clone() else {
+                    return;
+                };
+                let Some(entry) = self.sessions.get(from).map(|s| s.side) else {
+                    return;
+                };
+                if p != from || entry.is_corner() || !along.is_finite() {
+                    return;
+                }
+                self.sh.platform.span_show(SpanView {
+                    entry,
+                    crossed,
+                    along: along.clamp(-1.0, 2.0),
+                    w,
+                    h,
+                    gx,
+                    gy,
+                });
+            }
+            Msg::SpanFrame(jpeg) => {
+                if self.span_in.as_ref().is_some_and(|(p, ..)| p == from) {
+                    self.sh.platform.span_frame(jpeg);
+                }
+            }
+            Msg::SpanEnd { moved } => {
+                if self.span_in.as_ref().is_some_and(|(p, ..)| p == from) {
+                    self.span_in = None;
+                    // Moving: keep the picture up while the real program opens.
+                    self.sh.platform.span_hide(if moved { 6000 } else { 0 });
+                }
+            }
         }
     }
 

@@ -30,6 +30,12 @@ pub struct MockState {
     pub closed: Vec<AppRef>,
     /// A window held by its title bar while this computer is being controlled.
     pub app_hold: Option<AppRef>,
+    /// A window dragged over from the other computer, as shown here.
+    pub span_shown: Vec<SpanView>,
+    pub span_frames: usize,
+    /// Each `span_hide`, with its delay.
+    pub span_hidden: Vec<u32>,
+    pub span_restores: u32,
 }
 
 pub struct MockPlatform {
@@ -66,6 +72,10 @@ impl MockPlatform {
                 launch_error: None,
                 closed: vec![],
                 app_hold: None,
+                span_shown: vec![],
+                span_frames: 0,
+                span_hidden: vec![],
+                span_restores: 0,
             }),
             sink: Mutex::new(None),
         })
@@ -182,6 +192,18 @@ impl Platform for MockPlatform {
         self.st.lock().unwrap().clipboard = Some(c.clone());
         // Like the real OS, setting the clipboard notifies listeners.
         self.emit(CaptureEvent::ClipboardChanged);
+    }
+    fn span_show(&self, v: SpanView) {
+        self.st.lock().unwrap().span_shown.push(v);
+    }
+    fn span_frame(&self, _jpeg: Vec<u8>) {
+        self.st.lock().unwrap().span_frames += 1;
+    }
+    fn span_hide(&self, after_ms: u32) {
+        self.st.lock().unwrap().span_hidden.push(after_ms);
+    }
+    fn span_restore(&self) {
+        self.st.lock().unwrap().span_restores += 1;
     }
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {
         *self.sink.lock().unwrap() = Some(tx);

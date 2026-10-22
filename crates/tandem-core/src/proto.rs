@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -166,6 +166,27 @@ pub enum Msg {
     /// connection comes up and whenever it changes.
     License {
         pass: Option<String>,
+    },
+    /// A window is being dragged across the edge towards this computer (see `SpanPos`).
+    /// `w` x `h` is its size in pixels.
+    SpanBegin {
+        w: u32,
+        h: u32,
+    },
+    /// Where the window being dragged across is now. `crossed`: how many pixels of it are
+    /// past the edge (on this side). `along`: its top (or left, for a top or bottom edge)
+    /// as a fraction of the sender's screen. `gx`, `gy`: the pointer, inside the window.
+    SpanPos {
+        crossed: i32,
+        along: f32,
+        gx: i32,
+        gy: i32,
+    },
+    /// A picture of that window (JPEG), a few times a second.
+    SpanFrame(Vec<u8>),
+    /// The drag ended. `moved`: let go more than halfway over, so the program moves here.
+    SpanEnd {
+        moved: bool,
     },
 }
 

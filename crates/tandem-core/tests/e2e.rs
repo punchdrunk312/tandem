@@ -1161,3 +1161,94 @@ async fn losing_the_licence_disconnects_the_free_computers() {
     a.node.set_license_pass(None);
     until("dropped", || b.node.snapshot().connected.is_none()).await;
 }
+
+/// The person at B drags a window through the edge that leads to A, like onto a second
+/// monitor (what the Windows layer reports), and lets go `crossed` px over, of 1200.
+fn drag_across(b: &Side, window: AppRef, crossed: i32) {
+    b.plat.emit(CaptureEvent::SpanBegin {
+        edge: Edge::Right,
+        app: window,
+        w: 1200,
+        h: 800,
+    });
+    for c in [100, crossed / 2, crossed] {
+        b.plat.emit(CaptureEvent::SpanMove {
+            crossed: c,
+            along: 0.25,
+            gx: 300,
+            gy: 15,
+        });
+    }
+    b.plat.emit(CaptureEvent::SpanFrame(vec![0xFF, 0xD8, 0xFF]));
+    let moved = crossed * 2 > 1200;
+    b.plat.emit(CaptureEvent::SpanEnd { moved });
+    if moved {
+        b.plat.emit(CaptureEvent::Crossed {
+            edge: Edge::Right,
+            frac: 0.3,
+        });
+    }
+}
+
+#[tokio::test]
+async fn a_window_dragged_across_shows_there_and_moves_when_let_go() {
+    let (a, b) = pair_with_apps(true, true).await;
+    drag_across(&b, app("notepad.exe", None), 700);
+    until("A shows the window coming in", || {
+        a.plat.st.lock().unwrap().span_frames == 1
+    })
+    .await;
+    {
+        let st = a.plat.st.lock().unwrap();
+        let last = st.span_shown.last().copied().expect("shown");
+        // B's right edge is A's left: the window comes in from A's left.
+        assert_eq!(last.entry, Edge::Left);
+        assert_eq!(
+            (last.crossed, last.w, last.h, last.gx),
+            (700, 1200, 800, 300)
+        );
+        assert!((last.along - 0.25).abs() < 1e-6);
+    }
+    until("A opened it", || {
+        !a.plat.st.lock().unwrap().launched.is_empty()
+    })
+    .await;
+    // Let go over there on purpose: nobody was asked.
+    assert!(b.plat.st.lock().unwrap().confirm_asked.is_empty());
+    until("the picture goes once it opened", || {
+        a.plat.st.lock().unwrap().span_hidden.contains(&900)
+    })
+    .await;
+    until("closed on B", || {
+        !b.plat.st.lock().unwrap().closed.is_empty()
+    })
+    .await;
+    // And the mouse carried on to A.
+    until("B drives A", || b.node.snapshot().control == "remote").await;
+}
+
+#[tokio::test]
+async fn letting_go_before_halfway_keeps_the_window_here() {
+    let (a, b) = pair_with_apps(true, true).await;
+    drag_across(&b, app("notepad.exe", None), 400);
+    until("the picture on A goes away at once", || {
+        a.plat.st.lock().unwrap().span_hidden.contains(&0)
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(a.plat.st.lock().unwrap().launched.is_empty());
+    assert_eq!(b.node.snapshot().control, "local");
+}
+
+#[tokio::test]
+async fn a_window_that_cannot_open_there_comes_back() {
+    let (a, b) = pair_with_apps(true, true).await;
+    a.plat.st.lock().unwrap().launch_error = Some("Notepad isn't installed".into());
+    drag_across(&b, app("notepad.exe", None), 900);
+    until("B put its window back", || {
+        b.plat.st.lock().unwrap().span_restores >= 1
+    })
+    .await;
+    assert!(b.plat.st.lock().unwrap().closed.is_empty());
+    until("B says why", || notice_has(&b, "isn't installed")).await;
+}

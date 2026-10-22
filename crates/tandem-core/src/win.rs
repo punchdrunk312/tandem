@@ -39,7 +39,7 @@ static CAPTURING: AtomicBool = AtomicBool::new(false);
 
 /// Flips the capture flag and, when it really changed, tells the cursor thread to hide
 /// or show the pointer. Returns the previous value.
-fn set_capturing(on: bool) -> bool {
+pub(crate) fn set_capturing(on: bool) -> bool {
     let was = CAPTURING.swap(on, Relaxed);
     if was != on {
         if let Some(tx) = CURSOR_TX.get() {
@@ -442,6 +442,7 @@ fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
                 log::info!("app drag: {} ready", app.exe);
                 if let Ok(mut a) = APP_DRAG.lock() {
                     *a = Some(app);
+                    APP_HWND.store(hwnd, Relaxed);
                     APP_GEN.store(seq, Relaxed);
                     APP_STATE.store(2, Relaxed);
                 }
@@ -1027,7 +1028,7 @@ fn flusher_thread() {
     }
 }
 
-fn emit(ev: CaptureEvent) {
+pub(crate) fn emit(ev: CaptureEvent) {
     if let Some(s) = SINK.get() {
         let _ = s.send(ev);
     }
@@ -1048,7 +1049,7 @@ fn edge_mask(edges: &[Edge]) -> u8 {
     })
 }
 
-fn vscreen() -> Screen {
+pub(crate) fn vscreen() -> Screen {
     unsafe {
         let s = Screen {
             x: GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -1242,6 +1243,30 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             EDGE_BR => (Edge::BottomRight, 0.5),
             _ => (Edge::Bottom, fx),
         };
+        if app_wanted && !edge.is_corner() {
+            // The window itself is being moved (not a tab being torn off): carry on
+            // dragging it across, like onto a second monitor.
+            let win = APP_HWND.load(Relaxed);
+            if win != 0 && being_moved(win) {
+                if let Some((w, ht)) = crate::winspan::begin(win, edge, (h.x, h.y), s) {
+                    let app = APP_DRAG.try_lock().ok().and_then(|mut a| a.take());
+                    APP_STATE.store(0, Relaxed);
+                    DRAG_GEN.fetch_add(1, Relaxed);
+                    match app {
+                        Some(app) => emit(CaptureEvent::SpanBegin {
+                            edge,
+                            app,
+                            w,
+                            h: ht,
+                        }),
+                        None => {
+                            crate::winspan::cancel();
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
         if app_wanted {
             log::info!("app drag: held at the edge, offering it");
             // Not a crossing: the cursor stays here. Esc ends the window's move, which also
@@ -1275,6 +1300,35 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             }
         }
         emit(CaptureEvent::Crossed { edge, frac });
+        return true;
+    }
+
+    // A window hanging across an edge: the mouse moves it, nothing goes anywhere else.
+    if crate::winspan::ACTIVE.load(Relaxed) {
+        match msg {
+            WM_MOUSEMOVE => {
+                let (cx, cy) = s.center();
+                let (dx, dy) = (h.x - cx, h.y - cy);
+                unsafe {
+                    let _ = SetCursorPos(cx, cy);
+                }
+                if dx != 0 || dy != 0 {
+                    crate::winspan::mouse(dx, dy);
+                }
+            }
+            WM_LBUTTONUP => {
+                if let Some((moved, edge, frac)) = crate::winspan::release() {
+                    emit(CaptureEvent::SpanEnd { moved });
+                    if moved {
+                        // Still swallowing: the mouse carries on over there.
+                        reset_move();
+                        emit(CaptureEvent::Crossed { edge, frac });
+                    }
+                }
+            }
+            WM_RBUTTONDOWN => span_cancel(),
+            _ => {}
+        }
         return true;
     }
 
@@ -1349,6 +1403,13 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
     true
 }
 
+/// Keep the window that hangs across an edge on this computer (Esc, right click).
+fn span_cancel() {
+    if crate::winspan::cancel() {
+        emit(CaptureEvent::SpanEnd { moved: false });
+    }
+}
+
 unsafe extern "system" fn key_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code >= 0 {
         let k = &*(lp.0 as *const KbdLl);
@@ -1367,6 +1428,13 @@ fn key_inner(msg: u32, k: &KbdLl) -> bool {
         return false;
     }
     let down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+    if crate::winspan::ACTIVE.load(Relaxed) && (k.vk == HOTKEY_VK || k.vk == VK_ESCAPE.0 as u32) {
+        // Esc or the emergency key while a window hangs across: keep it here.
+        if down {
+            span_cancel();
+        }
+        return true;
+    }
     if k.vk == HOTKEY_VK {
         if down {
             if set_capturing(false) {
@@ -1384,6 +1452,9 @@ fn key_inner(msg: u32, k: &KbdLl) -> bool {
     }
     if !CAPTURING.load(Relaxed) {
         return false;
+    }
+    if crate::winspan::ACTIVE.load(Relaxed) {
+        return true; // other keys during the drag go nowhere
     }
     flush_move();
     emit(CaptureEvent::Input(InputEvent::Key {
@@ -1596,13 +1667,13 @@ impl Default for WinPlatform {
     }
 }
 
-fn send(inputs: &[INPUT]) {
+pub(crate) fn send(inputs: &[INPUT]) {
     unsafe {
         SendInput(inputs, std::mem::size_of::<INPUT>() as i32);
     }
 }
 
-fn mouse_input(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
+pub(crate) fn mouse_input(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
@@ -1618,7 +1689,7 @@ fn mouse_input(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
     }
 }
 
-fn key_input(vk: u16, scan: u16, extended: bool, down: bool) -> INPUT {
+pub(crate) fn key_input(vk: u16, scan: u16, extended: bool, down: bool) -> INPUT {
     let mut flags = KEYBD_EVENT_FLAGS(0);
     if extended {
         flags |= KEYEVENTF_EXTENDEDKEY;
@@ -2060,6 +2131,22 @@ impl Platform for WinPlatform {
             .ok()??;
         let dir = PathBuf::from(reply.strip_prefix("OK|")?);
         dir.is_dir().then_some(dir)
+    }
+
+    fn span_show(&self, v: SpanView) {
+        crate::winspan::show(v);
+    }
+
+    fn span_frame(&self, jpeg: Vec<u8>) {
+        crate::winspan::frame(jpeg);
+    }
+
+    fn span_hide(&self, after_ms: u32) {
+        crate::winspan::hide(after_ms);
+    }
+
+    fn span_restore(&self) {
+        crate::winspan::restore();
     }
 
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {
