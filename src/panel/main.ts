@@ -398,15 +398,120 @@ function seg<T extends string | number>(opts: readonly (readonly [T, string])[],
 }
 
 let autostart = false;
-interface LicenseView { active: boolean; kind: string | null; exp: number | null; ends: number | null; has_key: boolean; message: string | null }
+interface LicenseView {
+  active: boolean; kind: string | null; exp: number | null; ends: number | null; has_key: boolean; message: string | null;
+  /** Signed in with this email (null when signed out or using a key). */
+  email?: string | null;
+  /** Another computer took the licence; its name. */
+  moved_to?: string | null;
+}
+interface SignInStart { code: string; interval: number; expires_in: number }
+interface SignInPoll { status: "pending" | "denied" | "expired" | "done"; view?: LicenseView; error?: string | null }
 let licenseInfo: LicenseView = { active: false, kind: null, exp: null, ends: null, has_key: false, message: null };
 let licenseKeyInput = "";
 let licenseBusy = false;
 let licenseMessage = "";
-const licenseDate = (seconds: number | null) => seconds ? new Date(seconds * 1000).toLocaleString() : "—";
+let showKeyEntry = false;
+/** While waiting for the person to click Allow in the browser. */
+let signIn: { code: string; until: number } | null = null;
+let signInTimer = 0;
+const licenseDate = (seconds: number | null) => seconds ? new Date(seconds * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "—";
+const daysLeft = (seconds: number | null) => seconds ? Math.max(0, Math.ceil((seconds * 1000 - Date.now()) / 864e5)) : 0;
 async function refreshLicense() { try { licenseInfo = await call<LicenseView>("license_status"); } catch { /* browser preview / older app build */ } }
+function rerenderSettings() { if (snap) renderSettings(snap); }
+
+/** One licence action: shows "Working…", then the result or the error. */
+async function licenseDo(fn: () => Promise<LicenseView>, ok: string) {
+  licenseBusy = true; licenseMessage = ""; rerenderSettings();
+  try { licenseInfo = await fn(); licenseMessage = ok; } catch (e) { licenseMessage = String(e); }
+  finally { licenseBusy = false; rerenderSettings(); }
+}
+
+async function startSignIn() {
+  licenseBusy = true; licenseMessage = ""; rerenderSettings();
+  try {
+    const r = await call<SignInStart>("signin_start");
+    signIn = { code: r.code, until: Date.now() + r.expires_in * 1000 };
+    const tick = async () => {
+      if (!signIn) return;
+      if (Date.now() > signIn.until) { stopSignIn("That took too long. Choose Sign in to try again."); return; }
+      try {
+        const p = await call<SignInPoll>("signin_poll");
+        if (p.status === "pending") { signInTimer = window.setTimeout(tick, r.interval * 1000); return; }
+        if (p.view) licenseInfo = p.view;
+        if (p.status === "done" && !p.error) stopSignIn(""); 
+        else stopSignIn(p.error || (p.status === "denied" ? "Sign-in was cancelled in the browser." : "That sign-in link expired. Choose Sign in to try again."));
+      } catch {
+        signInTimer = window.setTimeout(tick, Math.max(3, r.interval) * 1000); // offline for a moment: keep waiting
+      }
+    };
+    signInTimer = window.setTimeout(tick, r.interval * 1000);
+  } catch (e) { licenseMessage = String(e); }
+  finally { licenseBusy = false; rerenderSettings(); }
+}
+function stopSignIn(message: string) {
+  window.clearTimeout(signInTimer);
+  if (signIn) void call("signin_cancel").catch(() => {});
+  signIn = null; licenseMessage = message; rerenderSettings();
+}
+
+function licenseSection(): Node[] {
+  const L = licenseInfo;
+  const msg = licenseMessage || L.message || "";
+  const out: Node[] = [h("h2", {}, "Licence")];
+  const err = msg ? [h("div", { class: "err", role: "status" }, msg)] : [];
+
+  if (signIn) {
+    out.push(h("div", { class: "lic-card waiting" },
+      h("b", {}, "Finish signing in in your browser"),
+      h("p", {}, "Click Allow on the page that opened. Check the code matches:"),
+      h("code", { class: "lic-code" }, signIn.code),
+      h("div", { class: "actions" },
+        h("button", { onclick: () => void call("signin_open").catch(() => {}) }, "Open the page again"),
+        h("button", { onclick: () => stopSignIn("") }, "Cancel"))));
+    return out;
+  }
+
+  if (L.moved_to) {
+    out.push(h("div", { class: "lic-card warn" },
+      h("b", {}, `Your licence is on ${L.moved_to} now`),
+      h("p", {}, L.email ? `Signed in as ${L.email}. Use it here instead? ${L.moved_to} stops using it the next time it's online.` : `Use it here instead? ${L.moved_to} stops using it the next time it's online.`),
+      h("div", { class: "actions" },
+        h("button", { class: "primary", disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_use_here"), "This is your main computer again.") }, licenseBusy ? "Working…" : "Use it here"),
+        h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("signout"), "Signed out.") }, "Sign out"))));
+    return [...out, ...err];
+  }
+
+  if (L.active && L.kind !== "trial") {
+    out.push(h("div", { class: "lic-card ok" },
+      h("b", {}, L.email ? `Signed in as ${L.email}` : "Licence active"),
+      h("p", {}, `This is your main computer. It works offline until ${licenseDate(L.exp)} and renews by itself whenever it's online.`),
+      h("div", { class: "actions" },
+        L.email
+          ? h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("signout"), "Signed out.") }, "Sign out")
+          : h("button", { class: "danger", disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_release"), "Licence released from this computer.") }, "Release licence"))));
+    return [...out, ...err];
+  }
+
+  // Signed out, or on the free trial.
+  out.push(h("div", { class: "lic-card" },
+    h("b", {}, L.active ? `Free trial · ${daysLeft(L.ends)} day${daysLeft(L.ends) === 1 ? "" : "s"} left` : "Sign in to use CubeCursor"),
+    h("p", {}, "Sign in with the email you bought CubeCursor with. Your other computers don't need to sign in; only this one."),
+    h("div", { class: "actions" },
+      h("button", { class: "primary", disabled: licenseBusy, onclick: () => void startSignIn() }, licenseBusy ? "Working…" : "Sign in"),
+      ...(L.active ? [] : [h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_trial"), "Your 14-day trial has started.") }, "Start free trial")]),
+      h("button", { class: "link", onclick: () => { showKeyEntry = !showKeyEntry; rerenderSettings(); } }, showKeyEntry ? "Hide key" : "Enter a key instead"))));
+  if (showKeyEntry) {
+    out.push(h("div", { class: "license-entry" },
+      h("input", { type: "text", class: "name-in", value: licenseKeyInput, placeholder: "CUBE-XXXX-XXXX-XXXX-XXXX", autocomplete: "off", spellcheck: false, oninput: (e: Event) => { licenseKeyInput = (e.target as HTMLInputElement).value; } }),
+      h("button", { class: "primary", disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: false }), "Licence activated.") }, "Activate"),
+      h("button", { disabled: licenseBusy, title: "Move it from the computer that has it now", onclick: () => licenseDo(() => call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: true }), "Licence moved to this computer.") }, "Move here")));
+  }
+  return [...out, ...err];
+}
+
 function renderSettings(s: Snapshot) {
-  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.move_apps, s.game_mode, s.switch_delay_ms, autostart, ui.error_reports, plat.os, licenseInfo, licenseKeyInput, licenseBusy, licenseMessage], () => {
+  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.move_apps, s.game_mode, s.switch_delay_ms, autostart, ui.error_reports, plat.os, licenseInfo, licenseKeyInput, licenseBusy, licenseMessage, showKeyEntry, signIn], () => {
     const name = h("input", { type: "text", class: "name-in", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
     return [
       h("h2", {}, "General"),
@@ -420,17 +525,7 @@ function renderSettings(s: Snapshot) {
       setting(isMac() ? "Start when you log in" : "Start with Windows", null, switchEl(autostart, async (on) => { await call("autostart_set", { on }); autostart = on; })),
       setting("Send error reports", "When something goes wrong, the problem and CubeCursor's own recent log are sent to us so we can fix it. Names, network addresses and folders are removed first. Never what you type, copy or send.",
         switchEl(ui.error_reports === true, (v) => setReports(v))),
-      h("h2", {}, "Licence"),
-      h("p", { class: "setting-help" }, licenseInfo.active ? `${licenseInfo.kind === "trial" ? "Free trial" : "Licence active"} · pass expires ${licenseDate(licenseInfo.exp)}${licenseInfo.ends && licenseInfo.kind === "trial" ? ` · trial ends ${licenseDate(licenseInfo.ends)}` : ""}` : "Activate a licence key or start your 14-day free trial on this computer."),
-      ...(licenseInfo.message || licenseMessage ? [h("div", { class: "err", role: "status" }, licenseMessage || licenseInfo.message || "")] : []),
-      h("div", { class: "license-entry" },
-        h("input", { type: "text", class: "name-in", value: licenseKeyInput, placeholder: "CUBE-XXXX-XXXX-XXXX-XXXX", autocomplete: "off", spellcheck: false, oninput: (e: Event) => { licenseKeyInput = (e.target as HTMLInputElement).value; } }),
-        h("button", { class: "primary", disabled: licenseBusy, onclick: async () => { licenseBusy = true; licenseMessage = ""; renderSettings(s); try { licenseInfo = await call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: false }); licenseMessage = "Licence activated."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, licenseBusy ? "Working…" : "Activate key")),
-      h("div", { class: "actions" },
-        h("button", { disabled: licenseBusy, onclick: async () => { licenseBusy = true; licenseMessage = "Moving licence…"; renderSettings(s); try { licenseInfo = await call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: true }); licenseMessage = "Licence moved to this computer."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, "Move licence here"),
-        h("button", { disabled: licenseBusy || licenseInfo.active, onclick: async () => { licenseBusy = true; licenseMessage = ""; renderSettings(s); try { licenseInfo = await call<LicenseView>("license_trial"); licenseMessage = "Your trial is active."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, "Start free trial"),
-        h("button", { class: "danger", disabled: licenseBusy || (!licenseInfo.has_key && !licenseInfo.active), onclick: async () => { licenseBusy = true; try { licenseInfo = await call<LicenseView>("license_release"); licenseKeyInput = ""; licenseMessage = "Licence released from this computer."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, "Release licence")),
-      h("p", { class: "setting-help" }, "A licence key can be moved from another PC if you confirm the move. The app keeps a signed pass locally and renews it in the background when online."),
+      ...licenseSection(),
       isMac()
         ? h("div", { class: "note" }, h("span", {}, "Press "), h("kbd", {}, "Esc"), h("span", {}, " three times quickly to bring your mouse and keyboard back if anything feels stuck."))
         : h("div", { class: "note" }, h("kbd", {}, "Scroll Lock"), h("span", {}, " jumps to the other computer and brings your mouse straight back if anything feels stuck.")),

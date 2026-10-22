@@ -54,6 +54,16 @@ if (flags.includes("xfer")) {
 const listeners: ((s: Snapshot) => void)[] = [];
 const push = () => listeners.forEach((l) => l(structuredClone(state)));
 
+const hashHas = (w: string) => typeof location !== "undefined" && location.hash.includes(w);
+let polls = 0;
+let lic: Record<string, unknown> = hashHas("signedin")
+  ? { active: true, kind: "paid", exp: Math.floor(Date.now() / 1000) + 365 * 86400, ends: null, has_key: false, message: null, email: "you@example.com", moved_to: null }
+  : hashHas("moved")
+    ? { active: false, kind: "paid", exp: null, ends: null, has_key: false, message: null, email: "you@example.com", moved_to: "FRIEND-PC" }
+    : hashHas("trial")
+      ? { active: true, kind: "trial", exp: null, ends: Math.floor(Date.now() / 1000) + 9 * 86400, has_key: false, message: null, email: null, moved_to: null }
+      : { active: false, kind: null, exp: null, ends: null, has_key: false, message: null, email: null, moved_to: null };
+
 export function onSnapshot(cb: (s: Snapshot) => void) {
   listeners.push(cb);
   setTimeout(() => cb(structuredClone(state)), 0);
@@ -82,6 +92,32 @@ let elevatedAutostart = false;
 export async function call(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   console.log("[mock]", cmd, args);
   switch (cmd) {
+    // Licence (preview only): #signedin, #moved or #trial in the address pick a starting state.
+    case "license_status":
+      return lic;
+    case "signin_start":
+      polls = 0;
+      return { code: "K7QD-M2XA", interval: 1, expires_in: 600 };
+    case "signin_poll":
+      polls += 1;
+      if (polls < 3) return { status: "pending" };
+      lic = { ...lic, active: true, kind: "paid", email: "you@example.com", moved_to: null, exp: Math.floor(Date.now() / 1000) + 365 * 86400 };
+      return { status: "done", view: lic };
+    case "signin_cancel":
+    case "signin_open":
+      return;
+    case "signout":
+    case "license_release":
+      lic = { active: false, kind: null, exp: null, ends: null, has_key: false, message: null, email: null, moved_to: null };
+      return lic;
+    case "license_use_here":
+      lic = { ...lic, active: true, moved_to: null };
+      return lic;
+    case "license_trial":
+      lic = { ...lic, active: true, kind: "trial", ends: Math.floor(Date.now() / 1000) + 14 * 86400 };
+      return lic;
+    case "license_activate":
+      throw "That licence key wasn't recognised.";
     case "snapshot":
       return structuredClone(state);
     case "set_side": {

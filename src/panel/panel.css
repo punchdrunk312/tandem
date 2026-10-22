@@ -270,3 +270,13 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 .license-entry { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
 .license-entry input { flex: 1; min-width: 0; }
 .setting-help { color: var(--ink-2); font-size: 12px; margin: 6px 0 10px; }
+
+/* Licence: signed out / waiting for the browser / signed in / moved */
+.lic-card { margin: 8px 0 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface-2); }
+.lic-card b { display: block; font-size: 14px; color: var(--ink); }
+.lic-card p { margin: 4px 0 12px; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+.lic-card .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0; }
+.lic-card.ok { background: linear-gradient(180deg, var(--teal-l), #eefaf8); border-color: #b7e8e1; }
+.lic-card.warn { background: var(--amber-l); border-color: #f5d79a; }
+.lic-card.waiting { border-color: #b7e8e1; }
+.lic-code { display: inline-block; margin: 0 0 12px; padding: 6px 12px; border-radius: 10px; background: #fff; border: 1px solid var(--line); font: 650 20px/1.2 var(--mono); letter-spacing: 0.1em; color: var(--teal-d); user-select: all; }
