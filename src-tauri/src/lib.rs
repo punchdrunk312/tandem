@@ -473,8 +473,10 @@ fn sound_register(request: tauri::ipc::Request<'_>) -> Result<(), String> {
         .ok_or("missing sound name")?
         .to_string();
     let pcm: Vec<i16> = bytes
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| i16::from_le_bytes(*c))
         .collect();
     let mut all = SOUNDS.lock().unwrap_or_else(|e| e.into_inner());
     all.retain(|(n, _)| *n != name);

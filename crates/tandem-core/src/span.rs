@@ -283,7 +283,7 @@ pub fn compose(frame: Option<(&[u8], u32, u32)>, w: u32, h: u32, gx: i32, gy: i3
     let mut out = match frame {
         Some((px, fw, fh)) => {
             let mut v = scale4(px, fw, fh, w, h);
-            for p in v.chunks_exact_mut(4) {
+            for p in v.as_chunks_mut::<4>().0 {
                 p[3] = 255;
             }
             v
@@ -448,14 +448,14 @@ mod tests {
     fn pictures_survive_the_trip() {
         let (w, h) = (64u32, 40u32);
         let mut px = vec![0u8; (w * h * 4) as usize];
-        for (i, p) in px.chunks_exact_mut(4).enumerate() {
+        for (i, p) in px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             // A blue left half and a red right half.
             let x = i as u32 % w;
-            p.copy_from_slice(if x < w / 2 {
-                &[200, 40, 30, 255]
+            *p = if x < w / 2 {
+                [200, 40, 30, 255]
             } else {
-                &[30, 40, 200, 255]
-            });
+                [30, 40, 200, 255]
+            };
         }
         let jpg = encode_jpeg(&px, w, h, FRAME_QUALITY).unwrap();
         let (back, bw, bh) = decode_jpeg(&jpg).unwrap();
