@@ -49,4 +49,6 @@ export interface UiOptions {
   enabled: boolean;
   hide_fullscreen: boolean;
   monitor_cursor: boolean;
+  /** Automatic error reports; null until asked. */
+  error_reports?: boolean | null;
 }

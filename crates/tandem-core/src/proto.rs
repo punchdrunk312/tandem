@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -161,6 +161,11 @@ pub enum Msg {
         id: u64,
         ok: bool,
         note: String,
+    },
+    /// This computer's licence pass from cubecursor.shop, or none. Sent when the
+    /// connection comes up and whenever it changes.
+    License {
+        pass: Option<String>,
     },
 }
 

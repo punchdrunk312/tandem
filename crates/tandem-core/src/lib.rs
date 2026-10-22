@@ -4,6 +4,7 @@ pub mod error;
 pub mod files;
 pub mod image;
 pub mod keymap;
+pub mod license;
 #[cfg(target_os = "macos")]
 pub mod mac;
 pub mod mock;

@@ -14,6 +14,10 @@ struct Side {
 }
 
 async fn start(name: &str) -> Side {
+    start_with(name, None).await
+}
+
+async fn start_with(name: &str, license_key: Option<[u8; 32]>) -> Side {
     let tmp = tempfile::tempdir().unwrap();
     let dl = tempfile::tempdir().unwrap();
     let plat = MockPlatform::new(1000, 800);
@@ -25,6 +29,7 @@ async fn start(name: &str) -> Side {
             download_dir: dl.path().to_path_buf(),
             discovery: false,
             default_name: name.into(),
+            license_key,
         },
         plat.clone(),
         Arc::new(MemoryStore::default()),
@@ -1055,4 +1060,104 @@ async fn a_side_with_no_computer_only_shows_a_message() {
         .user_drag_app_to_edge(Edge::Left, app("Discord.exe", None));
     until("B told", || notice_has(&b, "No computer is set")).await;
     assert!(a.plat.st.lock().unwrap().launched.is_empty());
+}
+
+// ---------------------------------------------------------------- licences
+
+const TEST_SIGNING_KEY: [u8; 32] = [42u8; 32];
+
+fn pass_for(dev: &str, secs: u64) -> String {
+    use tandem_core::license::*;
+    let now = now();
+    sign(
+        &Pass {
+            lic: "test".into(),
+            kind: "paid".into(),
+            dev: dev.into(),
+            hw: "hw".into(),
+            iat: now,
+            exp: now + secs,
+            peers: 10,
+        },
+        &TEST_SIGNING_KEY,
+    )
+}
+
+async fn licensed_pair() -> (Side, Side) {
+    let key = Some(tandem_core::license::public_of(&TEST_SIGNING_KEY));
+    let a = start_with("PC-A", key).await;
+    let b = start_with("PC-B", key).await;
+    (a, b)
+}
+
+#[tokio::test]
+async fn two_computers_without_a_licence_are_disconnected() {
+    let (a, b) = licensed_pair().await;
+    assert!(!a.node.snapshot().licensed);
+    let code = a.node.snapshot().pairing_code;
+    b.node.connect(lo(), a.node.tcp_port(), code);
+    until("told why", || {
+        a.node
+            .snapshot()
+            .error
+            .unwrap_or_default()
+            .contains("licence")
+            && b.node
+                .snapshot()
+                .error
+                .unwrap_or_default()
+                .contains("licence")
+    })
+    .await;
+    assert!(a.node.snapshot().connected.is_none());
+    assert!(b.node.snapshot().connected.is_none());
+}
+
+#[tokio::test]
+async fn one_licensed_main_is_enough_for_both() {
+    let (a, b) = licensed_pair().await;
+    let id = a.node.snapshot().device_id;
+    a.node.set_license_pass(Some(pass_for(&id, 3600)));
+    until("A licensed", || a.node.snapshot().licensed).await;
+    pair(&a, &b).await;
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(a.node.snapshot().connected.is_some());
+    assert!(
+        b.node.snapshot().connected.is_some(),
+        "B (no licence) stays connected"
+    );
+    assert!(!b.node.snapshot().licensed);
+}
+
+#[tokio::test]
+async fn a_pass_copied_from_another_computer_does_not_count() {
+    let (a, b) = licensed_pair().await;
+    // A shows a pass that was made for B.
+    let other = b.node.snapshot().device_id;
+    a.node.set_license_pass(Some(pass_for(&other, 3600)));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!a.node.snapshot().licensed);
+    let code = a.node.snapshot().pairing_code;
+    b.node.connect(lo(), a.node.tcp_port(), code);
+    until("refused", || {
+        b.node
+            .snapshot()
+            .error
+            .unwrap_or_default()
+            .contains("licence")
+    })
+    .await;
+    assert!(b.node.snapshot().connected.is_none());
+}
+
+#[tokio::test]
+async fn losing_the_licence_disconnects_the_free_computers() {
+    let (a, b) = licensed_pair().await;
+    let id = a.node.snapshot().device_id;
+    a.node.set_license_pass(Some(pass_for(&id, 3600)));
+    pair(&a, &b).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The licence moved to another computer: the app takes the pass away.
+    a.node.set_license_pass(None);
+    until("dropped", || b.node.snapshot().connected.is_none()).await;
 }

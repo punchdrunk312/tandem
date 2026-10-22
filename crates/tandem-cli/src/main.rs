@@ -109,6 +109,7 @@ async fn main() {
             download_dir: downloads,
             discovery: true,
             default_name: name,
+            license_key: None,
         },
         tandem_core::default_platform(),
         Arc::new(FileStore(state)),

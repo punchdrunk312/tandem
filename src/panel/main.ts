@@ -398,8 +398,15 @@ function seg<T extends string | number>(opts: readonly (readonly [T, string])[],
 }
 
 let autostart = false;
+interface LicenseView { active: boolean; kind: string | null; exp: number | null; ends: number | null; has_key: boolean; message: string | null }
+let licenseInfo: LicenseView = { active: false, kind: null, exp: null, ends: null, has_key: false, message: null };
+let licenseKeyInput = "";
+let licenseBusy = false;
+let licenseMessage = "";
+const licenseDate = (seconds: number | null) => seconds ? new Date(seconds * 1000).toLocaleString() : "—";
+async function refreshLicense() { try { licenseInfo = await call<LicenseView>("license_status"); } catch { /* browser preview / older app build */ } }
 function renderSettings(s: Snapshot) {
-  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.move_apps, s.game_mode, s.switch_delay_ms, autostart], () => {
+  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.move_apps, s.game_mode, s.switch_delay_ms, autostart, ui.error_reports, plat.os, licenseInfo, licenseKeyInput, licenseBusy, licenseMessage], () => {
     const name = h("input", { type: "text", class: "name-in", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
     return [
       h("h2", {}, "General"),
@@ -410,8 +417,23 @@ function renderSettings(s: Snapshot) {
       setting("Game mode", "Don't switch computers while a full-screen app is open.", switchEl(s.game_mode, (v) => call("set_game_mode", { on: v }))),
       setting("Edge delay", "How long to hold at the screen edge before switching.",
         seg([[0, "Instant"], [250, "¼ s"], [500, "½ s"], [1000, "1 s"]] as const, s.switch_delay_ms as 0 | 250 | 500 | 1000, (ms) => call("set_switch_delay", { ms }))),
-      setting("Start with Windows", null, switchEl(autostart, async (on) => { await call("autostart_set", { on }); autostart = on; })),
-      h("div", { class: "note" }, h("kbd", {}, "Scroll Lock"), h("span", {}, " jumps to the other computer and brings your mouse straight back if anything feels stuck.")),
+      setting(isMac() ? "Start when you log in" : "Start with Windows", null, switchEl(autostart, async (on) => { await call("autostart_set", { on }); autostart = on; })),
+      setting("Send error reports", "When something goes wrong, the problem and CubeCursor's own recent log are sent to us so we can fix it. Names, network addresses and folders are removed first. Never what you type, copy or send.",
+        switchEl(ui.error_reports === true, (v) => setReports(v))),
+      h("h2", {}, "Licence"),
+      h("p", { class: "setting-help" }, licenseInfo.active ? `${licenseInfo.kind === "trial" ? "Free trial" : "Licence active"} · pass expires ${licenseDate(licenseInfo.exp)}${licenseInfo.ends && licenseInfo.kind === "trial" ? ` · trial ends ${licenseDate(licenseInfo.ends)}` : ""}` : "Activate a licence key or start your 14-day free trial on this computer."),
+      ...(licenseInfo.message || licenseMessage ? [h("div", { class: "err", role: "status" }, licenseMessage || licenseInfo.message || "")] : []),
+      h("div", { class: "license-entry" },
+        h("input", { type: "text", class: "name-in", value: licenseKeyInput, placeholder: "CUBE-XXXX-XXXX-XXXX-XXXX", autocomplete: "off", spellcheck: false, oninput: (e: Event) => { licenseKeyInput = (e.target as HTMLInputElement).value; } }),
+        h("button", { class: "primary", disabled: licenseBusy, onclick: async () => { licenseBusy = true; licenseMessage = ""; renderSettings(s); try { licenseInfo = await call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: false }); licenseMessage = "Licence activated."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, licenseBusy ? "Working…" : "Activate key")),
+      h("div", { class: "actions" },
+        h("button", { disabled: licenseBusy, onclick: async () => { licenseBusy = true; licenseMessage = "Moving licence…"; renderSettings(s); try { licenseInfo = await call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: true }); licenseMessage = "Licence moved to this computer."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, "Move licence here"),
+        h("button", { disabled: licenseBusy || licenseInfo.active, onclick: async () => { licenseBusy = true; licenseMessage = ""; renderSettings(s); try { licenseInfo = await call<LicenseView>("license_trial"); licenseMessage = "Your trial is active."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, "Start free trial"),
+        h("button", { class: "danger", disabled: licenseBusy || (!licenseInfo.has_key && !licenseInfo.active), onclick: async () => { licenseBusy = true; try { licenseInfo = await call<LicenseView>("license_release"); licenseKeyInput = ""; licenseMessage = "Licence released from this computer."; } catch (e) { licenseMessage = String(e); } finally { licenseBusy = false; renderSettings(s); } } }, "Release licence")),
+      h("p", { class: "setting-help" }, "A licence key can be moved from another PC if you confirm the move. The app keeps a signed pass locally and renews it in the background when online."),
+      isMac()
+        ? h("div", { class: "note" }, h("span", {}, "Press "), h("kbd", {}, "Esc"), h("span", {}, " three times quickly to bring your mouse and keyboard back if anything feels stuck."))
+        : h("div", { class: "note" }, h("kbd", {}, "Scroll Lock"), h("span", {}, " jumps to the other computer and brings your mouse straight back if anything feels stuck.")),
     ];
   });
   paired.hidden = s.paired.length === 0;
@@ -513,6 +535,28 @@ function saveIsland(patch: Partial<ReturnType<typeof islandSettings>>) {
 
 let ui: UiOptions = { enabled: true, hide_fullscreen: true, monitor_cursor: false };
 let shellMenu = false;
+// ---------------------------------------------------------------- error reports
+function setReports(on: boolean) {
+  ui = { ...ui, error_reports: on };
+  void call("ui_set", { opts: ui });
+  reportsAsk.remove();
+  if (snap) renderSettings(snap);
+}
+// Asked once, on the first start after this version.
+const reportsAsk = h("div", { class: "reports-ask", role: "dialog", "aria-label": "Error reports" },
+  h("div", { class: "card" },
+    h("h2", {}, "Help make CubeCursor better"),
+    h("p", {}, "When something goes wrong, CubeCursor can send us the problem and its own recent log, so we can fix it. Names, network addresses and folders are removed first, and it never includes what you type, copy or send. You can change this any time in Settings."),
+    h("div", { class: "row" },
+      h("button", { class: "primary", onclick: () => setReports(true) }, "Send error reports"),
+      h("button", { onclick: () => setReports(false) }, "No thanks")),
+    h("small", {}, "Details: cubecursor.shop/privacy")));
+function maybeAskReports() {
+  if (ui.error_reports === undefined || ui.error_reports === null) {
+    if (!reportsAsk.isConnected) document.body.appendChild(reportsAsk);
+  }
+}
+
 function renderTopBar() {
   const is = islandSettings();
   update(topbar, "topbar", [ui, is, shellMenu, plat], () => {
@@ -556,7 +600,8 @@ onFileDrop(
   (d) => { if (snap?.connected) void d.send(sendTo || undefined).catch((err) => console.error("send failed", err)); },
   (over) => { dropOver = over; showVeil(over); if (snap) renderFiles(snap); },
 );
-void call<UiOptions>("ui_get").then((v) => { if (v) { ui = v; renderTopBar(); } }).catch(() => {});
+void refreshLicense().then(() => { if (snap) renderSettings(snap); });
+void call<UiOptions>("ui_get").then((v) => { if (v) { ui = v; renderTopBar(); maybeAskReports(); if (snap) renderSettings(snap); } }).catch(() => {});
 elevState();
 platState();
 // While macOS permissions are missing, check again every few seconds.

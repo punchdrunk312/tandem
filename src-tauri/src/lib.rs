@@ -17,6 +17,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 mod elevate;
 mod ghost;
 mod island;
+mod license_client;
+mod reports;
 mod shellmenu;
 #[cfg(windows)]
 mod sound;
@@ -44,6 +46,9 @@ struct UiOptions {
     /// Follow the cursor to whichever display it is on.
     #[serde(default)]
     monitor_cursor: bool,
+    /// Send error reports automatically: None until the person has been asked.
+    #[serde(default)]
+    error_reports: Option<bool>,
 }
 
 fn yes() -> bool {
@@ -56,6 +61,7 @@ impl Default for UiOptions {
             enabled: true,
             hide_fullscreen: true,
             monitor_cursor: false,
+            error_reports: None,
         }
     }
 }
@@ -146,6 +152,30 @@ type R = Result<(), String>;
 #[tauri::command]
 fn snapshot(st: State<'_, AppState>) -> Snapshot {
     st.node.snapshot()
+}
+
+fn license_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_config_dir().map(|p| p.join("license.json")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn license_status(app: AppHandle) -> Result<license_client::LicenseView, String> {
+    Ok(license_client::status(&license_path(&app)?))
+}
+
+#[tauri::command(async)]
+fn license_activate(app: AppHandle, st: State<'_, AppState>, key: String, takeover: Option<bool>) -> Result<license_client::LicenseView, String> {
+    license_client::activate(&license_path(&app)?, &st.node, key, takeover.unwrap_or(false))
+}
+
+#[tauri::command(async)]
+fn license_trial(app: AppHandle, st: State<'_, AppState>) -> Result<license_client::LicenseView, String> {
+    license_client::start_trial(&license_path(&app)?, &st.node)
+}
+
+#[tauri::command(async)]
+fn license_release(app: AppHandle, st: State<'_, AppState>) -> Result<license_client::LicenseView, String> {
+    license_client::release(&license_path(&app)?, &st.node)
 }
 
 #[tauri::command]
@@ -257,6 +287,7 @@ fn ui_get(sh: State<'_, Shared>) -> UiOptions {
 
 #[tauri::command]
 fn ui_set(app: AppHandle, sh: State<'_, Shared>, opts: UiOptions) {
+    reports::set_enabled(opts.error_reports == Some(true));
     apply_ui(&app, &sh.gate, &opts);
     if let Ok(b) = serde_json::to_vec_pretty(&opts) {
         let _ = std::fs::write(&sh.ui_path, b);
@@ -514,6 +545,7 @@ impl log::Log for FileLog {
         if !self.enabled(r.metadata()) {
             return;
         }
+        reports::note(r.level(), &r.args().to_string());
         if std::fs::metadata(&self.0)
             .map(|m| m.len() > 262_144)
             .unwrap_or(false)
@@ -858,6 +890,8 @@ pub fn run() {
                 discovery: true,
                 default_name: std::env::var("COMPUTERNAME")
                     .unwrap_or_else(|_| "My computer".into()),
+                // Licence checking stays off until the app can fetch and renew passes.
+                license_key: None,
             };
             let node = tauri::async_runtime::block_on(Node::start(
                 cfg,
@@ -890,6 +924,7 @@ pub fn run() {
                     tokio::time::sleep(Duration::from_millis(80)).await;
                 }
             });
+            license_client::start_renewal(cfg_dir.join("license.json"), node.clone());
             app.manage(AppState { node, download_dir });
 
             let _ = std::fs::remove_dir_all(stage_root());
@@ -898,6 +933,27 @@ pub fn run() {
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .unwrap_or_default();
+            reports::start(
+                &cfg_dir,
+                env!("CARGO_PKG_VERSION"),
+                ui.error_reports == Some(true),
+            );
+            {
+                // Which names to hide in reports: this computer's and the paired ones'.
+                let h = app.handle().clone();
+                let _ = std::thread::Builder::new()
+                    .name("cubecursor-report-names".into())
+                    .spawn(move || loop {
+                        if let Some(st) = h.try_state::<AppState>() {
+                            let s = st.node.snapshot();
+                            let mut names = vec![s.device_name.clone()];
+                            names.extend(s.paired.iter().map(|p| p.name.clone()));
+                            names.extend(s.nearby.iter().map(|p| p.name.clone()));
+                            reports::set_identity(&s.device_id, names);
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(60));
+                    });
+            }
             app.manage(Shared {
                 gate: gate.clone(),
                 ui: std::sync::Mutex::new(ui.clone()),
@@ -1022,6 +1078,10 @@ pub fn run() {
             sound_register,
             sound_play,
             snapshot,
+            license_status,
+            license_activate,
+            license_trial,
+            license_release,
             connect,
             connect_known,
             disconnect,

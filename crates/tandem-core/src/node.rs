@@ -41,6 +41,10 @@ pub struct NodeConfig {
     pub discovery: bool,
     /// Name shown to the other computer (first run only; then persisted).
     pub default_name: String,
+    /// The key licence passes are checked with. `None`: no licence is needed (tests,
+    /// the command-line tool). With a key, two computers only stay connected when at
+    /// least one of them shows a valid pass (see `license`).
+    pub license_key: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -171,6 +175,8 @@ pub struct Snapshot {
     pub switch_delay_ms: u32,
     pub drag_files: bool,
     pub move_apps: bool,
+    /// This computer shows a valid licence pass (it can be a "main").
+    pub licensed: bool,
     pub error: Option<String>,
     /// A short, self-clearing message for the user ("control came back because…").
     pub notice: Option<String>,
@@ -192,6 +198,8 @@ struct Status {
     error: Option<String>,
     notice: Option<(String, Instant)>,
     carry: Option<CarryView>,
+    /// This computer has a valid licence pass (or no licence is needed).
+    licensed: bool,
 }
 
 struct Shared {
@@ -319,6 +327,7 @@ impl Shared {
             switch_delay_ms: per.switch_delay_ms,
             drag_files: per.drag_files,
             move_apps: per.move_apps,
+            licensed: st.licensed,
             error: st.error.clone(),
             notice: st.notice.as_ref().map(|(m, _)| m.clone()),
             carry: st.carry.clone(),
@@ -453,6 +462,7 @@ enum Cmd {
     SetSwitchDelay(u32),
     SetDragFiles(bool),
     SetMoveApps(bool),
+    SetLicensePass(Option<String>),
     SetName(String),
     NewCode,
     Engage(Option<String>),
@@ -508,6 +518,7 @@ impl Node {
             listen_port: port,
         };
         let (snap_tx, _) = watch::channel(Snapshot::default());
+        let no_licence_needed = cfg.license_key.is_none();
         let sh = Arc::new(Shared {
             me: me.clone(),
             cfg: cfg.clone(),
@@ -523,6 +534,7 @@ impl Node {
             transfers: Mutex::new(vec![]),
             status: Mutex::new(Status {
                 control: "local",
+                licensed: no_licence_needed,
                 ..Default::default()
             }),
             next_sid: AtomicU64::new(1),
@@ -609,6 +621,7 @@ impl Node {
             last_clip_sig: None,
             clip_written_at: None,
             last_dial_err: None,
+            my_pass: None,
             carry: None,
             drops: HashMap::new(),
             early_release: None,
@@ -680,6 +693,12 @@ impl Node {
     }
     pub fn set_move_apps(&self, on: bool) {
         self.cmd(Cmd::SetMoveApps(on));
+    }
+
+    /// This computer's licence pass from cubecursor.shop (or none). Sent to every
+    /// connected computer; renewed by the app before it runs out.
+    pub fn set_license_pass(&self, pass: Option<String>) {
+        self.cmd(Cmd::SetLicensePass(pass));
     }
 
     pub fn set_drag_files(&self, on: bool) {
@@ -951,6 +970,10 @@ struct Session {
     last_rx: Instant,
     /// Which edge of *my* screen leads to this computer.
     side: Edge,
+    /// When the connection came up, and what its licence pass said (if it sent one).
+    since: Instant,
+    peer_licensed: bool,
+    license_seen: bool,
 }
 
 impl Drop for Session {
@@ -977,6 +1000,8 @@ struct Actor {
     /// that write causes is our own echo, not something the person copied.
     clip_written_at: Option<Instant>,
     last_dial_err: Option<String>,
+    /// This computer's licence pass, as given by the app.
+    my_pass: Option<String>,
     /// Files being carried to us while the other computer's mouse holds them.
     carry: Option<Carry>,
     /// Carries that were let go before they finished arriving: id -> folder to drop in.
@@ -1178,6 +1203,63 @@ impl Actor {
         self.sh.publish();
     }
 
+    // ---- licence
+
+    /// Our pass, if it is valid for this computer right now.
+    fn my_pass_if_valid(&self) -> Option<String> {
+        let key = self.sh.cfg.license_key?;
+        let t = self.my_pass.as_ref()?;
+        let p = crate::license::verify(t, &key, crate::license::now()).ok()?;
+        (p.dev == self.sh.me.id).then(|| t.clone())
+    }
+
+    /// A pass a connected computer sent: valid, and really that computer's.
+    fn peer_pass_ok(&self, from: &str, pass: Option<&str>) -> bool {
+        let (Some(key), Some(t)) = (self.sh.cfg.license_key, pass) else {
+            return false;
+        };
+        crate::license::verify(t, &key, crate::license::now())
+            .map(|p| p.dev == from)
+            .unwrap_or(false)
+    }
+
+    /// Our pass came, changed or ran out: tell everyone, and check every connection.
+    fn license_changed(&mut self) {
+        let pass = self.my_pass_if_valid();
+        let licensed = pass.is_some() || self.sh.cfg.license_key.is_none();
+        self.sh.status.lock().unwrap().licensed = licensed;
+        for s in self.sessions.values() {
+            let _ = s.tx.send(Msg::License { pass: pass.clone() });
+        }
+        self.enforce_license();
+        self.sh.publish();
+    }
+
+    /// Two computers stay connected only when at least one of them is licensed. The
+    /// other side gets a few seconds to show its pass first.
+    fn enforce_license(&mut self) {
+        if self.sh.cfg.license_key.is_none() || self.my_pass_if_valid().is_some() {
+            return;
+        }
+        let grace = Duration::from_secs(6);
+        let out: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| !s.peer_licensed && (s.license_seen || s.since.elapsed() > grace))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in out {
+            log::info!("licence: neither computer is licensed, disconnecting");
+            // Don't redial straight away: nothing would change.
+            self.no_auto
+                .insert(id.clone(), Instant::now() + Duration::from_secs(120));
+            self.drop_session(
+                &id,
+                "Needs a CubeCursor licence on one of the two computers",
+            );
+        }
+    }
+
     /// Ends one connection, handing the mouse back if it was involved.
     fn drop_session(&mut self, pid: &str, why: &str) {
         let Some(sess) = self.sessions.remove(pid) else {
@@ -1222,6 +1304,12 @@ impl Actor {
         for id in dead {
             self.drop_session(&id, "connection lost");
         }
+        // A pass running out while the app is offline: stop being a main.
+        let licensed = self.my_pass_if_valid().is_some() || self.sh.cfg.license_key.is_none();
+        if licensed != self.sh.status.lock().unwrap().licensed {
+            self.license_changed();
+        }
+        self.enforce_license();
         self.dialing
             .retain(|_, t| t.elapsed() <= Duration::from_secs(20));
         self.no_auto.retain(|_, t| Instant::now() < *t);
@@ -1509,8 +1597,13 @@ impl Actor {
                 reader,
                 last_rx: Instant::now(),
                 side,
+                since: Instant::now(),
+                peer_licensed: false,
+                license_seen: false,
             },
         );
+        let pass = self.my_pass_if_valid();
+        self.send_to(&pid, Msg::License { pass });
         self.sh.status.lock().unwrap().error = None;
         self.sh.discovered.lock().unwrap().remove(&pid);
         self.refresh_connected();
@@ -1719,6 +1812,14 @@ impl Actor {
         let plat = self.sh.platform.clone();
         match m {
             Msg::Ping => self.send_to(from, Msg::Pong),
+            Msg::License { pass } => {
+                let ok = self.peer_pass_ok(from, pass.as_deref());
+                if let Some(s) = self.sessions.get_mut(from) {
+                    s.peer_licensed = ok;
+                    s.license_seen = true;
+                }
+                self.enforce_license();
+            }
             Msg::Pong => {}
             Msg::Bye => {
                 self.no_auto
@@ -2156,6 +2257,10 @@ impl Actor {
                 self.sh.platform.set_game_mode(on);
                 self.sh.save();
                 self.sh.publish();
+            }
+            Cmd::SetLicensePass(pass) => {
+                self.my_pass = pass;
+                self.license_changed();
             }
             Cmd::SetMoveApps(on) => {
                 self.sh.persisted.lock().unwrap().move_apps = on;
