@@ -1627,7 +1627,7 @@ pub fn backdrop_rgba(x: i32, y: i32, w: i32, h: i32, ow: i32, oh: i32) -> Option
         px?
     };
     // BGRA (Windows) to RGBA (the page), opaque.
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
         p[3] = 255;
     }
