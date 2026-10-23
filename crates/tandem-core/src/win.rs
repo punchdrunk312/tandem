@@ -775,6 +775,10 @@ fn parse_url(reply: Option<String>) -> Option<String> {
 }
 
 /// The program a top-level window belongs to, if it is one that may be moved.
+pub(crate) fn app_of_window_pub(root: HWND) -> Option<AppRef> {
+    app_of_window(root)
+}
+
 fn app_of_window(root: HWND) -> Option<AppRef> {
     unsafe {
         let mut pid = 0u32;
@@ -1172,6 +1176,24 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
             emit(CaptureEvent::LocalLeftUp);
             return false;
         }
+        // Second-monitor mode: onto a mirror of another computer's window, or off one
+        // of our windows that the pointer is driving here.
+        if msg == WM_MOUSEMOVE && !GAME_ACTIVE.load(Relaxed) {
+            match crate::winmirror::hook_move(h.x, h.y, LEFT_HELD.load(Relaxed)) {
+                crate::winmirror::Hook::Pass => {}
+                crate::winmirror::Hook::Stay => return false,
+                crate::winmirror::Hook::Cross(ev) => {
+                    reset_move();
+                    set_capturing(true);
+                    let (cx, cy) = s.center();
+                    unsafe {
+                        let _ = SetCursorPos(cx, cy);
+                    }
+                    emit(ev);
+                    return true;
+                }
+            }
+        }
         let mask = EDGES.load(Relaxed);
         if mask == 0 || msg != WM_MOUSEMOVE {
             return false;
@@ -1528,6 +1550,66 @@ static CURSOR_TX: OnceLock<std::sync::mpsc::Sender<bool>> = OnceLock::new();
 const CURSOR_IDS: [u32; 13] = [
     32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644, 32645, 32646, 32648, 32649, 32650,
 ];
+
+/// Liquid Glass: leave window `hwnd` out of screen captures (so it can photograph what is
+/// behind itself), or put it back in.
+pub fn exclude_from_capture(hwnd: isize, on: bool) {
+    // WDA_EXCLUDEFROMCAPTURE (Windows 10 2004 and later); WDA_NONE.
+    let affinity = if on { WINDOW_DISPLAY_AFFINITY(0x11) } else { WINDOW_DISPLAY_AFFINITY(0) };
+    unsafe {
+        let _ = SetWindowDisplayAffinity(HWND(hwnd as *mut core::ffi::c_void), affinity);
+    }
+}
+
+/// Liquid Glass: what is on screen in the given rectangle (physical pixels), at half size,
+/// as a `data:` JPEG for the island to draw its glass with.
+pub fn backdrop(x: i32, y: i32, w: i32, h: i32) -> Option<String> {
+    use base64::Engine as _;
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+        SRCCOPY,
+    };
+    if w <= 0 || h <= 0 || w > 4096 || h > 2048 {
+        return None;
+    }
+    let px = unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let Some((bmp, bits)) = crate::winspan::dib(screen, w, h) else {
+            let _ = DeleteDC(mem);
+            ReleaseDC(None, screen);
+            return None;
+        };
+        let old = SelectObject(mem, bmp.into());
+        let ok = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok();
+        let px = ok.then(|| std::slice::from_raw_parts(bits, (w * h * 4) as usize).to_vec());
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        px?
+    };
+    let (sw, sh) = (((w / 2).max(1)) as u32, ((h / 2).max(1)) as u32);
+    let small = crate::span::scale4(&px, w as u32, h as u32, sw, sh);
+    let jpeg = crate::span::encode_jpeg(&small, sw, sh, 70)?;
+    Some(format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(jpeg)
+    ))
+}
+
+/// The main display, at half size, as a `data:` JPEG (a screenshot for feedback).
+pub fn screenshot() -> Option<String> {
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    backdrop(0, 0, w, h)
+}
+
+/// CubeCursor is closing: windows kept here for a mirror come back on screen, and the
+/// pointer is shown again.
+pub fn on_exit() {
+    crate::winmirror::release_all();
+    restore_cursors();
+}
 
 /// Puts the user's own cursor scheme back. Safe to call any time; also called at startup
 /// so a crash while the pointer was hidden can never leave it invisible.
@@ -2174,6 +2256,22 @@ impl Platform for WinPlatform {
         dir.is_dir().then_some(dir)
     }
 
+    fn device_info(&self) -> crate::proto::DeviceInfo {
+        crate::windevice::device_info()
+    }
+
+    fn power(&self, a: crate::proto::PowerAction) {
+        crate::windevice::power(a);
+    }
+
+    fn open_apps(&self) -> Vec<AppRef> {
+        crate::windevice::open_apps()
+    }
+
+    fn edge_glow(&self, edge: Edge, frac: f32, rgb: [u8; 3]) {
+        crate::winspan::glow(edge, frac, rgb);
+    }
+
     fn span_show(&self, v: SpanView) {
         crate::winspan::show(v);
     }
@@ -2210,6 +2308,86 @@ impl Platform for WinPlatform {
 
     fn span_cancel(&self) {
         crate::winspan::cancel();
+    }
+
+    fn trash(&self, paths: &[PathBuf]) -> bool {
+        use windows::Win32::UI::Shell::{
+            SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
+            FO_DELETE, SHFILEOPSTRUCTW,
+        };
+        if paths.is_empty() {
+            return false;
+        }
+        // A list of paths, each ending in a 0, and one more 0 at the end.
+        let mut list: Vec<u16> = Vec::new();
+        for p in paths {
+            list.extend(p.as_os_str().encode_wide());
+            list.push(0);
+        }
+        list.push(0);
+        let mut op = SHFILEOPSTRUCTW {
+            wFunc: FO_DELETE,
+            pFrom: PCWSTR(list.as_ptr()),
+            fFlags: (FOF_ALLOWUNDO.0 | FOF_NOCONFIRMATION.0 | FOF_SILENT.0 | FOF_NOERRORUI.0) as u16,
+            ..Default::default()
+        };
+        unsafe { SHFileOperationW(&mut op) == 0 }
+    }
+
+    fn mirror_supported(&self) -> bool {
+        true
+    }
+
+    fn mirror_adopt(&self, edge: Edge) -> Option<(u64, u32, u32)> {
+        crate::winmirror::adopt(edge)
+    }
+
+    fn mirror_release(&self, id: u64, home: Option<f32>) {
+        crate::winmirror::release(id, home);
+    }
+
+    fn portal_begin(&self, id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
+        crate::winmirror::portal_begin(id, rx, ry)
+    }
+
+    fn portal_end(&self) {
+        crate::winmirror::portal_end();
+    }
+
+    fn portal_outside(&self) -> Option<(i32, i32)> {
+        crate::winmirror::portal_outside()
+    }
+
+    fn mirror_create(&self, id: u64, w: u32, h: u32, entry: Edge) -> bool {
+        crate::winmirror::create(id, w, h, entry)
+    }
+
+    fn mirror_frame(&self, id: u64, w: u32, h: u32, jpeg: Vec<u8>) {
+        crate::winmirror::frame(id, w, h, jpeg);
+    }
+
+    fn mirror_close(&self, id: u64) {
+        crate::winmirror::close(id);
+    }
+
+    fn mirror_move(&self, id: u64, dx: i32, dy: i32, done: bool) -> Option<f32> {
+        crate::winmirror::move_by(id, dx, dy, done)
+    }
+
+    fn mirror_at_cursor(&self) -> Option<(u64, i32, i32)> {
+        crate::winmirror::at_cursor()
+    }
+
+    fn mirror_cursor(&self, id: u64, at: Option<(i32, i32)>) {
+        crate::winmirror::cursor_on(id, at);
+    }
+
+    fn mirror_point(&self, id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
+        crate::winmirror::point(id, rx, ry)
+    }
+
+    fn pointer_hidden(&self, on: bool) {
+        crate::winmirror::pointer_hidden(on);
     }
 
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {

@@ -33,6 +33,8 @@ export class Greeting {
   private timers: number[] = [];
 
   onComplete: (() => void) | null = null;
+  /** On the light glass bar: dark words, glassy Bob. */
+  light = false;
 
   start() {
     this.startMs = performance.now();
@@ -41,6 +43,7 @@ export class Greeting {
     this.fired = false;
     this.cancelTimers();
     this.bob = new Bob();
+    this.bob.glass = this.light;
     this.bob.setState("idle", true);
     this.timers.push(
       window.setTimeout(() => this.bob.greet(), T.rise * 600),
@@ -106,12 +109,12 @@ export class Greeting {
       x.save();
       x.globalAlpha = ta;
       x.translate(320 + 62 + (1 - out(ta)) * -10, REST_Y - 4);
-      x.fillStyle = "#f5f6f8";
+      x.fillStyle = this.light ? "#0a1020" : "#ffffff";
       x.font = "650 22px system-ui, 'Segoe UI Variable Display', 'Segoe UI', sans-serif";
       x.textBaseline = "middle";
       x.textAlign = "left";
       x.fillText("Hi, I’m Bob", 0, 0);
-      x.fillStyle = "#9398a1";
+      x.fillStyle = this.light ? "#5b6472" : "#9398a1";
       x.font = "13px system-ui, 'Segoe UI', sans-serif";
       x.fillText("Drop a file on me any time.", 0, 24);
       x.restore();

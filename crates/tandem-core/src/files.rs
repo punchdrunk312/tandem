@@ -136,9 +136,11 @@ pub fn unique_name(dir: &Path, name: &str) -> String {
 
 /// Moves received files (and folders) into `dir`, never overwriting: a clash gets a
 /// `name (1)` style name. Falls back to copy-and-delete across drives.
-pub fn move_into(paths: &[PathBuf], dir: &Path) -> std::io::Result<()> {
+/// Moves `paths` into `dir` (names made unique). Returns where each one went.
+pub fn move_into(paths: &[PathBuf], dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(dir)?;
     let mut staging: Option<PathBuf> = None;
+    let mut out = Vec::new();
     for p in paths {
         let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
             continue;
@@ -155,11 +157,12 @@ pub fn move_into(paths: &[PathBuf], dir: &Path) -> std::io::Result<()> {
                 std::fs::remove_file(p)?;
             }
         }
+        out.push(target);
     }
     if let Some(s) = staging {
         let _ = std::fs::remove_dir(&s); // only if now empty
     }
-    Ok(())
+    Ok(out)
 }
 
 /// A drag that stays on one computer: moves `paths` into `dir` (like Explorer does on the

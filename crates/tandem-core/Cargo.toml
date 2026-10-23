@@ -30,11 +30,18 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Media",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
   "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_System_Ole",
+  "Win32_System_Power",
+  "Win32_System_Shutdown",
+  "Win32_System_SystemInformation",
   "Win32_System_StationsAndDesktops",
+  "Win32_Storage_FileSystem",
   "Win32_Storage_Xps",
   "Win32_System_Threading",
   "Win32_UI_HiDpi",
@@ -48,8 +55,9 @@ core-graphics = { version = "0.25", features = ["highsierra"] }
 core-foundation = "0.10"
 foreign-types = "0.5"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL", "NSDictionary", "NSAutoreleasePool"] }
-objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL", "NSDictionary", "NSAutoreleasePool", "NSGeometry", "NSObject"] }
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep", "NSWindow", "NSView", "NSResponder", "NSColor", "NSGraphics", "NSRunningApplication", "NSWorkspace"] }
+dispatch2 = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

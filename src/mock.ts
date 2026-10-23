@@ -20,11 +20,18 @@ const base: Snapshot = {
   game_mode: true,
   drag_files: true,
   move_apps: false,
+  monitor_mode: false,
   carry: null,
   switch_delay_ms: 0,
   error: null,
   notice: null,
+  me: { battery: null, plugged: true, charging: false, mins_left: null, mins_to_full: null, saver: false, cpu: 14, mem: 46, disk_free_gb: 412, disk_total_gb: 953, uptime_min: 312, accessories: [{ name: "MX Master 3", battery: 64 }], mac: "aa:bb:cc:00:11:22" },
+  my_color: "#2dd4bf",
 };
+const dev = (o: Partial<NonNullable<Snapshot["me"]>>): NonNullable<Snapshot["me"]> => ({
+  battery: 72, plugged: false, charging: false, mins_left: 251, mins_to_full: null, saver: false, cpu: 22, mem: 58,
+  disk_free_gb: 118, disk_total_gb: 476, uptime_min: 95, accessories: [], mac: "aa:bb:cc:00:11:33", ...o,
+});
 let state: Snapshot = { ...base };
 if (scenario === "pair") {
   state.nearby = [{ id: "n1", name: "LAPTOP-HOME", addr: "192.168.1.42", port: 24800, paired: false }];
@@ -37,12 +44,11 @@ if (scenario === "pair") {
     connected: { id: "n2", name: "Studio-PC" },
     paired: multi
       ? [
-          { id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true },
-          { id: "n3", name: "Laptop", side: "Left", connected: true, nearby: true },
-          { id: "n4", name: "Office-PC", side: "Top", connected: true, nearby: true },
-          { id: "n5", name: "Gaming-PC", side: "TopRight", connected: true, nearby: true },
+          { id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true, color: "#a78bfa", ping_ms: 6, device: dev({ battery: null, plugged: true, cpu: 61, mem: 71, uptime_min: 4300 }) },
+          { id: "n3", name: "Laptop", side: "Left", connected: true, nearby: true, color: "#fbbf24", ping_ms: 24, device: dev({ battery: 34, accessories: [{ name: "Galaxy Buds2", battery: 80 }] }) },
+          { id: "n4", name: "Office-PC", side: "Top", connected: false, nearby: false, color: "#38bdf8", wakeable: true },
         ]
-      : [{ id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true }],
+      : [{ id: "n2", name: "Studio-PC", side: "Right", connected: true, nearby: true, color: "#a78bfa", ping_ms: 9, device: dev({ battery: 34 }) }],
   };
 }
 if (flags.includes("xfer")) {
@@ -155,6 +161,22 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       return;
     case "set_move_apps":
       state.move_apps = !!args?.on;
+      push();
+      return;
+    case "update_status":
+      return { current: "0.1.0", version: hashHas("update") ? "0.2.0" : null, notes: "- Second monitor mode\n- Liquid Glass\n- Everything on Mac too" };
+    case "update_check":
+      return { current: "0.1.0", version: null, notes: "" };
+    case "update_install":
+      return new Promise((_, no) => setTimeout(() => no("Preview: nothing to install here"), 1500)) as never;
+    case "send_feedback":
+      return new Promise((r) => setTimeout(() => r(null), 700)) as never;
+    case "undo_last":
+      state.undo = null;
+      push();
+      return;
+    case "set_monitor_mode":
+      state.monitor_mode = !!args?.on;
       push();
       return;
     case "set_drag_files":

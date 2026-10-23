@@ -10,6 +10,8 @@ export const SOUND_NAMES = [
   "work", "finish", "error", "approval", "question", "approve", "gulp", "tick",
   "send", "love", "pop", "proud", "wink", "yawn", "attach", "think", "search",
   "rate", "sleep",
+  // The device moments and Bob's play: soft, physical, never a "ding".
+  "plug", "unplug", "low", "full", "hello", "bye", "boop", "giggle", "purr", "whoosh", "tink",
 ] as const;
 
 export type SoundName = (typeof SOUND_NAMES)[number];
@@ -35,7 +37,8 @@ const SPECS: Record<SoundName, Spec> = {
   greet: { notes: [n(0, 0.1, 784, 0.4), n(0.1, 0.1, 988, 0.4), n(0.2, 0.28, 1319, 0.4)] },
   work: { notes: [n(0, 0.05, 620, 0.3, "tri"), n(0.09, 0.05, 700, 0.3, "tri")] },
   finish: { notes: [n(0, 0.12, 523, 0.4), n(0.1, 0.12, 659, 0.4), n(0.2, 0.12, 784, 0.4), n(0.3, 0.4, 1047, 0.45)] },
-  error: { notes: [n(0, 0.14, 233, 0.3, "square", 185), n(0.17, 0.2, 196, 0.3, "square", 150)] },
+  // Two soft falling notes: says "that didn't work" without a buzzer.
+  error: { notes: [n(0, 0.14, 466, 0.32, "tri", 415), n(0.16, 0.24, 349, 0.32, "sine", 311)] },
   approval: { notes: [n(0, 0.12, 659, 0.42), n(0.13, 0.22, 880, 0.42)] },
   question: { notes: [n(0, 0.1, 494, 0.4), n(0.1, 0.22, 740, 0.42, "sine", 830)] },
   approve: { notes: [n(0, 0.08, 659, 0.42), n(0.08, 0.16, 988, 0.42)] },
@@ -52,6 +55,27 @@ const SPECS: Record<SoundName, Spec> = {
   search: { notes: [n(0, 0.28, 500, 0.32, "sine", 940), n(0.28, 0.28, 940, 0.28, "sine", 500)] },
   rate: { notes: [n(0, 0.16, 349, 0.32, "tri", 311), n(0.18, 0.24, 294, 0.32, "tri", 262)] },
   sleep: { notes: [n(0, 0.9, 392, 0.3, "sine", 262), n(0.05, 0.85, 196, 0.15, "sine", 131)] },
+  // A felt "thunk" as the charger clicks in, then a soft shimmer rising out of it.
+  plug: {
+    notes: [n(0, 0.14, 150, 0.7, "sine", 70), n(0.1, 0.5, 1568, 0.09, "sine", 1568, 5), n(0.16, 0.5, 2093, 0.08, "sine", 2093, 5), n(0.22, 0.6, 2637, 0.07, "sine", 2637, 4)],
+    noise: [[0, 0.05, 1800, 400, 0.22]],
+  },
+  // Let go of the charger: a gentle drop.
+  unplug: { notes: [n(0, 0.2, 620, 0.32, "sine", 330), n(0.03, 0.14, 140, 0.4, "sine", 90)], noise: [[0, 0.04, 1200, 300, 0.12]] },
+  // Tired, not alarming: two soft falling notes.
+  low: { notes: [n(0, 0.22, 587, 0.3, "tri", 560), n(0.2, 0.36, 440, 0.3, "tri", 415)] },
+  // Full: a little sparkle.
+  full: { notes: [n(0, 0.1, 1319, 0.22), n(0.07, 0.1, 1568, 0.22), n(0.14, 0.12, 1976, 0.22), n(0.21, 0.45, 2637, 0.2, "sine", 2637, 6)] },
+  // A computer joins: a warm "hey", with a breath of air.
+  hello: { notes: [n(0, 0.14, 523, 0.34, "sine", 540), n(0.12, 0.32, 784, 0.32, "sine", 784, 4)], noise: [[0, 0.18, 500, 2500, 0.05]] },
+  bye: { notes: [n(0, 0.16, 784, 0.3, "sine", 760), n(0.14, 0.34, 523, 0.28, "sine", 500)] },
+  boop: { notes: [n(0, 0.08, 420, 0.5, "sine", 980), n(0.07, 0.06, 1250, 0.18, "sine", 1400)] },
+  giggle: { notes: [n(0, 0.06, 880, 0.3, "sine", 940, 12), n(0.08, 0.06, 990, 0.3, "sine", 1060, 12), n(0.16, 0.09, 1110, 0.3, "sine", 1200, 12)] },
+  // Being petted: a low, soft rumble.
+  purr: { notes: [n(0, 0.9, 92, 0.5, "sine", 88, 24), n(0, 0.9, 184, 0.12, "sine", 176, 24)], noise: [[0, 0.9, 260, 180, 0.1]] },
+  // Crossing the edge: air moving past.
+  whoosh: { noise: [[0, 0.28, 300, 2600, 0.5]], notes: [n(0, 0.24, 220, 0.06, "sine", 440)] },
+  tink: { notes: [n(0, 0.18, 2637, 0.26, "sine", 2637), n(0.01, 0.12, 3951, 0.1)] },
 };
 
 const RATE = 44100;
@@ -152,6 +176,8 @@ class SoundEngine {
 
   /** Hands every rendered sound to the Rust side, which plays them with the OS. */
   private async registerNative(): Promise<boolean> {
+    // Only Windows plays them natively; the Mac's WebView plays them itself.
+    if (!/Windows/i.test(navigator.userAgent)) return false;
     try {
       for (const name of SOUND_NAMES) {
         const data = render(SPECS[name]);
@@ -201,10 +227,17 @@ class SoundEngine {
     this.enabled = on;
   }
 
-  play(name: SoundName | string) {
-    if (!this.enabled) return;
+  /** Nothing plays until then (performance.now() ms): the app starting, a game in front. */
+  private hushedUntil = 0;
+  hush(ms: number) {
+    this.hushedUntil = Math.max(this.hushedUntil, performance.now() + ms);
+  }
+
+  /** `pan`: -1 left … 1 right, so a sound about the computer on your left comes from there. */
+  play(name: SoundName | string, pan = 0) {
+    if (!this.enabled || performance.now() < this.hushedUntil) return;
     if (this.native) {
-      invoke("sound_play", { name, volume: Math.min(1, this.volume * MASTER_BOOST) }).catch(() => {});
+      invoke("sound_play", { name, volume: Math.min(1, this.volume * MASTER_BOOST), pan }).catch(() => {});
       return;
     }
     const ctx = this.ctx;
@@ -218,7 +251,13 @@ class SoundEngine {
     if (ctx.state === "suspended") void ctx.resume();
     const src = ctx.createBufferSource();
     src.buffer = buf;
-    src.connect(master);
+    if (pan && ctx.createStereoPanner) {
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      src.connect(p).connect(master);
+    } else {
+      src.connect(master);
+    }
     src.start();
   }
 }

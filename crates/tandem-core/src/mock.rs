@@ -40,6 +40,28 @@ pub struct MockState {
     pub span_window: Option<AppRef>,
     pub span_taken: Option<Edge>,
     pub span_moved_x: i32,
+    /// What `device_info` answers.
+    pub device: crate::proto::DeviceInfo,
+    pub power_done: Vec<crate::proto::PowerAction>,
+    /// What `open_apps` answers.
+    pub open: Vec<AppRef>,
+    pub glows: Vec<(Edge, [u8; 3])>,
+    /// Second-monitor mode works here.
+    pub mirror_ok: bool,
+    /// Owner: windows kept here and shown elsewhere; and given back (with `home`).
+    pub adopted: Vec<u64>,
+    pub mirror_released: Vec<(u64, Option<f32>)>,
+    /// Owner: the window slid in for the pointer (id, left, top, width, height).
+    pub portal_window: Option<(u64, i32, i32, i32, i32)>,
+    pub portal_ends: u32,
+    /// Mirror end: mirrors shown here (id, left, top, width, height).
+    pub mirrors: Vec<(u64, i32, i32, i32, i32)>,
+    pub mirrors_closed: Vec<u64>,
+    pub mirror_frames: usize,
+    pub mirror_cursor: Option<(u64, i32, i32)>,
+    pub pointer_hidden: bool,
+    /// Files put in the bin (undo).
+    pub trashed: Vec<std::path::PathBuf>,
 }
 
 pub struct MockPlatform {
@@ -83,6 +105,21 @@ impl MockPlatform {
                 span_window: None,
                 span_taken: None,
                 span_moved_x: 0,
+                device: Default::default(),
+                power_done: vec![],
+                open: vec![],
+                glows: vec![],
+                mirror_ok: false,
+                adopted: vec![],
+                mirror_released: vec![],
+                portal_window: None,
+                portal_ends: 0,
+                mirrors: vec![],
+                mirrors_closed: vec![],
+                mirror_frames: 0,
+                mirror_cursor: None,
+                pointer_hidden: false,
+                trashed: vec![],
             }),
             sink: Mutex::new(None),
         })
@@ -105,6 +142,16 @@ impl MockPlatform {
     /// Simulate dragging a program's window to a connected edge and holding it there.
     pub fn user_drag_app_to_edge(&self, edge: Edge, app: AppRef) {
         self.emit(CaptureEvent::AppDragged { edge, app });
+    }
+    /// Simulate this computer's own mouse going onto mirror `id` (the hook swallows it).
+    pub fn user_onto_mirror(&self, id: u64, rx: i32, ry: i32) {
+        self.st.lock().unwrap().capturing = true;
+        self.emit(CaptureEvent::PortalIn { id, rx, ry });
+    }
+    /// Simulate this computer's own mouse leaving the real window it is on.
+    pub fn user_off_window(&self, rx: i32, ry: i32) {
+        self.st.lock().unwrap().capturing = true;
+        self.emit(CaptureEvent::PortalOut { rx, ry });
     }
     /// Simulate the hook noticing the cursor pushing through an edge.
     pub fn user_push_edge(&self, edge: Edge, frac: f32) {
@@ -212,6 +259,18 @@ impl Platform for MockPlatform {
     fn span_restore(&self) {
         self.st.lock().unwrap().span_restores += 1;
     }
+    fn device_info(&self) -> crate::proto::DeviceInfo {
+        self.st.lock().unwrap().device.clone()
+    }
+    fn power(&self, a: crate::proto::PowerAction) {
+        self.st.lock().unwrap().power_done.push(a);
+    }
+    fn open_apps(&self) -> Vec<AppRef> {
+        self.st.lock().unwrap().open.clone()
+    }
+    fn edge_glow(&self, edge: Edge, _frac: f32, rgb: [u8; 3]) {
+        self.st.lock().unwrap().glows.push((edge, rgb));
+    }
     fn span_take(&self, edge: Edge) -> bool {
         let mut st = self.st.lock().unwrap();
         if st.span_window.is_none() {
@@ -264,6 +323,95 @@ impl Platform for MockPlatform {
                 frac: 0.0,
             });
         }
+    }
+    fn mirror_supported(&self) -> bool {
+        self.st.lock().unwrap().mirror_ok
+    }
+    fn mirror_adopt(&self, _edge: Edge) -> Option<(u64, u32, u32)> {
+        let mut st = self.st.lock().unwrap();
+        st.adopted.push(7);
+        Some((7, 400, 300))
+    }
+    fn mirror_release(&self, id: u64, home: Option<f32>) {
+        let mut st = self.st.lock().unwrap();
+        st.mirror_released.push((id, home));
+        if st.portal_window.is_some_and(|w| w.0 == id) {
+            st.portal_window = None;
+        }
+    }
+    /// The window slides in at (300, 250), 400 x 300.
+    fn portal_begin(&self, id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
+        let mut st = self.st.lock().unwrap();
+        if !st.adopted.contains(&id) {
+            return None;
+        }
+        st.portal_window = Some((id, 300, 250, 400, 300));
+        Some((300 + rx, 250 + ry))
+    }
+    fn portal_end(&self) {
+        let mut st = self.st.lock().unwrap();
+        st.portal_window = None;
+        st.portal_ends += 1;
+    }
+    fn portal_outside(&self) -> Option<(i32, i32)> {
+        let st = self.st.lock().unwrap();
+        let (_, x, y, w, h) = st.portal_window?;
+        let (cx, cy) = st.cursor;
+        let inside = cx >= x && cy >= y && cx < x + w && cy < y + h;
+        (!inside).then_some((cx - x, cy - y))
+    }
+    /// Mirrors appear at (0, 100).
+    fn mirror_create(&self, id: u64, w: u32, h: u32, _entry: Edge) -> bool {
+        let mut st = self.st.lock().unwrap();
+        if !st.mirror_ok {
+            return false;
+        }
+        st.mirrors.push((id, 0, 100, w as i32, h as i32));
+        true
+    }
+    fn mirror_frame(&self, _id: u64, _w: u32, _h: u32, _jpeg: Vec<u8>) {
+        self.st.lock().unwrap().mirror_frames += 1;
+    }
+    fn mirror_close(&self, id: u64) {
+        let mut st = self.st.lock().unwrap();
+        st.mirrors.retain(|m| m.0 != id);
+        st.mirrors_closed.push(id);
+    }
+    fn mirror_move(&self, id: u64, dx: i32, dy: i32, done: bool) -> Option<f32> {
+        let mut st = self.st.lock().unwrap();
+        let m = st.mirrors.iter_mut().find(|m| m.0 == id)?;
+        m.1 += dx;
+        m.2 += dy;
+        if done && m.1 * 2 < -m.3 {
+            st.mirrors.retain(|m| m.0 != id);
+            return Some(0.5);
+        }
+        None
+    }
+    fn mirror_at_cursor(&self) -> Option<(u64, i32, i32)> {
+        let st = self.st.lock().unwrap();
+        let (cx, cy) = st.cursor;
+        st.mirrors
+            .iter()
+            .find(|m| cx >= m.1 && cy >= m.2 && cx < m.1 + m.3 && cy < m.2 + m.4)
+            .map(|m| (m.0, cx - m.1, cy - m.2))
+    }
+    fn mirror_cursor(&self, id: u64, at: Option<(i32, i32)>) {
+        self.st.lock().unwrap().mirror_cursor = at.map(|(x, y)| (id, x, y));
+    }
+    fn mirror_point(&self, id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
+        let st = self.st.lock().unwrap();
+        st.mirrors
+            .iter()
+            .find(|m| m.0 == id)
+            .map(|m| (m.1 + rx, m.2 + ry))
+    }
+    fn trash(&self, paths: &[std::path::PathBuf]) -> bool {
+        self.st.lock().unwrap().trashed.extend(paths.iter().cloned());
+        true
+    }
+    fn pointer_hidden(&self, on: bool) {
+        self.st.lock().unwrap().pointer_hidden = on;
     }
     fn set_capture_sink(&self, tx: UnboundedSender<CaptureEvent>) {
         *self.sink.lock().unwrap() = Some(tx);

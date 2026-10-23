@@ -7,13 +7,30 @@ pub mod keymap;
 pub mod license;
 #[cfg(target_os = "macos")]
 pub mod mac;
+#[cfg(target_os = "macos")]
+mod macapps;
+#[cfg(target_os = "macos")]
+mod macmirror;
+#[cfg(target_os = "macos")]
+mod macoverlay;
+#[cfg(target_os = "macos")]
+mod macspan;
+#[cfg(target_os = "macos")]
+mod macwin;
+pub mod mirror;
 pub mod mock;
 pub mod node;
 pub mod platform;
 pub mod proto;
 pub mod span;
+pub mod status;
+pub mod update;
 #[cfg(windows)]
 pub mod win;
+#[cfg(windows)]
+mod windevice;
+#[cfg(windows)]
+mod winmirror;
 #[cfg(windows)]
 mod winspan;
 

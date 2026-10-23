@@ -25,6 +25,17 @@ pub const WINDOW_LABEL: &str = "island";
 /// Kept tiny: everything outside the shape must click through to the app below.
 const HIT_MARGIN: f64 = 3.0;
 
+/// What is on screen behind the bar (Liquid Glass): where, in window-logical px, and the
+/// picture as a `data:` URL.
+#[derive(Serialize, Clone)]
+pub struct BackdropPayload {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub url: String,
+}
+
 #[derive(Serialize, Clone)]
 pub struct CursorPayload {
     pub x: f64,
@@ -56,6 +67,8 @@ pub struct PollGate {
     pub monitor_cursor: AtomicBool,
     /// While `now_ms() < reveal_until_ms` the island may show even in a full-screen app.
     pub reveal_until_ms: AtomicU64,
+    /// Liquid Glass: photograph what is behind the bar while it is open.
+    pub glass: AtomicBool,
 }
 
 /// Top-left of the display a hotkey opened the bar on; kept until the bar goes away, so
@@ -87,6 +100,7 @@ impl PollGate {
             hide_fullscreen: AtomicBool::new(true),
             monitor_cursor: AtomicBool::new(false),
             reveal_until_ms: AtomicU64::new(0),
+            glass: AtomicBool::new(false),
         }
     }
 
@@ -179,6 +193,19 @@ mod sys {
         unsafe { (GetAsyncKeyState(VK_SPACE.0 as i32) as u16 & 0x8000) != 0 }
     }
 
+    /// Liquid Glass: the island stays out of screen captures so it can photograph what is
+    /// behind itself.
+    pub fn set_capture_excluded(win: &WebviewWindow, on: bool) {
+        if let Some(hwnd) = hwnd_of(win) {
+            tandem_core::win::exclude_from_capture(hwnd.0 as isize, on);
+        }
+    }
+
+    /// What is on screen in that rectangle (physical px), as a `data:` URL.
+    pub fn backdrop(x: i32, y: i32, w: i32, h: i32) -> Option<String> {
+        tandem_core::win::backdrop(x, y, w, h)
+    }
+
     fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
         let raw = win.hwnd().ok()?.0 as isize;
         if raw == 0 {
@@ -222,6 +249,73 @@ mod sys {
         let _ = win.show();
     }
     pub fn make_non_activating(_: &WebviewWindow) {}
+    pub fn set_capture_excluded(_: &WebviewWindow, _: bool) {}
+    pub fn backdrop(_: i32, _: i32, _: i32, _: i32) -> Option<String> {
+        None
+    }
+}
+
+/// Liquid Glass on or off: the bar photographs what is behind it while it is open (and
+/// stays out of screenshots, which it can't be in and see through at the same time).
+pub fn set_glass(app: &AppHandle, gate: &Arc<PollGate>, on: bool) {
+    gate.glass.store(on, Ordering::Relaxed);
+    if let Some(win) = window(app) {
+        sys::set_capture_excluded(&win, on);
+    }
+    #[cfg(target_os = "macos")]
+    if on {
+        mac_glass::start(app.clone(), gate.clone());
+    }
+}
+
+/// Liquid Glass on the Mac: macOS can photograph what is underneath one window, so the
+/// bar stays in screenshots there. While the bar is open and Liquid Glass is on, a
+/// picture of what is behind it about twelve times a second.
+#[cfg(target_os = "macos")]
+mod mac_glass {
+    use super::*;
+    use std::sync::Once;
+
+    static START: Once = Once::new();
+
+    pub fn start(app: AppHandle, gate: Arc<PollGate>) {
+        START.call_once(|| {
+            tandem_core::mac::ask_screen_recording();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_millis(80));
+                if !gate.glass.load(Ordering::Relaxed) || gate.collapsed.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+                let Some(win) = window(&app) else {
+                    continue;
+                };
+                let r = *gate.rect.lock().unwrap();
+                if r.w <= 0.0 || r.h <= 0.0 {
+                    continue;
+                }
+                let (Ok(o), Ok(sz), Ok(ns)) = (win.outer_position(), win.inner_size(), win.ns_window()) else {
+                    continue;
+                };
+                let sc = win.scale_factor().unwrap_or(1.0);
+                let (w, h) = (sz.width as f64 / sc, sz.height as f64 / sc);
+                // A margin all round, so the blur has something to pull in at the edges.
+                let m = 24.0;
+                let (lx, ly) = ((r.x - m).max(0.0), (r.y - m).max(0.0));
+                let (lw, lh) = ((r.w + 2.0 * m).min(w - lx), (r.h + 2.0 * m).min(h - ly));
+                // Points: the window's place (pixels) over the scale, plus the bar's place.
+                let (px, py) = (o.x as f64 / sc + lx, o.y as f64 / sc + ly);
+                let num = tandem_core::mac::window_number(ns);
+                if let Some(url) = tandem_core::mac::backdrop_below(num, px, py, lw, lh) {
+                    let _ = app.emit_to(
+                        WINDOW_LABEL,
+                        "backdrop",
+                        BackdropPayload { x: lx, y: ly, w: lw, h: lh, url },
+                    );
+                }
+            });
+        });
+    }
 }
 
 pub use sys::make_non_activating;
@@ -409,6 +503,7 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
             let mut was_down = false;
             let mut was_space = false;
             let mut hint_on = false;
+            let mut glass_at = None;
 
             while gate.is_active() {
                 let fast = was_down || hint_on || !gate.collapsed.load(Ordering::Relaxed);
@@ -492,6 +587,40 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
                     was_down = down;
                     continue;
                 };
+                // ---- Liquid Glass: what is behind the open bar, ~12 times a second ---------
+                if gate.glass.load(Ordering::Relaxed)
+                    && !collapsed
+                    && !quiet
+                    && due(&mut glass_at, Duration::from_millis(80), now_i)
+                {
+                    let r = *gate.rect.lock().unwrap();
+                    if r.w > 0.0 && r.h > 0.0 {
+                        // A margin all round, so the blur has something to pull in at the edges.
+                        let m = 24.0;
+                        let (lx, ly) = ((r.x - m).max(0.0), (r.y - m).max(0.0));
+                        let (lw, lh) = ((r.w + 2.0 * m).min(w - lx), (r.h + 2.0 * m).min(h - ly));
+                        let shot = sys::backdrop(
+                            (ox + lx * scale).round() as i32,
+                            (oy + ly * scale).round() as i32,
+                            (lw * scale).round() as i32,
+                            (lh * scale).round() as i32,
+                        );
+                        if let Some(url) = shot {
+                            let _ = app.emit_to(
+                                WINDOW_LABEL,
+                                "backdrop",
+                                BackdropPayload {
+                                    x: lx,
+                                    y: ly,
+                                    w: lw,
+                                    h: lh,
+                                    url,
+                                },
+                            );
+                        }
+                    }
+                }
+
                 let x = (cx - ox) / scale;
                 let y = (cy - oy) / scale;
                 let mid = ox + w * scale / 2.0;

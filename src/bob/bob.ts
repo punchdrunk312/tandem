@@ -11,6 +11,7 @@
 import { Ease, lerp, type EaseFn } from "../core/anim";
 import { Sound } from "../core/sound";
 import type { BotEmoteName, BotStateName } from "../core/layout";
+import type { Look } from "../core/seasons";
 
 export type EyeShape =
   | "pill" | "wide" | "dot" | "line" | "flat" | "happy" | "closed"
@@ -162,12 +163,21 @@ function starPath(x: CanvasRenderingContext2D, ro: number, ri: number) {
   x.closePath();
 }
 
+/** A colour a little lighter (k > 0) or darker (k < 0). */
+function shade(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => Math.round(k >= 0 ? c + (255 - c) * k : c * (1 + k)));
+  return `rgb(${ch[0]},${ch[1]},${ch[2]})`;
+}
+
 const FONT = `system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif`;
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
 export class Bob {
   isMini = false;
+  /** Liquid Glass: a jelly Bob that catches the light (on the glass bar). */
+  glass = false;
   /** Optional solid body colour (unused by Tandem; null = Bob's own teal). */
   bodyColor: RGB | null = null;
 
@@ -235,6 +245,13 @@ export class Bob {
 
   /** Fired when three slaps land inside 1.7 s (→ dizzy + confused view). */
   onDizzy: (() => void) | null = null;
+
+  /** What he wears (the season, a special day), or null for plain Bob. */
+  look: Look | null = null;
+  /** Where his antenna bulb was last drawn (for the spring flower). */
+  private bulbAt = { x: 0, y: 0, r: 0 };
+  /** Quick boops in a row (four → dizzy). */
+  private boopTimes: number[] = [];
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -310,6 +327,37 @@ export class Bob {
     this.anim("sy", [[0.78, 80, Ease.out], [1.18, 130, Ease.out], [1, 220, Ease.back]]);
     this.anim("sx", [[1.28, 80, Ease.out], [0.92, 130, Ease.out], [1, 220, Ease.back]]);
     this.blink();
+  }
+
+  /** A click on him: a giggle and a wobble. Four quick ones and he gets dizzy. */
+  boop() {
+    this.interruptGreet();
+    if (this.state === "dizzy") return;
+    const t = now();
+    this.boopTimes = this.boopTimes.filter((s) => t - s < 1.6);
+    this.boopTimes.push(t);
+    this.squash();
+    this.kick(-8);
+    if (this.boopTimes.length >= 4) {
+      this.boopTimes = [];
+      this.onDizzy?.();
+      return;
+    }
+    Sound.play("boop");
+    this.eyeOverride = "happy";
+    this.eyeOverrideUntil = t + 0.7;
+    this.blush = Math.min(1, this.blush + 0.5);
+    setTimeout(() => Sound.play("giggle"), 110);
+  }
+
+  /** Being petted: eyes closed happily, a blush, a purr and a few hearts. */
+  pet() {
+    if (this.state === "dizzy") return;
+    this.eyeOverride = "happy";
+    this.eyeOverrideUntil = now() + 1.6;
+    this.blush = 1;
+    this.emit("heart", 3);
+    Sound.play("purr");
   }
 
   slap() {
@@ -792,11 +840,12 @@ export class Bob {
 
     // A soft glow around him, in the colour of his mood.
     if (R >= 16) {
-      const gl = x.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 2.1);
+      // Kept inside his canvas (half its width is ~1.65 R), so it never shows an edge.
+      const gl = x.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.6);
       gl.addColorStop(0, rgba(this.col, 0.2 * (1 - m * 0.6)));
       gl.addColorStop(1, rgba(this.col, 0));
       x.fillStyle = gl;
-      x.fillRect(cx - R * 2.2, cy - R * 2.2, R * 4.4, R * 4.4);
+      x.fillRect(cx - R * 1.7, cy - R * 1.7, R * 3.4, R * 3.4);
     }
 
     this.drawHands(x, R, hw, hh, cx, cy);
@@ -883,6 +932,7 @@ export class Bob {
     this.drawEyes(x, body, R, hw, hh);
     if (m > 0.05) this.drawSlot(x, body, R, hh);
     else this.drawMouth(x, R, hh);
+    if (this.look && m < 0.5 && R >= 10) this.drawOutfit(x, R, hw, hh, 1 - m * 2);
 
     x.restore();
 
@@ -954,6 +1004,8 @@ export class Bob {
     x.fill();
     x.restore();
 
+    if (this.glass) this.drawJelly(x, body, R, hw, hh);
+
     // Rim light: bright on the lit side, a cool edge on the far side.
     const rim = x.createLinearGradient(-hw, -hh, hw, hh);
     rim.addColorStop(0, "rgba(255,255,255,0.7)");
@@ -962,6 +1014,49 @@ export class Bob {
     x.lineWidth = Math.max(1, R * 0.035);
     x.strokeStyle = rim;
     x.stroke(body);
+  }
+
+  /** Liquid Glass: light passing through him. A wide liquid highlight across the top,
+   *  a bright caustic where the light gathers at the bottom, a fine inner edge. */
+  private drawJelly(x: CanvasRenderingContext2D, body: Path2D, R: number, hw: number, hh: number) {
+    x.save();
+    x.clip(body);
+    // The top of the jelly: a curved band of reflected sky.
+    const band = new Path2D();
+    band.moveTo(-hw * 1.1, -hh * 1.1);
+    band.lineTo(hw * 1.1, -hh * 1.1);
+    band.lineTo(hw * 1.1, -hh * 0.42);
+    band.quadraticCurveTo(0, -hh * 0.08, -hw * 1.1, -hh * 0.36);
+    band.closePath();
+    const bg = x.createLinearGradient(0, -hh, 0, -hh * 0.2);
+    bg.addColorStop(0, "rgba(255,255,255,0.42)");
+    bg.addColorStop(1, "rgba(255,255,255,0.04)");
+    x.fillStyle = bg;
+    x.fill(band);
+    // The caustic: light focused through the body onto its lower edge.
+    const cg = x.createRadialGradient(hw * 0.15, hh * 0.98, 0, hw * 0.15, hh * 0.98, hw * 0.95);
+    cg.addColorStop(0, "rgba(220,255,248,0.55)");
+    cg.addColorStop(0.45, "rgba(200,255,245,0.16)");
+    cg.addColorStop(1, "rgba(200,255,245,0)");
+    x.fillStyle = cg;
+    x.fillRect(-hw, -hh, hw * 2, hh * 2);
+    // A faint rainbow where the edge bends the light.
+    const ir = x.createLinearGradient(-hw, hh, hw, -hh);
+    ir.addColorStop(0, "rgba(255,140,200,0.0)");
+    ir.addColorStop(0.35, "rgba(255,160,210,0.16)");
+    ir.addColorStop(0.55, "rgba(140,200,255,0.16)");
+    ir.addColorStop(0.8, "rgba(140,255,220,0.0)");
+    x.lineWidth = Math.max(1.5, R * 0.12);
+    x.strokeStyle = ir;
+    x.stroke(body);
+    x.restore();
+    // A fine bright inner edge, so he reads as glass.
+    x.save();
+    x.clip(body);
+    x.lineWidth = Math.max(1, R * 0.05);
+    x.strokeStyle = "rgba(255,255,255,0.35)";
+    x.stroke(body);
+    x.restore();
   }
 
   /** Little arms that swing with him; hidden while the amber hands wave. */
@@ -1029,6 +1124,7 @@ export class Bob {
 
     const pulse = this.cfg.bounces || this.cfg.sweat ? 0.5 + 0.5 * Math.sin(t * 6) : 0.5 + 0.5 * Math.sin(t * 2);
     const br = R * 0.11;
+    this.bulbAt = { x: bx, y: by, r: br };
     const glow = x.createRadialGradient(bx, by, 0, bx, by, br * (2.6 + pulse));
     glow.addColorStop(0, rgba(this.col, 0.55));
     glow.addColorStop(1, rgba(this.col, 0));
@@ -1392,6 +1488,252 @@ export class Bob {
       x.arc(0, 0, R * 0.135, 0, Math.PI * 2);
       x.fill();
     }
+    x.restore();
+  }
+
+  // ── Outfits ────────────────────────────────────────────────────────────────
+  // Drawn in his own (leaning, squashing) frame, after the face.
+
+  private drawOutfit(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, a: number) {
+    const L = this.look!;
+    x.save();
+    x.globalAlpha *= a;
+    if (L.scarf) this.drawScarf(x, R, hw, hh, L.special === "christmas");
+    if (L.glasses) this.drawGlasses(x, R, hw, hh);
+    if (L.egg) this.drawEgg(x, R, hw, hh);
+    if (L.hat !== "none") this.drawHat(x, R, hw, hh, L.hat);
+    if (L.flower) this.drawFlower(x);
+    x.restore();
+  }
+
+  private drawScarf(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, festive: boolean) {
+    const top = hh * 0.66, h = R * 0.24;
+    const c1 = festive ? "#e8384f" : "#e86a4f", c2 = festive ? "#fdf6ec" : "#f6b24a";
+    x.save();
+    // The wrap around him, slightly wider than his body.
+    const band = new Path2D();
+    band.moveTo(-hw * 1.05, top);
+    band.quadraticCurveTo(0, top + h * 0.35, hw * 1.05, top);
+    band.lineTo(hw * 1.03, top + h);
+    band.quadraticCurveTo(0, top + h * 1.45, -hw * 1.03, top + h);
+    band.closePath();
+    const g = x.createLinearGradient(0, top, 0, top + h * 1.3);
+    g.addColorStop(0, c1);
+    g.addColorStop(1, shade(c1, -0.25));
+    x.fillStyle = g;
+    x.fill(band);
+    // Knitted stripes.
+    x.save();
+    x.clip(band);
+    x.fillStyle = c2;
+    for (let i = -6; i <= 6; i += 2) {
+      x.globalAlpha = 0.8;
+      x.fillRect(i * hw * 0.18, top - h, hw * 0.13, h * 3);
+    }
+    x.restore();
+    // The tail hanging down on his right, swaying a little.
+    const sw = Math.sin(now() * 1.6) * R * 0.03;
+    const tail = new Path2D();
+    tail.moveTo(hw * 0.45, top + h * 0.7);
+    tail.lineTo(hw * 0.78, top + h * 0.75);
+    tail.lineTo(hw * 0.74 + sw, top + h * 2.5);
+    tail.lineTo(hw * 0.44 + sw, top + h * 2.4);
+    tail.closePath();
+    x.fillStyle = shade(c1, -0.1);
+    x.fill(tail);
+    x.save();
+    x.clip(tail);
+    x.fillStyle = c2;
+    for (let k = 0; k < 3; k++) x.fillRect(hw * 0.4, top + h * (1.1 + k * 0.5), hw * 0.5, h * 0.2);
+    x.restore();
+    // Fringe.
+    x.strokeStyle = shade(c1, -0.2);
+    x.lineWidth = Math.max(1, R * 0.03);
+    for (let k = 0; k < 4; k++) {
+      const fx = hw * (0.47 + k * 0.09) + sw;
+      x.beginPath();
+      x.moveTo(fx, top + h * 2.45);
+      x.lineTo(fx, top + h * 2.75);
+      x.stroke();
+    }
+    x.restore();
+  }
+
+  private drawGlasses(x: CanvasRenderingContext2D, R: number, hw: number, hh: number) {
+    x.save();
+    const ey = hh * 0.06 - this.pitch * hh * 0.5;
+    const centers = [-1, 1].map((sd) => sd * hw * 0.34 + this.yaw * hw * 0.46);
+    const lw = R * 0.36, lh = R * 0.3;
+    x.lineWidth = Math.max(1.2, R * 0.05);
+    x.strokeStyle = "rgba(10,20,26,0.95)";
+    for (const cx of centers) {
+      const lens = new Path2D();
+      pathRoundRect(lens, cx - lw / 2, ey - lh / 2, lw, lh, lh * 0.45);
+      const g = x.createLinearGradient(cx, ey - lh / 2, cx, ey + lh / 2);
+      g.addColorStop(0, "rgba(20,40,60,0.72)");
+      g.addColorStop(1, "rgba(60,30,80,0.62)");
+      x.fillStyle = g;
+      x.fill(lens);
+      x.stroke(lens);
+      // A sunny glint.
+      x.fillStyle = "rgba(255,255,255,0.55)";
+      x.beginPath();
+      x.ellipse(cx - lw * 0.18, ey - lh * 0.18, lw * 0.14, lh * 0.08, -0.5, 0, Math.PI * 2);
+      x.fill();
+    }
+    // Bridge.
+    x.beginPath();
+    x.moveTo(centers[0] + lw / 2, ey - lh * 0.1);
+    x.quadraticCurveTo((centers[0] + centers[1]) / 2, ey - lh * 0.35, centers[1] - lw / 2, ey - lh * 0.1);
+    x.stroke();
+    x.restore();
+  }
+
+  private drawHat(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, hat: Look["hat"]) {
+    x.save();
+    const top = -hh;
+    if (hat === "beanie") {
+      const c = this.look?.season === "winter" ? "#4f7bd9" : "#d9822b";
+      const dome = new Path2D();
+      dome.moveTo(-hw * 0.92, top + R * 0.22);
+      dome.bezierCurveTo(-hw * 0.9, top - R * 0.62, hw * 0.9, top - R * 0.62, hw * 0.92, top + R * 0.22);
+      dome.closePath();
+      const g = x.createRadialGradient(-hw * 0.3, top - R * 0.3, R * 0.05, 0, top, R * 1.1);
+      g.addColorStop(0, shade(c, 0.25));
+      g.addColorStop(1, shade(c, -0.2));
+      x.fillStyle = g;
+      x.fill(dome);
+      // Knit lines.
+      x.save();
+      x.clip(dome);
+      x.strokeStyle = shade(c, -0.3);
+      x.globalAlpha = 0.35;
+      x.lineWidth = Math.max(1, R * 0.03);
+      for (let i = -4; i <= 4; i++) {
+        x.beginPath();
+        x.moveTo(i * hw * 0.22, top + R * 0.3);
+        x.lineTo(i * hw * 0.16, top - R * 0.6);
+        x.stroke();
+      }
+      x.restore();
+      // Folded rim.
+      const rim = new Path2D();
+      pathRoundRect(rim, -hw * 0.98, top + R * 0.06, hw * 1.96, R * 0.24, R * 0.1);
+      x.fillStyle = shade(c, -0.08);
+      x.fill(rim);
+      x.save();
+      x.clip(rim);
+      x.fillStyle = shade(c, 0.12);
+      for (let i = -10; i <= 10; i += 2) x.fillRect(i * hw * 0.1, top, hw * 0.06, R * 0.5);
+      x.restore();
+      // Pom-pom, off to one side so his antenna pokes out.
+      this.pompom(x, -hw * 0.55, top - R * 0.36, R * 0.15, "#fff7ec");
+    } else if (hat === "santa") {
+      const tilt = 0.32;
+      x.translate(hw * 0.12, top + R * 0.12);
+      x.rotate(tilt);
+      const cone = new Path2D();
+      cone.moveTo(-hw * 0.82, 0);
+      cone.quadraticCurveTo(-hw * 0.1, -R * 1.25, hw * 0.75, -R * 0.75);
+      cone.lineTo(hw * 0.78, 0);
+      cone.closePath();
+      const g = x.createLinearGradient(-hw, -R, hw, 0);
+      g.addColorStop(0, "#ff5a5f");
+      g.addColorStop(1, "#c81e35");
+      x.fillStyle = g;
+      x.fill(cone);
+      const fur = new Path2D();
+      pathRoundRect(fur, -hw * 0.95, -R * 0.06, hw * 1.85, R * 0.26, R * 0.13);
+      x.fillStyle = "#fffaf3";
+      x.fill(fur);
+      this.pompom(x, hw * 0.78, -R * 0.78, R * 0.16, "#fffaf3");
+    } else if (hat === "party") {
+      x.translate(-hw * 0.38, top + R * 0.08);
+      x.rotate(-0.22);
+      const cone = new Path2D();
+      cone.moveTo(-R * 0.36, 0);
+      cone.lineTo(0, -R * 0.9);
+      cone.lineTo(R * 0.36, 0);
+      cone.closePath();
+      x.fillStyle = "#7c5cff";
+      x.fill(cone);
+      x.save();
+      x.clip(cone);
+      x.fillStyle = "#ffd23f";
+      for (let i = 0; i < 5; i++) {
+        x.save();
+        x.translate(0, -R * 0.18 * i);
+        x.rotate(-0.5);
+        x.fillRect(-R * 0.6, -R * 0.04, R * 1.2, R * 0.07);
+        x.restore();
+      }
+      x.restore();
+      this.pompom(x, 0, -R * 0.92, R * 0.1, "#ff6b9a");
+    } else if (hat === "pumpkin") {
+      x.translate(-hw * 0.32, top + R * 0.04);
+      const pr = R * 0.36;
+      for (const k of [-1, 0, 1]) {
+        x.beginPath();
+        x.ellipse(k * pr * 0.45, -pr * 0.55, pr * 0.55, pr * 0.62, 0, 0, Math.PI * 2);
+        const g = x.createRadialGradient(k * pr * 0.45 - pr * 0.15, -pr * 0.75, pr * 0.05, k * pr * 0.45, -pr * 0.55, pr * 0.7);
+        g.addColorStop(0, "#ffb14a");
+        g.addColorStop(1, "#e2690f");
+        x.fillStyle = g;
+        x.fill();
+      }
+      x.fillStyle = "#3f7d2b";
+      x.beginPath();
+      x.ellipse(0, -pr * 1.18, pr * 0.1, pr * 0.22, 0.3, 0, Math.PI * 2);
+      x.fill();
+    }
+    x.restore();
+  }
+
+  private pompom(x: CanvasRenderingContext2D, cx: number, cy: number, r: number, c: string) {
+    const g = x.createRadialGradient(cx - r * 0.35, cy - r * 0.35, r * 0.1, cx, cy, r);
+    g.addColorStop(0, "#ffffff");
+    g.addColorStop(1, shade(c, -0.12));
+    x.fillStyle = g;
+    x.beginPath();
+    x.arc(cx, cy, r, 0, Math.PI * 2);
+    x.fill();
+  }
+
+  /** A little flower on his antenna. */
+  private drawFlower(x: CanvasRenderingContext2D) {
+    const { x: bx, y: by, r } = this.bulbAt;
+    if (r <= 0) return;
+    x.save();
+    x.translate(bx, by);
+    x.rotate(now() * 0.25);
+    for (let i = 0; i < 6; i++) {
+      x.save();
+      x.rotate((i * Math.PI) / 3);
+      x.fillStyle = i % 2 ? "#ff9ec4" : "#ffc2dc";
+      x.beginPath();
+      x.ellipse(0, -r * 1.25, r * 0.62, r * 0.9, 0, 0, Math.PI * 2);
+      x.fill();
+      x.restore();
+    }
+    x.restore();
+  }
+
+  /** A red egg for (Greek) Easter, held by his side. */
+  private drawEgg(x: CanvasRenderingContext2D, R: number, hw: number, hh: number) {
+    x.save();
+    x.translate(hw * 1.12, hh * 0.55);
+    x.rotate(0.25);
+    const g = x.createRadialGradient(-R * 0.06, -R * 0.08, R * 0.02, 0, 0, R * 0.26);
+    g.addColorStop(0, "#ff6b6b");
+    g.addColorStop(1, "#b3121f");
+    x.fillStyle = g;
+    x.beginPath();
+    x.ellipse(0, 0, R * 0.17, R * 0.22, 0, 0, Math.PI * 2);
+    x.fill();
+    x.fillStyle = "rgba(255,255,255,0.5)";
+    x.beginPath();
+    x.ellipse(-R * 0.05, -R * 0.08, R * 0.04, R * 0.06, -0.4, 0, Math.PI * 2);
+    x.fill();
     x.restore();
   }
 

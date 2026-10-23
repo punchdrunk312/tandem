@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 9;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -188,6 +188,117 @@ pub enum Msg {
     SpanEnd {
         moved: bool,
     },
+    /// How this computer is doing (battery, charging, load, accessories), every few
+    /// seconds and whenever something changes.
+    Status(DeviceInfo),
+    /// Lock or put to sleep the computer this arrives at (a button in the other's bar).
+    Power(PowerAction),
+    /// "Send me your open programs": the other computer is running low on battery and
+    /// the person moves their work over here.
+    SendApps,
+    /// Second-monitor mode: the window just dragged across stays on the computer that
+    /// sends this and is shown live on the one that gets it, from now on as `id`.
+    /// `w` x `h`: its size in pixels.
+    MirrorStart {
+        id: u64,
+        w: u32,
+        h: u32,
+    },
+    /// A fresh picture of a mirrored window (JPEG, `w` x `h`: the window's real size).
+    MirrorFrame {
+        id: u64,
+        w: u32,
+        h: u32,
+        jpeg: Vec<u8>,
+    },
+    /// The mirrored window is gone (closed, brought home, or this end can't show it).
+    MirrorEnd {
+        id: u64,
+    },
+    /// The pointer goes into the mirrored window `id` at (`rx`, `ry`) inside it: the
+    /// computer that owns the window takes it from here (sent to that computer).
+    PortalEnter {
+        id: u64,
+        rx: i32,
+        ry: i32,
+    },
+    /// The pointer leaves the mirrored window at (`rx`, `ry`), relative to the window
+    /// (just outside it): the computer showing it takes it from here.
+    PortalLeave {
+        id: u64,
+        rx: i32,
+        ry: i32,
+    },
+    /// Where the pointer is inside the mirrored window, so the computer showing it can
+    /// draw a pointer there.
+    PortalCursor {
+        id: u64,
+        rx: i32,
+        ry: i32,
+    },
+    /// The real window was dragged by its title bar by (`dx`, `dy`): the mirror moves
+    /// with it. `done`: the drag ended.
+    MirrorMoved {
+        id: u64,
+        dx: i32,
+        dy: i32,
+        done: bool,
+    },
+    /// The mirror was dragged back over the edge: the window comes home, at `along`
+    /// (0..1) along that edge.
+    MirrorHome {
+        id: u64,
+        along: f32,
+    },
+    /// Undo: the program that moved over to the computer that gets this goes back.
+    UndoApp {
+        app: AppRef,
+    },
+    /// Undo: the files of offer `id` that arrived here go to the Recycle Bin / Trash.
+    UndoFiles {
+        id: u64,
+    },
+}
+
+/// How a computer is doing, as shown on its card in the bar.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    /// Battery charge in percent; None on a computer without a battery.
+    pub battery: Option<u8>,
+    /// On the charger.
+    pub plugged: bool,
+    /// The battery is filling (plugged in and not yet full).
+    pub charging: bool,
+    /// Minutes the battery lasts at this rate (on battery only), as Windows estimates.
+    pub mins_left: Option<u32>,
+    /// Minutes until full (while charging), from how fast it has been filling.
+    pub mins_to_full: Option<u32>,
+    /// Battery saver is on.
+    pub saver: bool,
+    /// Processor and memory in use, percent.
+    pub cpu: u8,
+    pub mem: u8,
+    /// The system drive, in whole gigabytes.
+    pub disk_free_gb: u32,
+    pub disk_total_gb: u32,
+    /// Minutes since the computer started.
+    pub uptime_min: u32,
+    /// Wireless mice, keyboards and headphones that report their battery.
+    pub accessories: Vec<Accessory>,
+    /// The network card's hardware address ("aa:bb:cc:dd:ee:ff"), to wake it up later.
+    pub mac: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Accessory {
+    pub name: String,
+    pub battery: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PowerAction {
+    Lock,
+    Sleep,
 }
 
 /// A program being moved to another computer by dragging its window across the edge.
@@ -252,6 +363,7 @@ const BROWSERS: &[&str] = &[
     "opera.exe",
     "vivaldi.exe",
     "arc.exe",
+    "safari.exe",
 ];
 
 /// Chat and music programs that are safe to close once they have opened on the other

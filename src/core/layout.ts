@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update";
 
 export type BotStateName =
   | "idle"
@@ -43,6 +43,14 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   drop: { height: 164, botX: 130, botY: 102, botDiameter: 66 },
   note: { height: 120, botX: 62, botY: 76, botDiameter: 50 },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0 },
+  // A moment: the ring on the left, the words in the middle, Bob reacting on the right.
+  moment: { height: 104, botX: 586, botY: 54, botDiameter: 46 },
+  // The device cards fill the bar; Bob steps aside.
+  devices: { height: 232, botX: 0, botY: 0, botDiameter: 0 },
+  // The focus timer: Bob on the left keeping time, the clock in the middle.
+  focus: { height: 150, botX: 68, botY: 94, botDiameter: 58 },
+  // A new version: Bob holds up the news, the words and two buttons beside him.
+  update: { height: 128, botX: 62, botY: 70, botDiameter: 52 },
 };
 
 /** Height added to the home view per visible transfer row. */
@@ -78,6 +86,7 @@ export function botPosition(mode: IslandMode, view: IslandViewName): BotPlacemen
       return { cx: 40, cy: 16, diameter: 20, opacity: 1 };
     case "expanded": {
       const l = VIEW_LAYOUTS[view];
+      if (l.botDiameter === 0) return { cx: 40, cy: 16, diameter: 20, opacity: 0 };
       return { cx: l.botX, cy: l.botY, diameter: l.botDiameter, opacity: 1 };
     }
   }

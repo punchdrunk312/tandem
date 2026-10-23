@@ -220,3 +220,333 @@ html.dev body { background: #2b2f38; }
 
 /* note */
 .n-msg { position: absolute; left: 100px; right: 30px; top: 16px; font-size: 16px; font-weight: 600; line-height: 1.35; }
+
+/* ── the season behind the bar ──────────────────────────────────────────── */
+#ambient-canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+.icon-btn.on { color: var(--ink); background: rgba(255, 255, 255, 0.12); }
+
+/* ── device moments ─────────────────────────────────────────────────────── */
+/* The card arrives from the side its computer sits on, settling with a little give. */
+.moment { display: flex; align-items: center; gap: 18px; padding: 4px 108px 4px 18px; }
+.moment.enter { animation: m-in 0.62s cubic-bezier(0.2, 1.25, 0.32, 1) both; }
+.moment.from-left.enter, .moment.from-topleft.enter, .moment.from-bottomleft.enter { --dx: -46px; }
+.moment.from-right.enter, .moment.from-topright.enter, .moment.from-bottomright.enter { --dx: 46px; }
+.moment.from-top.enter { --dy: -18px; }
+.moment.from-bottom.enter { --dy: 18px; }
+@keyframes m-in {
+  from { opacity: 0; transform: translate(var(--dx, 0), var(--dy, 10px)) scale(0.96); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.m-vis { flex: 0 0 68px; height: 68px; display: grid; place-items: center; position: relative; }
+.m-vis::before {
+  /* A soft halo in the computer's colour. */
+  content: ""; position: absolute; inset: -14px; border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--c) 34%, transparent) 0%, transparent 68%);
+  animation: halo 2.4s ease-in-out infinite;
+}
+.k-low .m-vis::before { background: radial-gradient(circle, rgba(255, 138, 92, 0.32) 0%, transparent 68%); }
+.k-full .m-vis::before { background: radial-gradient(circle, rgba(52, 211, 153, 0.34) 0%, transparent 68%); }
+@keyframes halo { 50% { transform: scale(1.08); opacity: 0.75; } }
+.m-text { min-width: 0; flex: 1; }
+.m-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-sub { font-size: 12.5px; color: var(--dim); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-actions { display: flex; gap: 8px; margin-top: 9px; }
+.m-actions:empty { display: none; }
+.m-avatar {
+  width: 54px; height: 54px; border-radius: 17px; display: grid; place-items: center;
+  font-size: 24px; font-weight: 700; color: #04201c;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--c) 70%, white), var(--c));
+  box-shadow: 0 6px 22px -6px var(--c), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  position: relative;
+}
+.k-offline .m-avatar { filter: grayscale(0.7) brightness(0.8); }
+
+/* The battery ring. */
+.ring { position: relative; overflow: visible; }
+.ring .r-track { fill: none; stroke: rgba(255, 255, 255, 0.09); }
+.ring .r-fill {
+  fill: none; stroke: var(--c); stroke-linecap: round;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--c) 70%, transparent));
+  transition: stroke-dashoffset 1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.15s;
+}
+.ring .r-icon { fill: var(--c); }
+.k-plug .ring .r-icon { animation: bolt 1.6s ease-in-out 0.5s infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes bolt { 50% { opacity: 0.55; } }
+.ring .r-text { fill: var(--ink); font: 650 15px var(--font); text-anchor: middle; dominant-baseline: central; }
+
+/* ── your computers ─────────────────────────────────────────────────────── */
+.devices { padding: 2px 12px 0; }
+.dev-row { display: flex; gap: 10px; height: 100%; overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; scrollbar-width: thin; }
+.dev-card {
+  flex: 0 0 188px; height: 182px; border-radius: 16px; padding: 12px 12px 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.03));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  position: relative; overflow: hidden;
+  animation: card-in 0.5s cubic-bezier(0.2, 1.2, 0.32, 1) both;
+}
+.dev-card:nth-child(2) { animation-delay: 0.05s; }
+.dev-card:nth-child(3) { animation-delay: 0.1s; }
+.dev-card:nth-child(4) { animation-delay: 0.15s; }
+@keyframes card-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+.dev-card::before {
+  /* Its colour, as a soft wash in the corner. */
+  content: ""; position: absolute; width: 140px; height: 140px; right: -60px; top: -70px; border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--c) 28%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.dev-card.away { opacity: 0.55; }
+.dv-top { display: flex; gap: 10px; align-items: center; }
+.dv-name { min-width: 0; display: flex; flex-direction: column; }
+.dv-name b { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dv-name span { font-size: 11.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dv-stats { display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0; }
+.dv-bar { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--dim-2); }
+.dv-bar span { width: 26px; letter-spacing: 0.04em; }
+.dv-bar i { flex: 1; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.dv-bar b { display: block; height: 100%; border-radius: 2px; background: var(--c); opacity: 0.85; transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
+.dv-meta { display: flex; gap: 8px; font-size: 10.5px; color: var(--dim); flex-wrap: wrap; }
+.dv-meta .q::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+.dv-meta .q.good::before { background: var(--green); }
+.dv-meta .q.ok::before { background: var(--amber); }
+.dv-meta .q.bad::before { background: var(--red); }
+.dv-acc { display: flex; gap: 6px; font-size: 10.5px; color: var(--dim); overflow: hidden; }
+.dv-acc span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.06); }
+.dv-acc span.low { color: #ffb08f; }
+.dv-actions { display: flex; gap: 6px; }
+.btn.mini { font-size: 11.5px; padding: 4px 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .moment.enter, .dev-card, .m-vis::before, .k-plug .ring .r-icon { animation: none; }
+  .ring .r-fill, .dv-bar b { transition: none; }
+}
+
+/* ══ Liquid Glass ════════════════════════════════════════════════════════════
+   A pane of frosted glass hanging from the top of the screen: milky white with a
+   sheen across its top, light gathering along its lower edge, a fine rainbow where
+   the rim bends the light, and a soft shadow so it floats above the desktop.
+   No real blur: Windows can't blur the desktop behind a shape in a see-through
+   window, so the pane is dense enough to read on any wallpaper by itself. */
+:root[data-theme="glass"] {
+  color-scheme: light;
+  --ink: #0f1722;
+  --dim: #556070;
+  --dim-2: #8a94a3;
+  --red-text: #d6364a;
+  --glass-1: rgba(255, 255, 255, 0.9);
+  --glass-2: rgba(244, 247, 252, 0.84);
+}
+
+:root[data-theme="glass"] #island {
+  background: linear-gradient(180deg, var(--glass-1), var(--glass-2));
+  box-shadow:
+    0 22px 44px -18px rgba(18, 28, 58, 0.42),
+    0 3px 10px -2px rgba(18, 28, 58, 0.16),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.95);
+}
+/* The sheen and the caustic, under everything in the pane. */
+:root[data-theme="glass"] #island-clip::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 70% at 18% -20%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 60%),
+    radial-gradient(70% 55% at 85% 115%, rgba(190, 236, 255, 0.55), rgba(190, 236, 255, 0) 70%),
+    radial-gradient(60% 50% at 10% 120%, rgba(255, 205, 235, 0.4), rgba(255, 205, 235, 0) 70%);
+}
+/* The rim: a hairline that catches a little colour. */
+:root[data-theme="glass"] #island::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(115deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(175, 215, 255, 0.75) 35%,
+    rgba(255, 185, 225, 0.7) 65%,
+    rgba(255, 255, 255, 0.95) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+:root[data-theme="glass"] #line {
+  height: 4px;
+  width: 132px;
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 2px 8px rgba(18, 28, 58, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+:root[data-theme="glass"] #compact-label { color: #2b3442; }
+
+:root[data-theme="glass"] .icon-btn:hover { background: rgba(15, 23, 34, 0.07); }
+:root[data-theme="glass"] .icon-btn.on { background: rgba(15, 23, 34, 0.09); }
+:root[data-theme="glass"] .hd-dot.on { box-shadow: 0 0 8px rgba(34, 197, 94, 0.55); }
+
+:root[data-theme="glass"] .btn {
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 34, 0.08), 0 1px 2px rgba(15, 23, 34, 0.06);
+}
+:root[data-theme="glass"] .btn:hover { background: #fff; }
+:root[data-theme="glass"] .btn.primary {
+  background: linear-gradient(180deg, #1f2937, #0f1722);
+  color: #fff;
+  box-shadow: 0 4px 12px -4px rgba(15, 23, 34, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+:root[data-theme="glass"] .btn.primary:hover { background: #0f1722; }
+
+:root[data-theme="glass"] .side-btn:not(.on) { background: rgba(15, 23, 34, 0.06); }
+:root[data-theme="glass"] .side-btn:not(.on):hover { background: rgba(15, 23, 34, 0.11); }
+:root[data-theme="glass"] .side-btn.ro:not(.on):hover { color: var(--dim); }
+:root[data-theme="glass"] .side-btn.on { box-shadow: 0 3px 10px -3px rgba(45, 212, 191, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.5); }
+
+:root[data-theme="glass"] .x-bar { background: rgba(15, 23, 34, 0.08); }
+:root[data-theme="glass"] .d-pill { border-color: rgba(15, 23, 34, 0.22); background: rgba(255, 255, 255, 0.55); }
+
+:root[data-theme="glass"] .dev-card {
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.5));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 8px 22px -12px rgba(18, 28, 58, 0.35),
+    0 1px 2px rgba(18, 28, 58, 0.06);
+}
+:root[data-theme="glass"] .ring .r-track { stroke: rgba(15, 23, 34, 0.08); }
+:root[data-theme="glass"] .dv-bar i { background: rgba(15, 23, 34, 0.07); }
+:root[data-theme="glass"] .dv-acc span { background: rgba(15, 23, 34, 0.05); }
+:root[data-theme="glass"] .dv-acc span.low { color: #c2410c; }
+
+/* At rest only the line shows: the pane's rim and shadow must not peek out. */
+:root[data-theme="glass"] #island[data-mode="hidden"] { box-shadow: none; background: transparent; }
+:root[data-theme="glass"] #island[data-mode="hidden"]::after { display: none; }
+
+/* ══ Liquid Glass, live ══════════════════════════════════════════════════════
+   With a picture of what is behind the bar (data-liquid="on"), the pane becomes clear
+   glass: the desktop shows through, softened and richer in colour, bent along the edges
+   like the rim of a lens, with light caught on the rim and gathered along the bottom.
+   The words follow what is behind (data-tone). */
+#glass { position: absolute; inset: 0; pointer-events: none; display: none; }
+#bd, #bd-edge-img { position: absolute; background-size: 100% 100%; background-repeat: no-repeat; }
+#bd-edge { position: absolute; inset: 0; overflow: hidden; }
+
+:root[data-theme="glass"][data-liquid="on"] #glass { display: block; }
+:root[data-theme="glass"][data-liquid="on"] #bd {
+  filter: blur(13px) saturate(1.8) brightness(1.05);
+  transform: scale(1.03);
+}
+/* The rim bends the light: a magnified, sharper copy shows along the sides and bottom. */
+:root[data-theme="glass"][data-liquid="on"] #bd-edge {
+  -webkit-mask:
+    linear-gradient(90deg, rgba(0,0,0,0.9) 0, transparent 16px, transparent calc(100% - 16px), rgba(0,0,0,0.9) 100%),
+    linear-gradient(0deg, rgba(0,0,0,0.9) 0, transparent 14px);
+  -webkit-mask-composite: source-over;
+  mask-composite: add;
+}
+:root[data-theme="glass"][data-liquid="on"] #bd-edge-img {
+  transform: scale(1.1);
+  filter: blur(4px) saturate(2.1) brightness(1.14);
+}
+
+:root[data-theme="glass"][data-liquid="on"] #island {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 18px 40px -16px rgba(10, 14, 30, 0.4),
+    0 2px 6px rgba(10, 14, 30, 0.14),
+    inset 0 -1.5px 0.5px rgba(255, 255, 255, 0.85),
+    inset 1.5px 0 0.5px rgba(255, 255, 255, 0.4),
+    inset -1.5px 0 0.5px rgba(255, 255, 255, 0.4),
+    inset 0 -22px 30px -22px rgba(255, 255, 255, 0.7);
+}
+/* Light on the glass: a broad soft sheen and a hot spot on the lower rim. */
+:root[data-theme="glass"][data-liquid="on"] #island-clip::before {
+  z-index: 1;
+  background:
+    radial-gradient(90% 70% at 22% -25%, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 62%),
+    radial-gradient(26% 16% at 80% 100%, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.0) 40%, rgba(255, 255, 255, 0.1));
+}
+:root[data-theme="glass"][data-liquid="on"] #island-clip > #ambient-canvas,
+:root[data-theme="glass"][data-liquid="on"] #island-clip > #greeting-canvas,
+:root[data-theme="glass"][data-liquid="on"] #island-clip > #content { z-index: 2; }
+:root[data-theme="glass"][data-liquid="on"] #island::after {
+  background: linear-gradient(110deg,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.35) 30%,
+    rgba(190, 225, 255, 0.55) 55%,
+    rgba(255, 200, 235, 0.6) 75%,
+    rgba(255, 255, 255, 0.95) 100%);
+}
+
+/* Words that read on whatever is behind. */
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] {
+  --ink: #0a1020;
+  --dim: rgba(10, 16, 32, 0.66);
+  --dim-2: rgba(10, 16, 32, 0.45);
+}
+:root[data-theme="glass"][data-liquid="on"][data-tone="dark"] {
+  --ink: #ffffff;
+  --dim: rgba(255, 255, 255, 0.78);
+  --dim-2: rgba(255, 255, 255, 0.55);
+  --red-text: #ffb3bc;
+}
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] #content { text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="dark"] #content { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] #island { background: rgba(255, 255, 255, 0.22); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="dark"] #island { background: rgba(14, 18, 30, 0.22); }
+
+/* Glass buttons, and a solid one for the main action. */
+:root[data-theme="glass"][data-liquid="on"] .btn {
+  background: rgba(255, 255, 255, 0.24);
+  color: var(--ink);
+  box-shadow: inset 0 1px 0.5px rgba(255, 255, 255, 0.7), inset 0 -1px 0.5px rgba(255, 255, 255, 0.2), 0 2px 8px -2px rgba(0, 0, 0, 0.18);
+}
+:root[data-theme="glass"][data-liquid="on"] .btn:hover { background: rgba(255, 255, 255, 0.4); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] .btn.primary { background: #0a1020; color: #fff; text-shadow: none; }
+:root[data-theme="glass"][data-liquid="on"][data-tone="dark"] .btn.primary { background: #fff; color: #0a1020; text-shadow: none; }
+:root[data-theme="glass"][data-liquid="on"] .icon-btn { color: var(--dim); }
+:root[data-theme="glass"][data-liquid="on"] .icon-btn:hover,
+:root[data-theme="glass"][data-liquid="on"] .icon-btn.on { background: rgba(255, 255, 255, 0.25); color: var(--ink); }
+:root[data-theme="glass"][data-liquid="on"] .side-btn:not(.on) { background: rgba(255, 255, 255, 0.22); color: var(--ink); }
+
+/* Panes inside the pane. */
+:root[data-theme="glass"][data-liquid="on"] .dev-card {
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0.1));
+  box-shadow: inset 0 1px 0.5px rgba(255, 255, 255, 0.75), inset 0 0 0 1px rgba(255, 255, 255, 0.18), 0 8px 22px -14px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="glass"][data-liquid="on"] .ring .r-track,
+:root[data-theme="glass"][data-liquid="on"] .dv-bar i,
+:root[data-theme="glass"][data-liquid="on"] .x-bar { stroke: rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.28); }
+:root[data-theme="glass"][data-liquid="on"] .dv-acc span { background: rgba(255, 255, 255, 0.25); }
+
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] .dv-bar i,
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] .x-bar { background: rgba(10, 16, 32, 0.1); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] .ring .r-track { stroke: rgba(10, 16, 32, 0.1); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] .dv-acc span { background: rgba(10, 16, 32, 0.06); }
+
+/* ── focus timer ──────────────────────────────────────────────────────────── */
+.f-text { position: absolute; left: 132px; right: 30px; top: 0; }
+.f-clock { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.f-sub { font-size: 12.5px; color: var(--dim); margin-top: 4px; }
+.f-row { display: flex; gap: 8px; margin-top: 12px; }
+.btn.on { box-shadow: inset 0 0 0 1.5px var(--teal); }
+/* The line at rest fills up while a focus runs. */
+#line[data-focus="on"] {
+  width: 168px;
+  height: 4px;
+  border-radius: 0 0 4px 4px;
+  background: linear-gradient(90deg, var(--teal) var(--fp, 0%), rgba(255, 255, 255, 0.45) var(--fp, 0%)) !important;
+}
+:root[data-theme="glass"][data-liquid="on"] .btn.on,
+:root[data-theme="glass"] .btn.on { box-shadow: inset 0 0 0 2px var(--teal), 0 0 12px -2px rgba(45, 212, 191, 0.7); }
+
+/* Undo: a quiet button next to the others, and under a note right after a move. */
+.btn.undo { font-weight: 650; }
+.n-act { position: absolute; left: 100px; top: 66px; display: flex; gap: 8px; }
+.n-act:empty { display: none; }
+
+/* ── a new version ────────────────────────────────────────────────────────── */
+.u-text { position: absolute; left: 112px; right: 30px; top: 6px; }
+.u-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.u-notes { font-size: 12.5px; color: var(--dim); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.u-row { display: flex; gap: 8px; margin-top: 12px; }

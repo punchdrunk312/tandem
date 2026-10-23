@@ -1,7 +1,7 @@
 // Island entry: Bob at the top of the screen.
 
 import "./island.css";
-import { IS_TAURI, fire, onEvent, onSnapshot } from "../bridge";
+import { IS_TAURI, call, fire, onEvent, onSnapshot } from "../bridge";
 import { Sound } from "../core/sound";
 import type { Snapshot } from "../types";
 import { Island, bootSnapshot } from "./island";
@@ -33,7 +33,15 @@ async function main() {
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
+  await safe("backdrop listener", () =>
+    onEvent<{ x: number; y: number; w: number; h: number; url: string }>("backdrop", (b) => island.setBackdrop(b)));
+  await safe("update listener", () =>
+    onEvent<{ current: string; version: string | null; notes: string }>("update", (u) => island.updateReady(u)));
   await safe("boot", () => bootSnapshot(island));
+  // An update found before the bar was listening.
+  void call<{ current: string; version: string | null; notes: string }>("update_status")
+    .then((u) => u && island.updateReady(u))
+    .catch(() => {});
   // The pairing/settings window edits the same settings entry.
   window.addEventListener("storage", (e) => {
     if (e.key === SETTINGS_KEY) {
@@ -44,7 +52,12 @@ async function main() {
   island.launch();
   fire("log_js", { msg: "island launched" });
 
-  if (!IS_TAURI) document.addEventListener("click", () => Sound.resume(), { once: true });
+  if (!IS_TAURI) {
+    document.addEventListener("click", () => Sound.resume(), { once: true });
+    // A pretend desktop behind the bar, photographed the way the app does it.
+    const { startDevDesk } = await import("./devdesk");
+    startDevDesk(island);
+  }
 }
 
 void main();

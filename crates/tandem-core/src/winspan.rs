@@ -85,14 +85,14 @@ fn now_us() -> u64 {
     T0.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
-fn window_rect(h: isize) -> Option<RECT> {
+pub(crate) fn window_rect(h: isize) -> Option<RECT> {
     let mut r = RECT::default();
     unsafe { GetWindowRect(hwnd(h), &mut r).ok()? };
     (r.right > r.left && r.bottom > r.top).then_some(r)
 }
 
 /// The part of the window you can see.
-fn visible_rect(h: isize) -> Option<RECT> {
+pub(crate) fn visible_rect(h: isize) -> Option<RECT> {
     let mut r = RECT::default();
     let ok = unsafe {
         DwmGetWindowAttribute(
@@ -112,6 +112,11 @@ fn visible_rect(h: isize) -> Option<RECT> {
 
 /// The window Windows is moving by its title bar right now, if any (any program).
 pub fn moving_window() -> Option<isize> {
+    moving_window_any()
+}
+
+/// The window Windows is moving or sizing right now (any program).
+pub(crate) fn moving_window_any() -> Option<isize> {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.0.is_null() {
@@ -491,6 +496,21 @@ fn give_back(o: &mut Out) {
     }
 }
 
+/// The last window that hung across (to keep it here, mirrored), and forget it.
+pub(crate) fn take_last() -> Option<isize> {
+    LAST.lock().ok().and_then(|mut l| l.take()).map(|(h, _)| h)
+}
+
+/// Where the picture of a window coming over is on this screen right now, and the
+/// picture itself (BGRA, its width and height): what a mirror starts from.
+pub(crate) fn current_picture() -> Option<(i32, i32, Option<crate::winmirror::Pic>)> {
+    let g = UI.lock().ok()?;
+    let ui = g.as_ref()?;
+    let v = ui.view?;
+    let (x, y) = span::place(&v, vscreen());
+    Some((x, y, ui.frame.clone()))
+}
+
 /// The program didn't open on the other computer: bring its window fully back here.
 pub fn restore() {
     if let Some((h, s)) = LAST.lock().ok().and_then(|mut l| l.take()) {
@@ -542,7 +562,25 @@ fn pictures(gen: u32, h: isize, off: (i32, i32), w: i32, ht: i32) {
 }
 
 /// One picture of the window's visible part, as JPEG.
-fn grab(h: isize, (ox, oy): (i32, i32), w: i32, ht: i32) -> Option<Vec<u8>> {
+fn grab(h: isize, off: (i32, i32), w: i32, ht: i32) -> Option<Vec<u8>> {
+    let (vis, cw, ch) = grab_pixels(h, off, w, ht)?;
+    let (sw, sh) = span::fit(cw, ch, span::FRAME_MAX_W, span::FRAME_MAX_H);
+    let small = if (sw, sh) == (cw, ch) {
+        vis
+    } else {
+        span::scale4(&vis, cw, ch, sw, sh)
+    };
+    span::encode_jpeg(&small, sw, sh, span::FRAME_QUALITY)
+}
+
+/// The visible part of window `h` (BGRA) and its size: drawn by the program itself, so
+/// it works for the parts that are off screen too.
+pub(crate) fn grab_pixels(
+    h: isize,
+    (ox, oy): (i32, i32),
+    w: i32,
+    ht: i32,
+) -> Option<(Vec<u8>, u32, u32)> {
     let r = window_rect(h)?;
     let (fw, fh) = (r.right - r.left, r.bottom - r.top);
     if fw <= 0 || fh <= 0 || fw > 8192 || fh > 8192 {
@@ -569,17 +607,11 @@ fn grab(h: isize, (ox, oy): (i32, i32), w: i32, ht: i32) -> Option<Vec<u8>> {
         let row = (((oy + y) * fw + ox) * 4) as usize;
         vis.extend_from_slice(px.get(row..row + (cw * 4) as usize)?);
     }
-    let (sw, sh) = span::fit(cw as u32, ch as u32, span::FRAME_MAX_W, span::FRAME_MAX_H);
-    let small = if (sw, sh) == (cw as u32, ch as u32) {
-        vis
-    } else {
-        span::scale4(&vis, cw as u32, ch as u32, sw, sh)
-    };
-    span::encode_jpeg(&small, sw, sh, span::FRAME_QUALITY)
+    Some((vis, cw as u32, ch as u32))
 }
 
 /// A top-down 32-bit bitmap and its pixels.
-unsafe fn dib(dc: HDC, w: i32, h: i32) -> Option<(HBITMAP, *mut u8)> {
+pub(crate) unsafe fn dib(dc: HDC, w: i32, h: i32) -> Option<(HBITMAP, *mut u8)> {
     let bi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -612,11 +644,17 @@ enum Cmd {
     Frame(Vec<u8>),
     Hide(u32),
     Cursor(Option<(i32, i32)>),
+    Glow(Edge, f32, [u8; 3]),
 }
 
 static QUEUE: Mutex<VecDeque<Cmd>> = Mutex::new(VecDeque::new());
 static PIC_HWND: AtomicIsize = AtomicIsize::new(0);
 static ARROW_HWND: AtomicIsize = AtomicIsize::new(0);
+static GLOW_HWND: AtomicIsize = AtomicIsize::new(0);
+const GLOW_TIMER: usize = 2;
+/// The glow: quick to come up, a slower fade.
+const GLOW_IN_S: f32 = 0.09;
+const GLOW_OUT_S: f32 = 0.6;
 static START: Once = Once::new();
 const WM_SPAN: u32 = WM_APP + 0x51;
 const HIDE_TIMER: usize = 1;
@@ -657,8 +695,12 @@ pub fn frame(jpeg: Vec<u8>) {
 pub fn hide(after_ms: u32) {
     post(Cmd::Hide(after_ms));
 }
-fn cursor_overlay(at: Option<(i32, i32)>) {
+pub(crate) fn cursor_overlay(at: Option<(i32, i32)>) {
     post(Cmd::Cursor(at));
+}
+/// A soft glow along `edge` at `frac` (where the cursor crossed), in `rgb`.
+pub fn glow(edge: Edge, frac: f32, rgb: [u8; 3]) {
+    post(Cmd::Glow(edge, frac, rgb));
 }
 
 #[derive(Default)]
@@ -669,6 +711,8 @@ struct Ui {
     shown: bool,
     hide_at: Option<Instant>,
     arrow_shown: bool,
+    /// The glow on screen: where, its picture, and when it started.
+    glow: Option<(i32, i32, i32, i32, Vec<u8>, Instant)>,
 }
 
 static UI: Mutex<Option<Ui>> = Mutex::new(None);
@@ -718,18 +762,19 @@ fn ui_thread() {
             .map(|h| h.0 as isize)
             .unwrap_or(0)
         };
-        let (pic, arrow) = (make(), make());
-        if pic == 0 || arrow == 0 {
+        let (pic, arrow, glow) = (make(), make(), make());
+        if pic == 0 || arrow == 0 || glow == 0 {
             log::warn!("app span: cannot create the picture window");
             return;
         }
         ARROW_HWND.store(arrow, Relaxed);
+        GLOW_HWND.store(glow, Relaxed);
         if let Ok(mut u) = UI.lock() {
             *u = Some(Ui::default());
         }
         // The arrow never changes: draw it once.
         let (px, aw, ah, _, _) = span::arrow();
-        layered(arrow, -100, -100, aw as i32, ah as i32, &px);
+        layered(arrow, -100, -100, aw as i32, ah as i32, &px, 255);
         let _ = ShowWindow(hwnd(arrow), SW_HIDE);
         PIC_HWND.store(pic, Relaxed);
         work(); // anything queued while starting
@@ -742,7 +787,7 @@ fn ui_thread() {
 }
 
 /// Puts premultiplied BGRA pixels on a layered window at (x, y).
-fn layered(h: isize, x: i32, y: i32, w: i32, ht: i32, px: &[u8]) {
+fn layered(h: isize, x: i32, y: i32, w: i32, ht: i32, px: &[u8], alpha: u8) {
     if w <= 0 || ht <= 0 || px.len() < (w * ht * 4) as usize {
         return;
     }
@@ -755,7 +800,7 @@ fn layered(h: isize, x: i32, y: i32, w: i32, ht: i32, px: &[u8]) {
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
-                SourceConstantAlpha: 255,
+                SourceConstantAlpha: alpha,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
             let _ = UpdateLayeredWindow(
@@ -833,6 +878,13 @@ fn work() {
                 top_at(arrow, x - tx, y - ty);
                 ui.arrow_shown = true;
             }
+            Cmd::Glow(edge, frac, rgb) => {
+                let (x, y, w, h, px) = span::glow_strip(vscreen(), edge, frac, rgb);
+                ui.glow = Some((x, y, w, h, px, Instant::now()));
+                unsafe {
+                    SetTimer(Some(hwnd(pic)), GLOW_TIMER, 15, None);
+                }
+            }
             Cmd::Cursor(None) => {
                 if ui.arrow_shown {
                     unsafe {
@@ -841,6 +893,26 @@ fn work() {
                     ui.arrow_shown = false;
                 }
             }
+        }
+    }
+    // The glow: one frame of its fade on every tick of its timer.
+    let glow_win = GLOW_HWND.load(Relaxed);
+    if let Some((gx, gy, gw, gh, px, t0)) = ui.glow.as_ref() {
+        let t = t0.elapsed().as_secs_f32();
+        let a = if t < GLOW_IN_S {
+            t / GLOW_IN_S
+        } else {
+            (1.0 - (t - GLOW_IN_S) / GLOW_OUT_S).max(0.0).powi(2)
+        };
+        if t >= GLOW_IN_S + GLOW_OUT_S {
+            unsafe {
+                let _ = KillTimer(Some(hwnd(pic)), GLOW_TIMER);
+                let _ = ShowWindow(hwnd(glow_win), SW_HIDE);
+            }
+            ui.glow = None;
+        } else {
+            layered(glow_win, *gx, *gy, *gw, *gh, px, (a * 255.0) as u8);
+            top_at(glow_win, *gx, *gy);
         }
     }
     if ui.hide_at.is_some_and(|t| Instant::now() >= t) {
@@ -865,7 +937,7 @@ fn work() {
     if ui.dirty || !ui.shown {
         let f = ui.frame.as_ref().map(|(p, w, h)| (p.as_slice(), *w, *h));
         let px = span::compose(f, v.w, v.h, v.gx, v.gy);
-        layered(pic, x, y, v.w as i32, v.h as i32, &px);
+        layered(pic, x, y, v.w as i32, v.h as i32, &px, 255);
         ui.dirty = false;
     }
     top_at(pic, x, y);

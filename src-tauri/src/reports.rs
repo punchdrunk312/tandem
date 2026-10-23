@@ -209,6 +209,58 @@ fn sender() {
     }
 }
 
+const FEEDBACK: &str = "https://cubecursor.shop/api/feedback";
+
+#[derive(serde::Serialize)]
+struct Feedback<'a> {
+    device: String,
+    version: String,
+    os: String,
+    message: &'a str,
+    email: &'a str,
+    log: String,
+    screenshot: Option<String>,
+}
+
+/// Sends what the person wrote in Settings › Feedback, with this computer's recent log
+/// (names and addresses hidden, as in error reports) and a screenshot if they ticked it.
+/// Blocks for the network: call it off the UI thread.
+pub fn send_feedback(message: &str, email: &str, log: bool, screenshot: Option<String>) -> Result<(), String> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err("Write a few words first".into());
+    }
+    let (device, version, os, lines) = match R.get() {
+        Some(r) => {
+            let i = r.inner.lock().unwrap();
+            let lines = if log {
+                i.ring.iter().cloned().collect::<Vec<_>>().join("\n")
+            } else {
+                String::new()
+            };
+            (i.device.clone(), r.version.clone(), r.os.clone(), lines)
+        }
+        None => (String::new(), String::new(), String::new(), String::new()),
+    };
+    let body = Feedback {
+        device,
+        version,
+        os,
+        message: &message[..message.len().min(4000)],
+        email: &email[..email.len().min(200)],
+        log: lines,
+        screenshot,
+    };
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(20))
+        .build();
+    match agent.post(FEEDBACK).send_json(&body) {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(429, _)) => Err("That's a lot of feedback today. Try again tomorrow.".into()),
+        Err(_) => Err("Couldn't send it. Are you online?".into()),
+    }
+}
+
 /// Lines that mean something went wrong (and not the everyday ones, like the other
 /// computer being switched off).
 fn is_problem(level: log::Level, line: &str) -> bool {

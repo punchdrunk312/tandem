@@ -417,7 +417,11 @@ let signIn: { code: string; until: number } | null = null;
 let signInTimer = 0;
 const licenseDate = (seconds: number | null) => seconds ? new Date(seconds * 1000).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : "—";
 const daysLeft = (seconds: number | null) => seconds ? Math.max(0, Math.ceil((seconds * 1000 - Date.now()) / 864e5)) : 0;
-async function refreshLicense() { try { licenseInfo = await call<LicenseView>("license_status"); } catch { /* browser preview / older app build */ } }
+async function refreshLicense() {
+  try { licenseInfo = await call<LicenseView>("license_status"); } catch { /* browser preview / older app build */ }
+  // Feedback answers go to the email they signed in with, unless they type another.
+  if (licenseInfo.email && !fbEmail.value) fbEmail.value = licenseInfo.email;
+}
 function rerenderSettings() { if (snap) renderSettings(snap); }
 
 /** One licence action: shows "Working…", then the result or the error. */
@@ -510,15 +514,87 @@ function licenseSection(): Node[] {
   return [...out, ...err];
 }
 
+type WindowsMode = "off" | "move" | "monitor";
+const WINDOWS_HELP: Record<WindowsMode, string> = {
+  off: "Windows stop at the edge of the screen.",
+  move: "Drag a program by its title bar through the edge that leads to the other computer. It hangs across both screens while you drag. Let go more than halfway over and it opens there and closes here (programs can still ask you to save); let go sooner, or press Esc, and it stays. In a browser, drag a tab and hold it at the edge, and the page you are on opens there. Works both ways. It must be turned on at both computers.",
+  monitor: "Use the other computer as a second monitor. Drag any window through the edge and let go more than halfway over: it keeps running here and shows there, live. Click and type in it over there like it was on that screen. Drag it back over the edge to bring it home. Works between PCs and Macs.",
+};
+/** What dragging a window across the edge does: nothing, move the program, or show it there. */
+function windowsSetting(s: Snapshot): HTMLElement {
+  const mode: WindowsMode = s.monitor_mode ? "monitor" : s.move_apps ? "move" : "off";
+  const opts = [["off", "Off"], ["move", "Move the app"], ["monitor", "Second monitor"]] as const;
+  // On a Mac, showing another program's window needs Screen Recording.
+  const help = WINDOWS_HELP[mode] + (isMac() && mode !== "off" ? " macOS asks once for Screen Recording, so CubeCursor can show the window on the other computer." : "");
+  return setting("Drag windows across", help,
+    seg<WindowsMode>(opts, mode, (v) => {
+      void call("set_monitor_mode", { on: v === "monitor" });
+      void call("set_move_apps", { on: v === "move" });
+    }));
+}
+
+// ---------------------------------------------------------------- updates
+interface UpdateView { current: string; version: string | null; notes: string }
+let upd: UpdateView | null = null;
+let updBusy: string | null = null;
+let updErr: string | null = null;
+function updatesRow(): HTMLElement {
+  const cur = upd?.current ?? "";
+  const hint = upd?.version
+    ? `Version ${upd.version} is ready (you have ${cur}). ${upd.notes.split("\n").map((l) => l.replace(/^[-*•]\s*/, "")).filter(Boolean).slice(0, 2).join(" · ")}`
+    : `You have the latest version${cur ? ` (${cur})` : ""}. CubeCursor checks every few hours.`;
+  const btn = upd?.version
+    ? h("button", { class: "primary", disabled: !!updBusy, onclick: async () => {
+        updBusy = "Downloading…"; updErr = null; if (snap) renderSettings(snap);
+        try { await call("update_install"); } catch (e) { updBusy = null; updErr = String(e); if (snap) renderSettings(snap); }
+      } }, updBusy ?? "Update now")
+    : h("button", { disabled: !!updBusy, onclick: async () => {
+        updBusy = "Checking…"; if (snap) renderSettings(snap);
+        try { upd = await call<UpdateView>("update_check"); } catch { /* offline */ }
+        updBusy = null; if (snap) renderSettings(snap);
+      } }, updBusy ?? "Check now");
+  return setting("Updates", updErr ? `${hint} ${updErr}` : hint, btn);
+}
+void call<UpdateView>("update_status").then((u) => { upd = u; if (snap) renderSettings(snap); }).catch(() => {});
+
+// ---------------------------------------------------------------- feedback
+// Kept outside the render so typing isn't lost when the page redraws.
+const fbText = h("textarea", { class: "fb-text", rows: 4, maxLength: 4000, placeholder: "What's on your mind? A bug, an idea, something you love…" }) as HTMLTextAreaElement;
+const fbEmail = h("input", { type: "email", class: "name-in fb-email", placeholder: "Your email, if you'd like an answer", maxLength: 200 }) as HTMLInputElement;
+const fbLog = h("input", { type: "checkbox", checked: true }) as HTMLInputElement;
+const fbShot = h("input", { type: "checkbox" }) as HTMLInputElement;
+const fbStatus = h("span", { class: "fb-status" });
+const fbSend = h("button", { class: "primary" }, "Send feedback") as HTMLButtonElement;
+fbSend.onclick = async () => {
+  if (!fbText.value.trim()) { fbStatus.textContent = "Write a few words first."; return; }
+  fbSend.disabled = true;
+  fbStatus.textContent = fbShot.checked ? "Taking a screenshot and sending…" : "Sending…";
+  try {
+    await call("send_feedback", { message: fbText.value, email: fbEmail.value.trim(), log: fbLog.checked, screenshot: fbShot.checked });
+    fbText.value = "";
+    fbStatus.textContent = "Thanks! It went straight to us.";
+  } catch (e) {
+    fbStatus.textContent = String(e);
+  } finally {
+    fbSend.disabled = false;
+  }
+};
+const fbCard = h("div", { class: "fb" },
+  fbText,
+  fbEmail,
+  h("label", { class: "fb-check" }, fbLog, h("span", {}, "Include CubeCursor's recent log (names and addresses removed)")),
+  h("label", { class: "fb-check" }, fbShot, h("span", {}, "Include a screenshot of my screen")),
+  h("div", { class: "row" }, fbSend, fbStatus));
+
 function renderSettings(s: Snapshot) {
-  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.move_apps, s.game_mode, s.switch_delay_ms, autostart, ui.error_reports, plat.os, licenseInfo, licenseKeyInput, licenseBusy, licenseMessage, showKeyEntry, signIn], () => {
+  update(settings, "settings", [s.device_name, s.clipboard_sync, s.drag_files, s.move_apps, s.monitor_mode, s.game_mode, upd, updBusy, updErr, s.switch_delay_ms, autostart, ui.error_reports, plat.os, licenseInfo, licenseKeyInput, licenseBusy, licenseMessage, showKeyEntry, signIn], () => {
     const name = h("input", { type: "text", class: "name-in", value: s.device_name, maxLength: 48, onchange: (e: Event) => call("set_name", { name: (e.target as HTMLInputElement).value }) });
     return [
       h("h2", {}, "General"),
       setting("Computer name", "Shown to your other computers. Applies after a restart.", name),
       setting("Share clipboard", "Text, images and copied files follow you between computers.", switchEl(s.clipboard_sync, (v) => call("set_clipboard_sync", { on: v }))),
       setting("Drag files across", "Pick a file up in Explorer or on the desktop, push it through the edge and let go on the other computer.", switchEl(s.drag_files, (v) => call("set_drag_files", { on: v }))),
-      setting("Move apps", "Drag a program by its title bar through the edge that leads to the other computer. It hangs across both screens while you drag, like on a second monitor. Let go more than halfway over and it opens there and closes here (programs can still ask you to save); let go sooner, or press Esc, and it stays. In a browser, drag a tab and hold it at the edge, and the page you are on opens there. Works both ways. It must be turned on at both computers.", switchEl(s.move_apps, (v) => call("set_move_apps", { on: v }))),
+      windowsSetting(s),
       setting("Game mode", "Don't switch computers while a full-screen app is open.", switchEl(s.game_mode, (v) => call("set_game_mode", { on: v }))),
       setting("Edge delay", "How long to hold at the screen edge before switching.",
         seg([[0, "Instant"], [250, "¼ s"], [500, "½ s"], [1000, "1 s"]] as const, s.switch_delay_ms as 0 | 250 | 500 | 1000, (ms) => call("set_switch_delay", { ms }))),
@@ -526,6 +602,9 @@ function renderSettings(s: Snapshot) {
       setting("Send error reports", "When something goes wrong, the problem and CubeCursor's own recent log are sent to us so we can fix it. Names, network addresses and folders are removed first. Never what you type, copy or send.",
         switchEl(ui.error_reports === true, (v) => setReports(v))),
       ...licenseSection(),
+      updatesRow(),
+      h("h2", { style: "margin-top:22px" }, "Feedback"),
+      fbCard,
       isMac()
         ? h("div", { class: "note" }, h("span", {}, "Press "), h("kbd", {}, "Esc"), h("span", {}, " three times quickly to bring your mouse and keyboard back if anything feels stuck."))
         : h("div", { class: "note" }, h("kbd", {}, "Scroll Lock"), h("span", {}, " jumps to the other computer and brings your mouse straight back if anything feels stuck.")),
@@ -615,12 +694,42 @@ function elevState() {
 // Rust-side options live in ui.json; sound options are the island's own localStorage
 // entry (same origin, so the island picks changes up through the `storage` event).
 const ISLAND_KEY = "tandem.island";
-function islandSettings(): { soundEnabled: boolean; soundVolume: number; autoCloseInterval: number } {
+interface IslandOpts {
+  soundEnabled: boolean; soundVolume: number; autoCloseInterval: number;
+  seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
+  theme: "glass" | "dark";
+  tips: boolean;
+}
+const ISLAND_DEFAULTS: IslandOpts = {
+  soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
+  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
+  theme: "glass",
+  tips: true,
+};
+function islandSettings(): IslandOpts {
   try {
-    return { soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15, ...JSON.parse(localStorage.getItem(ISLAND_KEY) ?? "{}") };
+    return { ...ISLAND_DEFAULTS, ...JSON.parse(localStorage.getItem(ISLAND_KEY) ?? "{}") };
   } catch {
-    return { soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15 };
+    return { ...ISLAND_DEFAULTS };
   }
+}
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** Bob's birthday picker: a month and a day, saved as "MM-DD" (empty = not set). */
+function birthdayEl(v: string): HTMLElement {
+  const [m0, d0] = v ? v.split("-").map(Number) : [0, 0];
+  const month = h("select", { "aria-label": "Month" }) as HTMLSelectElement;
+  const day = h("select", { "aria-label": "Day" }) as HTMLSelectElement;
+  month.append(h("option", { value: "0" }, "—"), ...MONTHS.map((n, i) => h("option", { value: String(i + 1) }, n)));
+  day.append(h("option", { value: "0" }, "—"), ...Array.from({ length: 31 }, (_, i) => h("option", { value: String(i + 1) }, String(i + 1))));
+  month.value = String(m0 || 0);
+  day.value = String(d0 || 0);
+  const save = () => {
+    const m = Number(month.value), d = Number(day.value);
+    saveIsland({ birthday: m && d ? `${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` : "" });
+  };
+  month.onchange = save;
+  day.onchange = save;
+  return h("div", { class: "bday" }, month, day);
 }
 function saveIsland(patch: Partial<ReturnType<typeof islandSettings>>) {
   try {
@@ -661,12 +770,23 @@ function renderTopBar() {
     };
     return [
       h("h2", {}, "Appearance"),
+      setting("Look", isMac()
+        ? "Liquid Glass: clear glass you can see your desktop through (macOS asks once for Screen Recording). Classic: the black bar."
+        : "Liquid Glass: clear glass you can see your desktop through. To see through itself, the bar stays out of screenshots and screen recordings. Classic: the black bar, which shows up in them.",
+        seg([["glass", "Liquid Glass"], ["dark", "Classic"]] as const, is.theme, (v) => { saveIsland({ theme: v }); renderTopBar(); })),
       setting("Show the top bar", "At rest it is a thin line at the top of the screen.", switchEl(ui.enabled, (v) => setUi({ enabled: v }))),
       setting("Hide in full-screen apps", "Keeps games and videos clean.", switchEl(ui.hide_fullscreen, (v) => setUi({ hide_fullscreen: v }))),
       setting("Sounds", null, switchEl(is.soundEnabled, (v) => { saveIsland({ soundEnabled: v }); renderTopBar(); })),
       setting("Show it on", null, seg([["primary", "Main display"], ["cursor", "Cursor's display"]] as const, ui.monitor_cursor ? "cursor" : "primary", (v) => setUi({ monitor_cursor: v === "cursor" }))),
       setting("Collapse after", "How long the bar stays open when you leave it alone.",
         seg([[5, "5 s"], [15, "15 s"], [30, "30 s"], [60, "1 min"]] as const, is.autoCloseInterval as 5 | 15 | 30 | 60, (sec) => { saveIsland({ autoCloseInterval: sec }); renderTopBar(); })),
+      h("h2", { style: "margin-top:22px" }, "Bob"),
+      setting("Seasons & holidays", "Bob dresses for winter, spring, summer and autumn, and for Christmas, Easter, Halloween and New Year.", switchEl(is.seasons, (v) => { saveIsland({ seasons: v }); renderTopBar(); })),
+      setting("Device moments", "A short card when a laptop is plugged in, runs low or is full, or a computer joins or leaves.", switchEl(is.moments, (v) => { saveIsland({ moments: v }); renderTopBar(); })),
+      setting("Whoosh when crossing", "A soft sound as the cursor moves to another computer.", switchEl(is.crossWhoosh, (v) => { saveIsland({ crossWhoosh: v }); renderTopBar(); })),
+      setting("Daily tips", "Once a day, Bob shows one thing CubeCursor can do.", switchEl(is.tips, (v) => { saveIsland({ tips: v }); renderTopBar(); })),
+      setting("Calm Bob", "Nothing drifting in the bar, and quieter moments.", switchEl(is.calm, (v) => { saveIsland({ calm: v }); renderTopBar(); })),
+      setting("Your birthday", "Bob celebrates with you. It stays on this computer.", birthdayEl(is.birthday)),
       h("h2", { style: "margin-top:22px" }, "Shortcuts"),
       setting("Control bar", null, h("kbd", {}, isMac() ? "⌃⌥Z" : "Ctrl+Alt+Z")),
       setting("Transfer bar", "Open or close the small transfer bar any time.", h("kbd", {}, isMac() ? "⌃⌥U" : "Ctrl+Alt+U")),

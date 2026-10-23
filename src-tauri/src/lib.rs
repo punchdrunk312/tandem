@@ -22,6 +22,7 @@ mod reports;
 mod shellmenu;
 #[cfg(windows)]
 mod sound;
+mod updater;
 use island::{IslandRect, PollGate};
 
 struct Shared {
@@ -270,6 +271,38 @@ fn set_move_apps(st: State<'_, AppState>, on: bool) {
     st.node.set_move_apps(on);
 }
 
+/// Settings › Feedback: what the person wrote, to cubecursor.shop.
+#[tauri::command]
+async fn send_feedback(message: String, email: String, log: bool, screenshot: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shot = if screenshot { take_screenshot() } else { None };
+        reports::send_feedback(&message, &email, log, shot)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn take_screenshot() -> Option<String> {
+    #[cfg(windows)]
+    return tandem_core::win::screenshot();
+    #[cfg(target_os = "macos")]
+    return tandem_core::mac::screenshot();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    None
+}
+
+/// The bar's undo button: the last move goes back.
+#[tauri::command]
+fn undo_last(st: State<'_, AppState>) {
+    st.node.undo();
+}
+
+/// Second-monitor mode: a window dragged across stays here and is shown over there.
+#[tauri::command]
+fn set_monitor_mode(st: State<'_, AppState>, on: bool) {
+    st.node.set_monitor_mode(on);
+}
+
 #[tauri::command]
 fn set_game_mode(st: State<'_, AppState>, on: bool) {
     st.node.set_game_mode(on);
@@ -484,9 +517,33 @@ fn sound_register(request: tauri::ipc::Request<'_>) -> Result<(), String> {
     Ok(())
 }
 
+/// Lock a connected computer, or put it to sleep ("lock" | "sleep").
+#[tauri::command]
+fn power_peer(st: State<'_, AppState>, peer_id: String, action: String) -> R {
+    let a = match action.as_str() {
+        "lock" => tandem_core::proto::PowerAction::Lock,
+        "sleep" => tandem_core::proto::PowerAction::Sleep,
+        _ => return Err("unknown action".into()),
+    };
+    st.node.power(peer_id, a);
+    Ok(())
+}
+
+/// Wake a sleeping computer over the network.
+#[tauri::command]
+fn wake_peer(st: State<'_, AppState>, peer_id: String) {
+    st.node.wake(peer_id);
+}
+
+/// Bring every open program on that computer over here (its battery is running out).
+#[tauri::command]
+fn take_apps(st: State<'_, AppState>, peer_id: String) {
+    st.node.take_apps(peer_id);
+}
+
 /// Plays a registered sound through Windows (a new sound replaces the one still playing).
 #[tauri::command]
-fn sound_play(name: String, volume: f32) {
+fn sound_play(name: String, volume: f32, pan: Option<f32>) {
     #[cfg(windows)]
     {
         let pcm = {
@@ -496,10 +553,10 @@ fn sound_play(name: String, volume: f32) {
                 None => return,
             }
         };
-        sound::play(&pcm, volume.clamp(0.0, 1.0));
+        sound::play(&pcm, volume.clamp(0.0, 1.0), pan.unwrap_or(0.0).clamp(-1.0, 1.0));
     }
     #[cfg(not(windows))]
-    let _ = (name, volume);
+    let _ = (name, volume, pan);
 }
 
 /// Debug trail for the island's page (JS errors, launch) — `tandem.log` in the config folder.
@@ -599,6 +656,12 @@ fn set_collapsed(app: AppHandle, sh: State<'_, Shared>, collapsed: bool) {
             ),
         );
     }
+}
+
+/// Liquid Glass: the bar sees through to what is behind it.
+#[tauri::command]
+fn set_glass(app: AppHandle, sh: State<'_, Shared>, on: bool) {
+    island::set_glass(&app, &sh.gate, on);
 }
 
 #[tauri::command]
@@ -940,6 +1003,7 @@ pub fn run() {
                 env!("CARGO_PKG_VERSION"),
                 ui.error_reports == Some(true),
             );
+            updater::start(app.handle().clone());
             {
                 // Which names to hide in reports: this computer's and the paired ones'.
                 let h = app.handle().clone();
@@ -1079,6 +1143,9 @@ pub fn run() {
             open_mac_privacy,
             sound_register,
             sound_play,
+            power_peer,
+            wake_peer,
+            take_apps,
             snapshot,
             license_status,
             license_activate,
@@ -1105,12 +1172,19 @@ pub fn run() {
             set_game_mode,
             set_drag_files,
             set_move_apps,
+            set_monitor_mode,
+            undo_last,
+            send_feedback,
+            updater::update_status,
+            updater::update_check,
+            updater::update_install,
             ghost_show,
             set_switch_delay,
             ui_get,
             ui_set,
             set_collapsed,
             set_island_rect,
+            set_glass,
             end_reveal,
             shell_menu_get,
             shell_menu_set,
@@ -1127,7 +1201,9 @@ pub fn run() {
             // Never leave the pointer hidden behind us.
             if let tauri::RunEvent::Exit = event {
                 #[cfg(windows)]
-                tandem_core::win::restore_cursors();
+                tandem_core::win::on_exit();
+                #[cfg(target_os = "macos")]
+                tandem_core::mac::on_exit();
             }
         });
 }

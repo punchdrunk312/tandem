@@ -1344,3 +1344,368 @@ async fn a_window_on_the_controlled_computer_hangs_across_on_the_way_back() {
         "nobody was asked"
     );
 }
+
+#[tokio::test]
+async fn each_computer_shows_how_the_other_is_doing() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    b.plat.st.lock().unwrap().device = tandem_core::proto::DeviceInfo {
+        battery: Some(18),
+        plugged: false,
+        mins_left: Some(42),
+        cpu: 30,
+        mac: Some("aa:bb:cc:dd:ee:01".into()),
+        accessories: vec![tandem_core::proto::Accessory {
+            name: "MX Master 3".into(),
+            battery: 12,
+        }],
+        ..Default::default()
+    };
+    pair(&a, &b).await;
+    until("A sees B's battery", || {
+        a.node
+            .snapshot()
+            .paired
+            .iter()
+            .any(|p| p.device.as_ref().and_then(|d| d.battery) == Some(18))
+    })
+    .await;
+    // B plugs in: A hears it within seconds, not at the next regular update.
+    {
+        let mut st = b.plat.st.lock().unwrap();
+        st.device.plugged = true;
+        st.device.charging = true;
+    }
+    until("A sees B charging", || {
+        a.node
+            .snapshot()
+            .paired
+            .iter()
+            .any(|p| p.device.as_ref().is_some_and(|d| d.charging))
+    })
+    .await;
+    let snap = a.node.snapshot();
+    let pb = snap.paired.iter().find(|p| p.name == "PC-B").unwrap();
+    let d = pb.device.as_ref().unwrap();
+    assert_eq!(d.accessories[0].name, "MX Master 3");
+    assert!(pb.wakeable, "B's address was remembered, to wake it later");
+    assert!(pb.color.starts_with('#') && pb.color.len() == 7);
+    // Each computer has its colour, the same as the other side sees it.
+    assert_eq!(b.node.snapshot().my_color, pb.color);
+    until("A knows the round trip to B", || {
+        a.node.snapshot().paired.iter().any(|p| p.ping_ms.is_some())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_bar_can_lock_or_put_the_other_computer_to_sleep() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let bid = b.node.snapshot().device_id;
+    a.node
+        .power(bid.clone(), tandem_core::proto::PowerAction::Lock);
+    a.node.power(bid, tandem_core::proto::PowerAction::Sleep);
+    until("B locked, then slept", || {
+        b.plat.st.lock().unwrap().power_done.len() == 2
+    })
+    .await;
+    assert_eq!(
+        b.plat.st.lock().unwrap().power_done,
+        vec![
+            tandem_core::proto::PowerAction::Lock,
+            tandem_core::proto::PowerAction::Sleep
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_low_laptop_hands_all_its_programs_over() {
+    let (a, b) = pair_with_apps(true, true).await;
+    b.plat.st.lock().unwrap().open = vec![
+        app("Spotify.exe", None),
+        app("Discord.exe", None),
+        app("notepad.exe", None),
+    ];
+    let bid = b.node.snapshot().device_id;
+    a.node.take_apps(bid);
+    until("all three opened on A", || {
+        a.plat.st.lock().unwrap().launched.len() == 3
+    })
+    .await;
+    until("and closed on B", || {
+        b.plat.st.lock().unwrap().closed.len() == 3
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn crossing_glows_in_the_colour_of_where_the_cursor_goes() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    a.plat.user_push_edge(Edge::Left, 0.5);
+    until("B controlled", || b.node.snapshot().control == "controlled").await;
+    let b_rgb = tandem_core::node::device_rgb(&b.node.snapshot().device_id);
+    let ga = a.plat.st.lock().unwrap().glows.clone();
+    assert_eq!(
+        ga,
+        vec![(Edge::Left, b_rgb)],
+        "A's left edge, in B's colour"
+    );
+    until("B glows where it came in", || {
+        !b.plat.st.lock().unwrap().glows.is_empty()
+    })
+    .await;
+    assert_eq!(b.plat.st.lock().unwrap().glows[0], (Edge::Right, b_rgb));
+}
+
+// ------------------------------------------------------------------ second-monitor mode
+
+/// A and B with second-monitor mode on; B's right edge leads to A.
+async fn pair_as_monitors() -> (Side, Side) {
+    let (a, b) = pair_with_apps(false, false).await;
+    for s in [&a, &b] {
+        s.plat.st.lock().unwrap().mirror_ok = true;
+        s.node.set_monitor_mode(true);
+    }
+    until("modes set", || {
+        a.node.snapshot().monitor_mode && b.node.snapshot().monitor_mode
+    })
+    .await;
+    (a, b)
+}
+
+/// B drags a window across onto A and lets go there: it stays on B, shown on A.
+async fn mirrored() -> (Side, Side) {
+    let (a, b) = pair_as_monitors().await;
+    drag_across(&b, app("notepad.exe", None), 700);
+    until("A shows B's window", || {
+        !a.plat.st.lock().unwrap().mirrors.is_empty()
+    })
+    .await;
+    (a, b)
+}
+
+#[tokio::test]
+async fn in_monitor_mode_a_window_stays_and_is_shown_over_there() {
+    let (a, b) = mirrored().await;
+    assert_eq!(b.plat.st.lock().unwrap().adopted, vec![7]);
+    assert_eq!(a.plat.st.lock().unwrap().mirrors[0].0, 7);
+    b.plat.emit(CaptureEvent::MirrorFrame {
+        id: 7,
+        w: 400,
+        h: 300,
+        jpeg: vec![0xFF, 0xD8],
+    });
+    until("frames arrive", || {
+        a.plat.st.lock().unwrap().mirror_frames == 1
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        a.plat.st.lock().unwrap().launched.is_empty(),
+        "nothing opened on A"
+    );
+    assert!(
+        b.plat.st.lock().unwrap().closed.is_empty(),
+        "nothing closed on B"
+    );
+}
+
+#[tokio::test]
+async fn the_owners_mouse_goes_onto_the_mirror_and_drives_the_real_window() {
+    let (a, b) = mirrored().await;
+    // B's mouse carried on to A at its left edge, 30% down: that is on the mirror.
+    until("B drives A", || b.node.snapshot().control == "remote").await;
+    b.plat
+        .emit(CaptureEvent::Input(InputEvent::MouseMove { dx: 5, dy: 0 }));
+    until("the pointer is on B's real window", || {
+        b.node.snapshot().control == "local" && b.plat.st.lock().unwrap().portal_window.is_some()
+    })
+    .await;
+    assert!(
+        !b.plat.st.lock().unwrap().capturing,
+        "B's mouse is B's again"
+    );
+    until("A hides its pointer", || {
+        a.plat.st.lock().unwrap().pointer_hidden
+    })
+    .await;
+    assert_eq!(a.node.snapshot().control, "local");
+    // A draws the pointer where it is on the window.
+    b.plat.emit(CaptureEvent::PortalCursor {
+        id: 7,
+        rx: 40,
+        ry: 60,
+    });
+    until("A draws it", || {
+        a.plat.st.lock().unwrap().mirror_cursor == Some((7, 40, 60))
+    })
+    .await;
+    // Off the right side of the window: back on A, just right of the mirror.
+    b.plat.user_off_window(401, 60);
+    until("A is driven again", || {
+        a.node.snapshot().control == "controlled"
+    })
+    .await;
+    assert_eq!(b.node.snapshot().control, "remote");
+    let st = a.plat.st.lock().unwrap();
+    assert_eq!(st.cursor, (401, 160));
+    assert!(!st.pointer_hidden);
+    assert_eq!(st.mirror_cursor, None);
+    drop(st);
+    assert!(b.plat.st.lock().unwrap().portal_ends >= 1);
+}
+
+#[tokio::test]
+async fn the_mirrors_own_mouse_drives_the_window_on_the_other_computer() {
+    let (a, b) = mirrored().await;
+    until("B drives A", || b.node.snapshot().control == "remote").await;
+    // Hand A its mouse back.
+    b.plat.emit(CaptureEvent::Failsafe);
+    until("both local", || {
+        a.node.snapshot().control == "local" && b.node.snapshot().control == "local"
+    })
+    .await;
+    // A's own mouse goes onto the mirror, 10 px in.
+    a.plat.user_onto_mirror(7, 10, 10);
+    until("B is driven, on its window", || {
+        b.node.snapshot().control == "controlled"
+    })
+    .await;
+    assert_eq!(a.node.snapshot().control, "remote");
+    assert_eq!(b.plat.st.lock().unwrap().cursor, (310, 260));
+    // Clicks and keys go to the window over there.
+    a.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: true,
+    }));
+    a.plat.emit(CaptureEvent::Input(InputEvent::Button {
+        button: Button::Left,
+        down: false,
+    }));
+    until("B got the click", || {
+        b.plat.st.lock().unwrap().injected.len() >= 2
+    })
+    .await;
+    // Out of the window to the right: A's mouse is A's again, right of the mirror.
+    a.plat.emit(CaptureEvent::Input(InputEvent::MouseMove {
+        dx: 500,
+        dy: 0,
+    }));
+    until("back on A", || a.node.snapshot().control == "local").await;
+    assert_eq!(b.node.snapshot().control, "local");
+    let st = a.plat.st.lock().unwrap();
+    assert!(!st.capturing);
+    assert_eq!(st.cursor, (510, 110));
+}
+
+#[tokio::test]
+async fn a_computer_that_cannot_show_it_sends_the_window_back() {
+    let (a, b) = pair_as_monitors().await;
+    a.plat.st.lock().unwrap().mirror_ok = false;
+    drag_across(&b, app("notepad.exe", None), 700);
+    until("B takes it back", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, None)]
+    })
+    .await;
+    until("B says why", || notice_has(&b, "can't show windows yet")).await;
+}
+
+#[tokio::test]
+async fn closing_the_window_takes_the_mirror_away() {
+    let (a, b) = mirrored().await;
+    b.plat.emit(CaptureEvent::MirrorGone { id: 7 });
+    until("gone on A", || {
+        a.plat.st.lock().unwrap().mirrors_closed == vec![7]
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn dragging_the_mirror_back_over_the_edge_brings_the_window_home() {
+    let (a, b) = mirrored().await;
+    for (dx, done) in [(-300, false), (-400, false), (0, true)] {
+        b.plat.emit(CaptureEvent::MirrorMoved {
+            id: 7,
+            dx,
+            dy: 0,
+            done,
+        });
+    }
+    until("home on B", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, Some(0.5))]
+    })
+    .await;
+    assert!(a.plat.st.lock().unwrap().mirrors.is_empty());
+}
+
+#[tokio::test]
+async fn disconnecting_brings_mirrored_windows_home() {
+    let (a, b) = mirrored().await;
+    b.node.disconnect();
+    until("B has its window back", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, None)]
+    })
+    .await;
+    until("A closed the mirror", || {
+        a.plat.st.lock().unwrap().mirrors_closed == vec![7]
+    })
+    .await;
+}
+
+// ------------------------------------------------------------------ undo
+
+#[tokio::test]
+async fn undo_brings_a_moved_program_back() {
+    let (a, b) = pair_with_apps(true, true).await;
+    drag_across(&b, app("discord.exe", None), 700);
+    until("opened on A", || !a.plat.st.lock().unwrap().launched.is_empty()).await;
+    until("B offers undo", || {
+        b.node.snapshot().undo.is_some_and(|u| u.contains("to PC-A"))
+    })
+    .await;
+    b.node.undo();
+    until("open on B again", || !b.plat.st.lock().unwrap().launched.is_empty()).await;
+    until("closed on A", || {
+        a.plat.st.lock().unwrap().closed.iter().any(|x| x.exe == "discord.exe")
+    })
+    .await;
+    assert!(b.node.snapshot().undo.is_none(), "one undo per move");
+}
+
+#[tokio::test]
+async fn undo_puts_sent_files_in_the_bin_over_there() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    pair(&a, &b).await;
+    let (_d, f) = make_file("report.txt", b"hello");
+    a.node.send_files(vec![f]);
+    until("B received", || b.dl.path().join("report.txt").exists()).await;
+    until("A offers undo", || a.node.snapshot().undo.is_some()).await;
+    a.node.undo();
+    until("in B's bin", || {
+        b.plat
+            .st
+            .lock()
+            .unwrap()
+            .trashed
+            .iter()
+            .any(|p| p.ends_with("report.txt"))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn undo_brings_a_mirrored_window_home() {
+    let (a, b) = mirrored().await;
+    until("B offers undo", || b.node.snapshot().undo.is_some()).await;
+    b.node.undo();
+    until("home on B", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, None)]
+    })
+    .await;
+    until("gone on A", || a.plat.st.lock().unwrap().mirrors_closed == vec![7]).await;
+}

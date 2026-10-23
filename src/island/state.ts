@@ -7,9 +7,57 @@ export interface IslandSettings {
   soundEnabled: boolean;
   soundVolume: number;
   autoCloseInterval: number;
+  /** Bob dresses for the season and the special days. */
+  seasons: boolean;
+  /** The device moments (plugged in, low, full, a computer joining…). */
+  moments: boolean;
+  /** A soft whoosh when the cursor crosses to another computer. */
+  crossWhoosh: boolean;
+  /** "MM-DD", or empty. */
+  birthday: string;
+  /** Calm Bob: no seasons drifting, quieter moments. */
+  calm: boolean;
+  /** The look: frosted "glass" (default) or the classic black bar. */
+  theme: "glass" | "dark";
+  /** Bob shows one tip a day about something CubeCursor can do. */
+  tips: boolean;
+  /** Minutes the focus timer starts with. */
+  focusMinutes: number;
 }
 
-const DEFAULTS: IslandSettings = { soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15 };
+/** A focus timer that is running: when it ends and how long it was (ms). */
+export interface Focus {
+  endsAt: number;
+  total: number;
+}
+
+const FOCUS_KEY = "cc.focus";
+
+export function loadFocus(): Focus | null {
+  try {
+    const f = JSON.parse(localStorage.getItem(FOCUS_KEY) ?? "null") as Focus | null;
+    return f && f.endsAt > Date.now() ? f : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveFocus(f: Focus | null) {
+  try {
+    if (f) localStorage.setItem(FOCUS_KEY, JSON.stringify(f));
+    else localStorage.removeItem(FOCUS_KEY);
+  } catch {
+    /* fine: it just won't survive a restart */
+  }
+}
+
+const DEFAULTS: IslandSettings = {
+  soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
+  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
+  theme: "glass",
+  tips: true,
+  focusMinutes: 25,
+};
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;
 
@@ -46,6 +94,12 @@ class IslandState {
   /** Brief reaction to a finished / failed transfer. */
   flash: BotStateName | null = null;
   notice = "";
+  /** The focus timer, while it runs (it survives a restart). */
+  focus: Focus | null = loadFocus();
+  /** The moment on show (see moments.ts). */
+  moment: import("./moments").Moment | null = null;
+  /** A special day's line for the header ("Merry Christmas!"), or null. */
+  greeting: string | null = null;
 
   settings: IslandSettings = load();
 

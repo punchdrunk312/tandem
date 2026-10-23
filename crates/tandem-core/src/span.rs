@@ -324,6 +324,60 @@ pub fn compose(frame: Option<(&[u8], u32, u32)>, w: u32, h: u32, gx: i32, gy: i3
     out
 }
 
+/// How long the glow is along the edge, and how far it reaches into the screen.
+pub const GLOW_LEN: i32 = 460;
+pub const GLOW_DEPTH: i32 = 34;
+
+/// The glow where the cursor crosses `edge` at `frac`: where it goes on the screen
+/// (x, y, w, h) and its picture (premultiplied BGRA). Brightest at the edge and in the
+/// middle, fading softly into the screen and towards both ends.
+pub fn glow_strip(scr: Screen, edge: Edge, frac: f32, rgb: [u8; 3]) -> (i32, i32, i32, i32, Vec<u8>) {
+    let f = frac.clamp(0.0, 1.0);
+    let (len, d) = (GLOW_LEN, GLOW_DEPTH);
+    let along_x = scr.x + (f * scr.width as f32) as i32 - len / 2;
+    let along_y = scr.y + (f * scr.height as f32) as i32 - len / 2;
+    let (right, bottom) = (scr.x + scr.width, scr.y + scr.height);
+    // (x, y, w, h, is the glow horizontal, which side the screen edge is on)
+    let (x, y, w, h, horiz, far) = match edge {
+        Edge::Left => (scr.x, along_y, d, len, false, false),
+        Edge::Right => (right - d, along_y, d, len, false, true),
+        Edge::Top => (along_x, scr.y, len, d, true, false),
+        Edge::Bottom => (along_x, bottom - d, len, d, true, true),
+        // A corner: a round glow tucked into it.
+        Edge::TopLeft => (scr.x, scr.y, len / 2, len / 2, true, false),
+        Edge::TopRight => (right - len / 2, scr.y, len / 2, len / 2, true, false),
+        Edge::BottomLeft => (scr.x, bottom - len / 2, len / 2, len / 2, true, false),
+        Edge::BottomRight => (right - len / 2, bottom - len / 2, len / 2, len / 2, true, false),
+    };
+    let corner = edge.is_corner();
+    let mut px = vec![0u8; (w * h * 4) as usize];
+    for yy in 0..h {
+        for xx in 0..w {
+            let a = if corner {
+                // Distance from the corner itself.
+                let cx = if matches!(edge, Edge::TopLeft | Edge::BottomLeft) { 0 } else { w - 1 };
+                let cy = if matches!(edge, Edge::TopLeft | Edge::TopRight) { 0 } else { h - 1 };
+                let r = (((xx - cx) * (xx - cx) + (yy - cy) * (yy - cy)) as f32).sqrt() / w as f32;
+                (1.0 - r).max(0.0).powi(3)
+            } else {
+                let (a_pos, a_len, depth) = if horiz { (xx, w, yy) } else { (yy, h, xx) };
+                // 0 at the screen edge, 1 at the far side of the strip.
+                let into = if far { (d - 1 - depth) as f32 } else { depth as f32 } / d as f32;
+                let u = (a_pos as f32 / a_len as f32) * 2.0 - 1.0; // -1..1 along
+                let along = (1.0 - u * u).max(0.0).powf(1.6);
+                along * (-into * 3.2).exp() * (1.0 - into)
+            };
+            let a = (a * 0.85).clamp(0.0, 1.0);
+            let i = ((yy * w + xx) * 4) as usize;
+            px[i] = (rgb[2] as f32 * a) as u8;
+            px[i + 1] = (rgb[1] as f32 * a) as u8;
+            px[i + 2] = (rgb[0] as f32 * a) as u8;
+            px[i + 3] = (a * 255.0) as u8;
+        }
+    }
+    (x, y, w, h, px)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +530,23 @@ mod tests {
             scale4(&src, 2, 1, 4, 1),
             vec![1, 2, 3, 4, 1, 2, 3, 4, 5, 6, 7, 8, 5, 6, 7, 8]
         );
+    }
+
+    #[test]
+    fn the_glow_hugs_the_edge_where_the_cursor_crossed() {
+        let (x, y, w, h, px) = glow_strip(SCR, Edge::Right, 0.5, [45, 212, 191]);
+        assert_eq!((x, w, h), (2560 - GLOW_DEPTH, GLOW_DEPTH, GLOW_LEN));
+        assert_eq!(y, 720 - GLOW_LEN / 2);
+        let a = |xx: i32, yy: i32| px[((yy * w + xx) * 4 + 3) as usize];
+        // Brightest at the screen edge (the right side of the strip), in the middle.
+        assert!(a(w - 1, h / 2) > 150);
+        assert!(a(0, h / 2) < 30, "fades into the screen");
+        assert!(a(w - 1, 2) < 10, "fades towards the ends");
+        // The colour, premultiplied: teal-ish at the brightest point.
+        let i = (((h / 2) * w + w - 1) * 4) as usize;
+        assert!(px[i + 1] > px[i + 2], "more green than red");
+        let (x, y, _, _, _) = glow_strip(SCR, Edge::Top, 0.25, [255, 255, 255]);
+        assert_eq!((x, y), (640 - GLOW_LEN / 2, 0));
     }
 
     #[test]

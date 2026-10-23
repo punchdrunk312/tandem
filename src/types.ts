@@ -13,7 +13,7 @@ export interface Snapshot {
   control_peer: string | null;
   /** One connected computer (the one in control, else the first); see `paired[].connected`. */
   connected: { id: string; name: string } | null;
-  paired: { id: string; name: string; side: SideName; connected: boolean; nearby: boolean }[];
+  paired: PairedPeer[];
   nearby: { id: string; name: string; addr: string; port: number; paired: boolean }[];
   transfers: {
     id: number;
@@ -32,12 +32,53 @@ export interface Snapshot {
   /** Carry files that are being dragged across the screen edge. */
   drag_files: boolean;
   move_apps: boolean;
+  /** Second-monitor mode: windows dragged across stay here and show there. */
+  monitor_mode: boolean;
   /** Files being carried to this computer right now (shown under the cursor). */
   carry: { name: string; count: number; folder: boolean } | null;
   switch_delay_ms: number;
   error: string | null;
   /** A short message that clears itself, e.g. why control came back. */
   notice: string | null;
+  /** The last move that can still be undone, for two minutes. */
+  undo?: string | null;
+  /** How this computer is doing. */
+  me?: DeviceInfo;
+  /** This computer's colour, "#rrggbb". */
+  my_color?: string;
+}
+
+export interface PairedPeer {
+  id: string;
+  name: string;
+  side: SideName;
+  connected: boolean;
+  nearby: boolean;
+  /** How it is doing (while connected). */
+  device?: DeviceInfo | null;
+  /** Round trip in ms. */
+  ping_ms?: number | null;
+  /** Its colour, "#rrggbb". */
+  color?: string;
+  /** It can be woken over the network. */
+  wakeable?: boolean;
+}
+
+export interface DeviceInfo {
+  /** Percent; null without a battery (a desktop). */
+  battery: number | null;
+  plugged: boolean;
+  charging: boolean;
+  mins_left: number | null;
+  mins_to_full: number | null;
+  saver: boolean;
+  cpu: number;
+  mem: number;
+  disk_free_gb: number;
+  disk_total_gb: number;
+  uptime_min: number;
+  accessories: { name: string; battery: number }[];
+  mac: string | null;
 }
 
 export interface ElevState {
