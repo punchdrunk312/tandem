@@ -300,6 +300,18 @@ pub fn backdrop_below(below: u32, x: f64, y: f64, w: f64, h: f64) -> Option<Stri
     ))
 }
 
+/// Liquid Glass, fast path: what is under our window `below` in the rectangle (points),
+/// shrunk to `ow` x `oh` (it gets blurred anyway), as RGBA.
+pub fn backdrop_rgba(below: u32, x: f64, y: f64, w: f64, h: f64, ow: u32, oh: u32) -> Option<Vec<u8>> {
+    let (px, pw, ph) = crate::macwin::below(below, crate::macwin::R { x, y, w, h })?;
+    let mut small = crate::span::scale4(&px, pw, ph, ow.max(1), oh.max(1));
+    for p in small.chunks_exact_mut(4) {
+        p.swap(0, 2);
+        p[3] = 255;
+    }
+    Some(small)
+}
+
 /// CubeCursor is closing: windows kept here for a mirror come back on screen, and the
 /// pointer is shown again.
 pub fn on_exit() {

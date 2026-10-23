@@ -1598,6 +1598,42 @@ pub fn backdrop(x: i32, y: i32, w: i32, h: i32) -> Option<String> {
     ))
 }
 
+/// Liquid Glass, fast path: what is on screen in the given rectangle (physical px),
+/// shrunk to `ow` x `oh` while it is copied (it gets blurred anyway), as RGBA.
+pub fn backdrop_rgba(x: i32, y: i32, w: i32, h: i32, ow: i32, oh: i32) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+        SetStretchBltMode, StretchBlt, HALFTONE, SRCCOPY,
+    };
+    if w <= 0 || h <= 0 || ow <= 0 || oh <= 0 || ow > 2048 || oh > 1024 {
+        return None;
+    }
+    let mut px = unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let Some((bmp, bits)) = crate::winspan::dib(screen, ow, oh) else {
+            let _ = DeleteDC(mem);
+            ReleaseDC(None, screen);
+            return None;
+        };
+        let old = SelectObject(mem, bmp.into());
+        SetStretchBltMode(mem, HALFTONE);
+        let ok = StretchBlt(mem, 0, 0, ow, oh, Some(screen), x, y, w, h, SRCCOPY).as_bool();
+        let px = ok.then(|| std::slice::from_raw_parts(bits, (ow * oh * 4) as usize).to_vec());
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        px?
+    };
+    // BGRA (Windows) to RGBA (the page), opaque.
+    for p in px.chunks_exact_mut(4) {
+        p.swap(0, 2);
+        p[3] = 255;
+    }
+    Some(px)
+}
+
 /// The main display, at half size, as a `data:` JPEG (a screenshot for feedback).
 pub fn screenshot() -> Option<String> {
     let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };

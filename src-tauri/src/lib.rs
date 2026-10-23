@@ -658,6 +658,13 @@ fn set_collapsed(app: AppHandle, sh: State<'_, Shared>, collapsed: bool) {
     }
 }
 
+/// Liquid Glass: the page hands over the channel the pictures of what is behind the bar
+/// come through.
+#[tauri::command]
+fn glass_stream(sh: State<'_, Shared>, channel: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>) {
+    *sh.gate.glass_chan.lock().unwrap() = Some(channel);
+}
+
 /// Liquid Glass: the bar sees through to what is behind it.
 #[tauri::command]
 fn set_glass(app: AppHandle, sh: State<'_, Shared>, on: bool) {
@@ -1185,6 +1192,7 @@ pub fn run() {
             set_collapsed,
             set_island_rect,
             set_glass,
+            glass_stream,
             end_reveal,
             shell_menu_get,
             shell_menu_set,

@@ -33,8 +33,28 @@ async function main() {
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
-  await safe("backdrop listener", () =>
-    onEvent<{ x: number; y: number; w: number; h: number; url: string }>("backdrop", (b) => island.setBackdrop(b)));
+  // Liquid Glass: pictures of what is behind the bar, raw, over a binary channel.
+  await safe("glass channel", async () => {
+    if (!IS_TAURI) return;
+    const { Channel } = await import("@tauri-apps/api/core");
+    const ch = new Channel<ArrayBuffer>();
+    ch.onmessage = (buf) => {
+      if (!(buf instanceof ArrayBuffer) || buf.byteLength < 24) return;
+      const v = new DataView(buf);
+      const pw = v.getUint32(16, true), ph = v.getUint32(20, true);
+      if (buf.byteLength < 24 + pw * ph * 4) return;
+      island.setBackdropFrame({
+        x: v.getFloat32(0, true),
+        y: v.getFloat32(4, true),
+        w: v.getFloat32(8, true),
+        h: v.getFloat32(12, true),
+        pw,
+        ph,
+        rgba: new Uint8ClampedArray(buf, 24, pw * ph * 4),
+      });
+    };
+    await call("glass_stream", { channel: ch });
+  });
   await safe("update listener", () =>
     onEvent<{ current: string; version: string | null; notes: string }>("update", (u) => island.updateReady(u)));
   await safe("boot", () => bootSnapshot(island));

@@ -1,5 +1,5 @@
 // Browser preview only: a pretend desktop behind the bar, photographed the same way the
-// app photographs the real screen (half size, JPEG, about twelve times a second), so
+// app photographs the real screen (quarter size, raw, every frame), so
 // Liquid Glass can be designed and checked without Windows.
 //
 // "#…&desk=bloom" (default), "&desk=dark" or "&desk=sunset".
@@ -119,15 +119,40 @@ export function startDevDesk(island: Island) {
   paint(c, desk);
   window.addEventListener("resize", () => paint(c, desk));
 
+  // Quarter size, raw, every frame: what the app sends.
   const shot = document.createElement("canvas");
-  const sx = shot.getContext("2d");
-  window.setInterval(() => {
+  const sx = shot.getContext("2d", { willReadFrequently: true });
+  // "&anim": something moving behind the bar (like a video), to see the glass keep up.
+  const anim = location.hash.includes("anim");
+  const x0 = c.getContext("2d");
+  const still = document.createElement("canvas");
+  still.width = c.width;
+  still.height = c.height;
+  still.getContext("2d")?.drawImage(c, 0, 0);
+  const tick = () => {
+    if (anim && x0) {
+      const t = performance.now() / 1000;
+      const dpr = c.width / window.innerWidth;
+      x0.setTransform(1, 0, 0, 1, 0, 0);
+      x0.drawImage(still, 0, 0);
+      x0.scale(dpr, dpr);
+      x0.fillStyle = "#22d3ee";
+      x0.beginPath();
+      x0.arc(window.innerWidth / 2 + Math.sin(t * 2.2) * 330, 70 + Math.cos(t * 1.7) * 40, 46, 0, Math.PI * 2);
+      x0.fill();
+      x0.fillStyle = "#f43f5e";
+      x0.fillRect(window.innerWidth / 2 + Math.cos(t * 1.4) * 280 - 40, 40, 80, 80);
+    }
     const r = island.glassRect();
-    if (!r || !sx) return;
-    const k = c.width / window.innerWidth;
-    shot.width = Math.max(1, Math.round(r.w / 2));
-    shot.height = Math.max(1, Math.round(r.h / 2));
-    sx.drawImage(c, r.x * k, r.y * k, r.w * k, r.h * k, 0, 0, shot.width, shot.height);
-    island.setBackdrop({ ...r, url: shot.toDataURL("image/jpeg", 0.7) });
-  }, 80);
+    if (r && sx) {
+      const k = c.width / window.innerWidth;
+      const pw = Math.max(1, Math.ceil(r.w / 4)), ph = Math.max(1, Math.ceil(r.h / 4));
+      shot.width = pw;
+      shot.height = ph;
+      sx.drawImage(c, r.x * k, r.y * k, r.w * k, r.h * k, 0, 0, pw, ph);
+      island.setBackdropFrame({ ...r, pw, ph, rgba: sx.getImageData(0, 0, pw, ph).data });
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }

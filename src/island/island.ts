@@ -32,6 +32,17 @@ const modeOrder = (m: IslandMode) => (m === "hidden" ? 0 : m === "compact" ? 1 :
 /** How long a computer may be gone before it counts as gone. */
 const OFFLINE_GRACE_MS = 20_000;
 
+/** One picture of what is behind the bar: where it goes (window px) and its pixels. */
+export interface BackdropFrame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  pw: number;
+  ph: number;
+  rgba: Uint8ClampedArray<ArrayBuffer>;
+}
+
 export class Island {
   readonly fsm = new IslandStateMachine();
 
@@ -199,8 +210,8 @@ export class Island {
 
     this.ambientCanvas = h("canvas", { id: "ambient-canvas" });
     // Liquid Glass: what is behind the bar, blurred, and again bent along its edges.
-    this.bdEl = h("div", { id: "bd" });
-    this.bdEdgeImg = h("div", { id: "bd-edge-img" });
+    this.bdEl = h("canvas", { id: "bd" }) as HTMLCanvasElement;
+    this.bdEdgeImg = h("canvas", { id: "bd-edge-img" }) as HTMLCanvasElement;
     const glass = h("div", { id: "glass" }, this.bdEl, h("div", { id: "bd-edge" }, this.bdEdgeImg));
     const clip = h("div", { id: "island-clip" }, glass, this.ambientCanvas, this.greetingCanvas, this.contentEl);
     this.islandEl = h("div", { id: "island" }, clip, this.botGlow, this.botCanvas, this.compactLabel);
@@ -955,27 +966,47 @@ export class Island {
 
   // ── Liquid Glass ────────────────────────────────────────────────────────────
   //
-  // The app photographs the screen behind the open bar about twelve times a second
-  // (`backdrop` events, window coordinates). The picture is drawn under the bar's content,
-  // blurred and saturated, and once more slightly magnified along the edges, where real
-  // glass bends the light. The words switch between dark and light with what is behind.
+  // The app sends small raw pictures of the screen behind the open bar (a quarter of its
+  // size, window coordinates) as often as the screen refreshes, over a binary channel.
+  // Each is drawn on the next frame into a small canvas the size of the picture, which
+  // the GPU scales up, blurs and saturates under the bar's content; a second canvas,
+  // slightly magnified, shows along the edges, where real glass bends the light. The
+  // words switch between dark and light with what is behind.
 
-  private bdEl!: HTMLElement;
-  private bdEdgeImg!: HTMLElement;
-  private bd: { x: number; y: number; w: number; h: number; url: string } | null = null;
+  private bdEl!: HTMLCanvasElement;
+  private bdEdgeImg!: HTMLCanvasElement;
+  private bd: { x: number; y: number; w: number; h: number } | null = null;
+  private bdPending: BackdropFrame | null = null;
+  private bdFrames = 0;
   private tone: "light" | "dark" = "light";
-  private toneBusy = false;
 
-  setBackdrop(p: { x: number; y: number; w: number; h: number; url: string }) {
+  /** A new picture of what is behind the bar: drawn on the next frame. */
+  setBackdropFrame(f: BackdropFrame) {
     if (State.settings.theme === "dark") return;
-    if (p.url !== this.bd?.url) {
-      const bg = `url("${p.url}")`;
-      this.bdEl.style.backgroundImage = bg;
-      this.bdEdgeImg.style.backgroundImage = bg;
-      this.readTone(p.url);
+    const first = this.bdPending == null;
+    this.bdPending = f;
+    if (first) requestAnimationFrame(() => this.drawBackdrop());
+  }
+
+  private drawBackdrop() {
+    const f = this.bdPending;
+    this.bdPending = null;
+    if (!f || State.settings.theme === "dark") return;
+    for (const c of [this.bdEl, this.bdEdgeImg]) {
+      if (c.width !== f.pw || c.height !== f.ph) {
+        c.width = f.pw;
+        c.height = f.ph;
+      }
     }
-    this.bd = p;
-    document.documentElement.dataset.liquid = "on";
+    const x = this.bdEl.getContext("2d");
+    const ex = this.bdEdgeImg.getContext("2d");
+    if (!x || !ex) return;
+    x.putImageData(new ImageData(f.rgba, f.pw, f.ph), 0, 0);
+    ex.drawImage(this.bdEl, 0, 0);
+    if (this.bdFrames++ % 6 === 0) this.readTone(f.rgba);
+    if (!IS_TAURI) (window as unknown as { __glassFrames?: number }).__glassFrames = this.bdFrames;
+    this.bd = { x: f.x, y: f.y, w: f.w, h: f.h };
+    if (document.documentElement.dataset.liquid !== "on") document.documentElement.dataset.liquid = "on";
     this.placeBackdrop();
   }
 
@@ -996,35 +1027,21 @@ export class Island {
   }
 
   /** Bright behind the bar: dark words. Dark behind it: light words (with some give). */
-  private readTone(url: string) {
-    if (this.toneBusy) return;
-    this.toneBusy = true;
-    const img = new Image();
-    img.onload = () => {
-      this.toneBusy = false;
-      try {
-        const c = document.createElement("canvas");
-        c.width = 24;
-        c.height = 12;
-        const x = c.getContext("2d", { willReadFrequently: true });
-        if (!x) return;
-        x.drawImage(img, 0, 0, 24, 12);
-        const d = x.getImageData(2, 0, 20, 10).data;
-        let sum = 0;
-        for (let i = 0; i < d.length; i += 4) sum += (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
-        const lum = sum / (d.length / 4);
-        const tone = this.tone === "light" ? (lum < 0.5 ? "dark" : "light") : lum > 0.6 ? "light" : "dark";
-        if (tone !== this.tone) {
-          this.tone = tone;
-          document.documentElement.dataset.tone = tone;
-          this.greeting.light = tone === "light";
-        }
-      } catch {
-        /* fine: keep the tone */
-      }
-    };
-    img.onerror = () => { this.toneBusy = false; };
-    img.src = url;
+  private readTone(px: Uint8ClampedArray) {
+    let sum = 0, n = 0;
+    // Every 13th pixel is plenty for "is it bright".
+    for (let i = 0; i < px.length; i += 4 * 13) {
+      sum += (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+      n++;
+    }
+    if (!n) return;
+    const lum = sum / n;
+    const tone = this.tone === "light" ? (lum < 0.5 ? "dark" : "light") : lum > 0.6 ? "light" : "dark";
+    if (tone !== this.tone) {
+      this.tone = tone;
+      document.documentElement.dataset.tone = tone;
+      this.greeting.light = tone === "light";
+    }
   }
 
   /** Where the bar is (window coordinates), with room for the blur, while it is open. */
