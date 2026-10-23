@@ -42,6 +42,8 @@ export interface Snapshot {
   notice: string | null;
   /** The last move that can still be undone, for two minutes. */
   undo?: string | null;
+  /** Second-monitor mode: windows shown across (ours there, theirs here). */
+  windows_away?: number;
   /** How this computer is doing. */
   me?: DeviceInfo;
   /** This computer's colour, "#rrggbb". */

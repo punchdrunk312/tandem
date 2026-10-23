@@ -171,6 +171,10 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       return new Promise((_, no) => setTimeout(() => no("Preview: nothing to install here"), 1500)) as never;
     case "send_feedback":
       return new Promise((r) => setTimeout(() => r(null), 700)) as never;
+    case "bring_windows_back":
+      state = { ...state, windows_away: 0, notice: "Brought the window back" };
+      push();
+      return;
     case "undo_last":
       state.undo = null;
       push();

@@ -46,19 +46,33 @@ impl Geo {
     /// Keeps the (virtual) pointer on this screen, except across the edge, where the
     /// window may go until it is entirely on the other side.
     pub fn clamp(&self, vx: i32, vy: i32) -> (i32, i32) {
+        self.clamp_room(vx, vy, 0)
+    }
+
+    /// Like `clamp`, but the pointer may also go up to `room` pixels past the edge (the
+    /// other computer's screen, in this one's pixels): once the window is entirely over,
+    /// it carries on across that screen instead of getting stuck at the edge.
+    pub fn clamp_room(&self, vx: i32, vy: i32, room: i32) -> (i32, i32) {
         let s = self.scr;
         let (right, bottom) = (s.x + s.width, s.y + s.height);
         let cx = |lo: i32, hi: i32, v: i32| v.max(lo).min(hi.max(lo));
+        let room = room.max(0);
         match self.edge {
-            Edge::Right => (cx(s.x, right + self.gx, vx), cx(s.y, bottom - 1, vy)),
-            Edge::Left => (
-                cx(s.x + self.gx - self.w, right - 1, vx),
+            Edge::Right => (
+                cx(s.x, right + self.gx.max(room), vx),
                 cx(s.y, bottom - 1, vy),
             ),
-            Edge::Bottom => (cx(s.x, right - 1, vx), cx(s.y, bottom + self.gy, vy)),
+            Edge::Left => (
+                cx(s.x - (self.w - self.gx).max(room), right - 1, vx),
+                cx(s.y, bottom - 1, vy),
+            ),
+            Edge::Bottom => (
+                cx(s.x, right - 1, vx),
+                cx(s.y, bottom + self.gy.max(room), vy),
+            ),
             Edge::Top => (
                 cx(s.x, right - 1, vx),
-                cx(s.y + self.gy - self.h, bottom - 1, vy),
+                cx(s.y - (self.h - self.gy).max(room), bottom - 1, vy),
             ),
             _ => (cx(s.x, right - 1, vx), cx(s.y, bottom - 1, vy)),
         }
@@ -128,6 +142,69 @@ pub fn place(v: &SpanView, scr: Screen) -> (i32, i32) {
         Edge::Bottom => (ax, scr.y + scr.height - v.crossed),
         _ => (ax, ay),
     }
+}
+
+/// How much bigger things look on the receiving screen than on the sending one, so a
+/// window keeps its size *relative to the screen* when it crosses between screens of
+/// different resolution: for a left or right edge the screens' heights are compared
+/// (they stand side by side), for a top or bottom edge their widths. Nearly equal
+/// screens keep 1 so nothing goes soft for no reason.
+pub fn scale_for(edge: Edge, send: (i32, i32), recv: (i32, i32)) -> f32 {
+    let (a, b) = match edge {
+        Edge::Top | Edge::Bottom => (send.0, recv.0),
+        _ => (send.1, recv.1),
+    };
+    if a <= 0 || b <= 0 {
+        return 1.0;
+    }
+    let k = (b as f32 / a as f32).clamp(0.5, 2.0);
+    if (k - 1.0).abs() < 0.06 {
+        1.0
+    } else {
+        k
+    }
+}
+
+/// Scales a length by `k`.
+pub fn sc(v: i32, k: f32) -> i32 {
+    (v as f32 * k).round() as i32
+}
+
+/// How far past the edge the pointer may go while it drives a window across (the other
+/// computer's screen, in this one's pixels; 0 until it is known).
+static ROOM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+pub fn set_room(px: i32) {
+    ROOM.store(px.max(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn room() -> i32 {
+    ROOM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A window crossing to the other computer, as shown there: sizes and distances of the
+/// sender's `v` scaled by `k`.
+pub fn scale_view(v: SpanView, k: f32) -> SpanView {
+    if k == 1.0 {
+        return v;
+    }
+    SpanView {
+        crossed: sc(v.crossed, k),
+        w: sc(v.w as i32, k).max(1) as u32,
+        h: sc(v.h as i32, k).max(1) as u32,
+        gx: sc(v.gx, k),
+        gy: sc(v.gy, k),
+        ..v
+    }
+}
+
+/// Where the pointer is on the receiving screen for view `v` (its spot on the window).
+pub fn pointer_at(v: &SpanView, scr: Screen) -> (i32, i32) {
+    let (x, y) = place(v, scr);
+    (
+        (x + v.gx).clamp(scr.x, scr.x + scr.width - 1),
+        (y + v.gy).clamp(scr.y, scr.y + scr.height - 1),
+    )
 }
 
 /// `w` x `h` scaled down to fit in `max_w` x `max_h`, keeping its shape.
@@ -563,5 +640,30 @@ mod tests {
         let (a, w, h, tx, ty) = arrow();
         assert_eq!((w, h, tx, ty), (24, 30, 3, 2));
         assert_eq!(a[3], 0, "corner is transparent");
+    }
+
+    #[test]
+    fn a_window_carries_on_across_the_other_screen_once_fully_over() {
+        let g = right(400);
+        let s = g.scr;
+        let edge = s.x + s.width;
+        // Without room: stuck once fully over.
+        assert_eq!(g.clamp(edge + 5000, 300).0, edge + g.gx);
+        // With the other screen known: up to its far side.
+        assert_eq!(g.clamp_room(edge + 5000, 300, 1500).0, edge + 1500);
+        assert!(g.crossed(edge + 1500, 300) > g.w);
+    }
+
+    #[test]
+    fn screens_of_other_sizes_scale_windows() {
+        assert_eq!(scale_for(Edge::Right, (1920, 1080), (1920, 1080)), 1.0);
+        assert_eq!(scale_for(Edge::Right, (3840, 2160), (1920, 1080)), 0.5);
+        assert_eq!(scale_for(Edge::Right, (1366, 768), (2560, 1440)), 1.875);
+        // Two monitors side by side on one computer don't matter for a left/right edge.
+        assert_eq!(scale_for(Edge::Left, (3840, 1080), (1920, 1080)), 1.0);
+        assert_eq!(scale_for(Edge::Top, (1920, 1080), (1920, 1200)), 1.0);
+        let v = SpanView { entry: Edge::Left, crossed: 100, along: 0.2, w: 800, h: 600, gx: 40, gy: 10 };
+        let s = scale_view(v, 0.5);
+        assert_eq!((s.crossed, s.w, s.h, s.gx, s.gy), (50, 400, 300, 20, 5));
     }
 }

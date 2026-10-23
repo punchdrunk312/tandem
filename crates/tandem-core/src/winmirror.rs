@@ -120,6 +120,32 @@ fn place(h: isize, off: (i32, i32), x: i32, y: i32, top: bool) {
     }
 }
 
+/// Like `place` with `top`, but just under the veil while it is up (the window must not
+/// be seen on this screen while it is used through the mirror).
+fn place_for_pointer(h: isize, off: (i32, i32), x: i32, y: i32) {
+    match winspan::veil_window() {
+        Some(v) => unsafe {
+            let _ = SetWindowPos(
+                hwnd(h),
+                Some(hwnd(v)),
+                x - off.0,
+                y - off.1,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
+            );
+        },
+        None => place(h, off, x, y, true),
+    }
+}
+
+/// The pointer is done with a window slid in: the veil goes, and the pointer shows again
+/// (unless the mouse is driving the other computer, which keeps it hidden).
+fn portal_over() {
+    winspan::veil(None);
+    crate::win::show_pointer_unless_capturing();
+}
+
 fn work_area(h: isize) -> Rect {
     unsafe {
         let mon = MonitorFromWindow(hwnd(h), MONITOR_DEFAULTTONEAREST);
@@ -234,6 +260,7 @@ pub fn release(id: u64, home: Option<f32>) {
     let was_portal = PORTAL_ON.load(Relaxed) && PORTAL_ID.load(Relaxed) == id;
     if was_portal {
         PORTAL_ON.store(false, Relaxed);
+        portal_over();
     }
     let Some(vis) = visible_rect(o.hwnd).map(rect_of) else {
         return;
@@ -280,7 +307,19 @@ pub fn portal_begin(id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
     }
     let v = rect_of(visible_rect(o.hwnd)?);
     let r = mirror::slide_in(o.work, v.w, v.h);
-    place(o.hwnd, o.off, r.x, r.y, true);
+    // A picture of the screen as it is goes over that spot first, then the window slides
+    // in under it: on this screen nothing seems to change.
+    match winspan::screen_pixels(r.x, r.y, r.w, r.h) {
+        Some(px) => winspan::veil(Some(winspan::Veil {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+            px,
+            then: Some((o.hwnd, o.off, r.x, r.y)),
+        })),
+        None => place(o.hwnd, o.off, r.x, r.y, true),
+    }
     o.slid = Some(r);
     o.seen = (r.x, r.y);
     o.dragging = false;
@@ -295,6 +334,7 @@ pub fn portal_end() {
     if !PORTAL_ON.swap(false, Relaxed) {
         return;
     }
+    portal_over();
     let id = PORTAL_ID.load(Relaxed);
     if let Ok(mut all) = OWNED.lock() {
         if let Some(o) = all.iter_mut().find(|o| o.hwnd as u64 == id) {
@@ -374,8 +414,8 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
         if let Ok(mut all) = OWNED.lock() {
             all.retain(|o| o.hwnd != h);
         }
-        if PORTAL_ID.load(Relaxed) == id {
-            PORTAL_ON.store(false, Relaxed);
+        if PORTAL_ID.load(Relaxed) == id && PORTAL_ON.swap(false, Relaxed) {
+            portal_over();
         }
         prints.remove(&h);
         emit(CaptureEvent::MirrorGone { id });
@@ -428,7 +468,7 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
                             done: true,
                         });
                         let r = mirror::slide_in(o.work, vis.w, vis.h);
-                        place(h, o.off, r.x, r.y, true);
+                        place_for_pointer(h, o.off, r.x, r.y);
                         let (cx, cy) = cursor();
                         unsafe {
                             let _ = SetCursorPos(cx + r.x - vis.x, cy + r.y - vis.y);
@@ -638,9 +678,25 @@ pub fn move_by(id: u64, dx: i32, dy: i32, done: bool) -> Option<f32> {
     if !done {
         return None;
     }
-    let along = mirror::home_along(rect, vscreen(), entry)?;
-    close(id);
-    Some(along)
+    match mirror::home_along(rect, vscreen(), entry) {
+        Some(along) => {
+            close(id);
+            Some(along)
+        }
+        None => {
+            // Let go anywhere else: it stays where it can be reached, never off screen.
+            let kept = mirror::first_place(rect, vscreen());
+            if kept != rect {
+                if let Ok(mut shown) = SHOWN.lock() {
+                    if let Some(m) = shown.iter_mut().find(|m| m.id == id) {
+                        m.rect = kept;
+                    }
+                }
+                post(Cmd::Move(id, kept));
+            }
+            None
+        }
+    }
 }
 
 pub fn at_cursor() -> Option<(u64, i32, i32)> {
@@ -682,6 +738,17 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_MOUSEACTIVATE => LRESULT(3), // MA_NOACTIVATE
+        WM_CLOSE => {
+            // Closed from its taskbar button: the window goes back to its computer.
+            let id = SHOWN
+                .lock()
+                .ok()
+                .and_then(|s| s.iter().find(|m| m.hwnd == h.0 as isize).map(|m| m.id));
+            if let Some(id) = id {
+                emit(CaptureEvent::MirrorDismissed { id });
+            }
+            LRESULT(0)
+        }
         _ => DefWindowProcW(h, msg, wp, lp),
     }
 }
@@ -808,11 +875,13 @@ fn work() {
                 let Ok(module) = GetModuleHandleW(None) else {
                     continue;
                 };
+                // A taskbar button of its own: covered by other windows, it can always be
+                // brought back to the front (or closed, which sends the window home).
                 let made = CreateWindowExW(
-                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    WS_EX_APPWINDOW,
                     w!("TandemMirror"),
-                    w!("CubeCursor mirror"),
-                    WS_POPUP | WS_VISIBLE,
+                    w!("Window from the other computer (CubeCursor)"),
+                    WS_POPUP | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX,
                     r.x,
                     r.y,
                     r.w,

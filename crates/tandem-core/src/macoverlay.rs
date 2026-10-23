@@ -131,6 +131,7 @@ struct Ui {
     pic: Option<Retained<NSWindow>>,
     arrow: Option<Retained<NSWindow>>,
     glow: Option<Retained<NSWindow>>,
+    veil: Option<Retained<NSWindow>>,
     mirrors: HashMap<u64, Retained<NSWindow>>,
 }
 
@@ -443,6 +444,32 @@ pub fn mirror_raise(id: u64) {
     on_main(move |_, ui| {
         if let Some(win) = ui.mirrors.get(&id) {
             win.orderFrontRegardless();
+        }
+    });
+}
+
+/// Second-monitor mode: a picture of the screen as it was over a window slid in for the
+/// pointer (above ordinary windows, below the menu bar and our bar; clicks go through),
+/// so it isn't seen on both computers at once. `None` takes it away.
+pub fn veil(v: Option<(Rect, Pic)>) {
+    on_main(move |mtm, ui| match v {
+        Some((r, (px, w, h))) => {
+            let rect = ns_rect(r.x as f64, r.y as f64, r.w as f64, r.h as f64);
+            // Floating level: over the program's window, under everything of ours.
+            let win = ui
+                .veil
+                .get_or_insert_with(|| make_window(mtm, rect, true, 3));
+            win.setFrame_display(rect, false);
+            if let Some(img) = cg_image(px, w, h) {
+                set_picture(win, &img);
+            }
+            win.setAlphaValue(1.0);
+            win.orderFrontRegardless();
+        }
+        None => {
+            if let Some(w) = ui.veil.as_ref() {
+                w.orderOut(None);
+            }
         }
     });
 }

@@ -91,6 +91,13 @@ pub(crate) fn hide_pointer(on: bool) {
         let _ = tx.send(on);
     }
 }
+/// Shows the pointer again, unless input is being captured for another computer (then it
+/// stays hidden until that ends).
+pub(crate) fn show_pointer_unless_capturing() {
+    if !CAPTURING.load(Relaxed) {
+        hide_pointer(false);
+    }
+}
 /// The edge bit the cursor is currently pushing against (0 = none).
 static AT_BIT: AtomicU8 = AtomicU8::new(0);
 const EDGE_LEFT: u8 = 1;
@@ -1553,11 +1560,16 @@ const CURSOR_IDS: [u32; 13] = [
 
 /// Liquid Glass: leave window `hwnd` out of screen captures (so it can photograph what is
 /// behind itself), or put it back in.
-pub fn exclude_from_capture(hwnd: isize, on: bool) {
+/// True if it really is left out: older Windows can't, and then the bar would photograph
+/// its own words and show them again behind themselves, so it must not see through.
+pub fn exclude_from_capture(hwnd: isize, on: bool) -> bool {
     // WDA_EXCLUDEFROMCAPTURE (Windows 10 2004 and later); WDA_NONE.
-    let affinity = if on { WINDOW_DISPLAY_AFFINITY(0x11) } else { WINDOW_DISPLAY_AFFINITY(0) };
+    let want = if on { 0x11 } else { 0 };
+    let h = HWND(hwnd as *mut core::ffi::c_void);
     unsafe {
-        let _ = SetWindowDisplayAffinity(HWND(hwnd as *mut core::ffi::c_void), affinity);
+        let _ = SetWindowDisplayAffinity(h, WINDOW_DISPLAY_AFFINITY(want));
+        let mut got = 0u32;
+        GetWindowDisplayAffinity(h, &mut got).is_ok() && got == want
     }
 }
 

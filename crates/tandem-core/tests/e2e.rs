@@ -1709,3 +1709,73 @@ async fn undo_brings_a_mirrored_window_home() {
     .await;
     until("gone on A", || a.plat.st.lock().unwrap().mirrors_closed == vec![7]).await;
 }
+
+// ------------------------------------------------------------------ fixes: screens of other sizes, bringing windows back
+
+#[tokio::test]
+async fn a_window_keeps_its_size_on_a_screen_of_another_resolution() {
+    let a = start("PC-A").await;
+    let b = start("PC-B").await;
+    // A's screen has half as many pixels down (a smaller or lower-resolution display).
+    a.plat.st.lock().unwrap().screen.height = 400;
+    for s in [&a, &b] {
+        s.node.set_move_apps(true);
+    }
+    until("options set", || {
+        a.plat.st.lock().unwrap().move_apps && b.plat.st.lock().unwrap().move_apps
+    })
+    .await;
+    pair(&a, &b).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    drag_across(&b, app("notepad.exe", None), 700);
+    until("A shows it", || a.plat.st.lock().unwrap().span_frames == 1).await;
+    let last = a.plat.st.lock().unwrap().span_shown.last().copied().unwrap();
+    // Everything at half size: it takes the same share of A's screen as of B's.
+    assert_eq!((last.crossed, last.w, last.h, last.gx, last.gy), (350, 600, 400, 150, 8));
+    // Let go there: the pointer comes in where it held the window, not at the edge.
+    until("B drives A", || b.node.snapshot().control == "remote").await;
+    // (It held it 150 px in, but only 350 px are over: the pointer stays on screen.)
+    let (x, y) = a.plat.st.lock().unwrap().cursor;
+    assert_eq!((x, y), (0, 100 + 8));
+}
+
+#[tokio::test]
+async fn bring_windows_back_works_from_either_computer() {
+    let (a, b) = mirrored().await;
+    until("A counts it", || a.node.snapshot().windows_away == 1).await;
+    until("B counts it", || b.node.snapshot().windows_away == 1).await;
+    // From the computer showing it (where it may have got lost behind other windows).
+    a.node.bring_windows_back();
+    until("home on B", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, None)]
+    })
+    .await;
+    assert!(a.plat.st.lock().unwrap().mirrors.is_empty());
+    until("nothing across", || {
+        a.node.snapshot().windows_away == 0 && b.node.snapshot().windows_away == 0
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn closing_the_mirror_sends_the_window_home() {
+    let (a, b) = mirrored().await;
+    a.plat.emit(CaptureEvent::MirrorDismissed { id: 7 });
+    until("home on B", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, None)]
+    })
+    .await;
+    assert_eq!(a.plat.st.lock().unwrap().mirrors_closed, vec![7]);
+}
+
+#[tokio::test]
+async fn bring_windows_back_from_the_owner() {
+    let (a, b) = mirrored().await;
+    b.node.bring_windows_back();
+    until("home on B", || {
+        b.plat.st.lock().unwrap().mirror_released == vec![(7, None)]
+    })
+    .await;
+    until("gone on A", || a.plat.st.lock().unwrap().mirrors_closed == vec![7]).await;
+    until("B says so", || notice_has(&b, "Brought the window back")).await;
+}

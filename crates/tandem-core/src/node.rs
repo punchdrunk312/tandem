@@ -205,6 +205,10 @@ pub struct Snapshot {
     pub notice: Option<String>,
     /// The last move that can still be undone ("Discord to Studio-PC"), for two minutes.
     pub undo: Option<String>,
+    /// Second-monitor mode: windows shown across (ours over there and theirs here), for
+    /// the "bring windows back" button.
+    #[serde(default)]
+    pub windows_away: u32,
     /// How this computer is doing.
     pub me: DeviceInfo,
     /// This computer's colour ("#rrggbb").
@@ -261,6 +265,8 @@ struct Status {
     notice: Option<(String, Instant)>,
     /// What the last move was (for the undo button), and when.
     undo: Option<(String, Instant)>,
+    /// Windows shown across (see `Snapshot::windows_away`).
+    windows: u32,
     carry: Option<CarryView>,
     /// This computer has a valid licence pass (or no licence is needed).
     licensed: bool,
@@ -413,6 +419,7 @@ impl Shared {
                 .as_ref()
                 .filter(|(_, at)| at.elapsed() < UNDO_FOR)
                 .map(|(m, _)| m.clone()),
+            windows_away: st.windows,
             carry: st.carry.clone(),
             me: devs.me.clone(),
             my_color: css(device_rgb(&per.device_id)),
@@ -549,6 +556,7 @@ enum Cmd {
     SetMoveApps(bool),
     SetMonitorMode(bool),
     Undo,
+    BringBack,
     SetLicensePass(Option<String>),
     Power {
         peer_id: String,
@@ -736,6 +744,9 @@ impl Node {
             span_in: None,
             mirrors_out: HashMap::new(),
             mirrors_in: HashMap::new(),
+            mirror_k: HashMap::new(),
+            span_view: None,
+            span_drop: None,
             portal: None,
             last_move: None,
             received: VecDeque::new(),
@@ -804,6 +815,10 @@ impl Node {
     /// Undo the last move (the bar's undo button).
     pub fn undo(&self) {
         self.cmd(Cmd::Undo);
+    }
+    /// Second-monitor mode: every window shown across goes back to its own computer.
+    pub fn bring_windows_back(&self) {
+        self.cmd(Cmd::BringBack);
     }
     pub fn set_monitor_mode(&self, on: bool) {
         self.cmd(Cmd::SetMonitorMode(on));
@@ -1111,6 +1126,8 @@ struct Session {
     license_seen: bool,
     /// When the last ping went out (for the round trip).
     ping_at: Option<Instant>,
+    /// Its screen's size in pixels, once it said.
+    screen: Option<(i32, i32)>,
 }
 
 impl Drop for Session {
@@ -1175,6 +1192,13 @@ struct Actor {
     mirrors_out: HashMap<u64, String>,
     /// Other computers' windows shown here (id → that computer).
     mirrors_in: HashMap<u64, String>,
+    /// How much bigger each of those is shown here than it really is (screens of other
+    /// resolutions): positions on it are scaled by this both ways.
+    mirror_k: HashMap<u64, f32>,
+    /// Where the window coming over was last shown here (scaled to this screen).
+    span_view: Option<SpanView>,
+    /// A window was just let go over here: the pointer comes in where it held it.
+    span_drop: Option<(String, (i32, i32), Instant)>,
     /// The pointer is on a mirrored window.
     portal: Option<Portal>,
     /// The last move, for the undo button.
@@ -1536,6 +1560,7 @@ impl Actor {
 
     fn on_tick(&mut self) {
         self.ticks += 1;
+        self.sync_windows();
         if self.ticks % 3 == 1 {
             self.read_device();
         }
@@ -1864,10 +1889,19 @@ impl Actor {
                 peer_licensed: false,
                 license_seen: false,
                 ping_at: None,
+                screen: None,
             },
         );
         let pass = self.my_pass_if_valid();
         self.send_to(&pid, Msg::License { pass });
+        let scr = self.sh.platform.screen();
+        self.send_to(
+            &pid,
+            Msg::Screen {
+                w: scr.width,
+                h: scr.height,
+            },
+        );
         let me = self.sh.devices.lock().unwrap().me.clone();
         self.send_to(&pid, Msg::Status(me));
         self.sh.status.lock().unwrap().error = None;
@@ -1977,6 +2011,15 @@ impl Actor {
                     .find(|(_, s)| s.side == edge)
                     .map(|(id, _)| id.clone());
                 log::info!("app span: a {w}x{h} window crosses the {edge:?} edge");
+                // The pointer may drive it on across the whole other screen.
+                let room = to.as_ref().and_then(|t| self.sessions.get(t)).and_then(|s| {
+                    let (pw, ph) = s.screen?;
+                    let mine = self.sh.platform.screen();
+                    let k = crate::span::scale_for(edge, (mine.width, mine.height), (pw, ph));
+                    let depth = if matches!(edge, Edge::Top | Edge::Bottom) { ph } else { pw };
+                    Some((depth as f32 / k) as i32 - 1)
+                });
+                crate::span::set_room(room.unwrap_or(0));
                 if let Some(to) = to {
                     self.send_to(&to, Msg::SpanBegin { w, h });
                     self.span_out = Some(to);
@@ -2082,6 +2125,12 @@ impl Actor {
             CaptureEvent::MirrorMoved { id, dx, dy, done } => {
                 if let Some(to) = self.mirrors_out.get(&id) {
                     self.send_to(&to.clone(), Msg::MirrorMoved { id, dx, dy, done });
+                }
+            }
+            CaptureEvent::MirrorDismissed { id } => {
+                // Closed here by the person (its taskbar button): the window goes home.
+                if self.send_back(id) {
+                    log::info!("mirror: window {id} closed here: it goes back");
                 }
             }
             CaptureEvent::MirrorGone { id } => {
@@ -2235,24 +2284,114 @@ impl Actor {
                 self.notify(&format!("Took the files back from {who}"));
             }
             Undo::Mirror { peer, id } => {
-                if self.mirrors_out.remove(&id).is_none() {
-                    return;
+                if self.bring_home(id) {
+                    self.send_to(&peer, Msg::MirrorEnd { id });
+                    self.notify("Brought the window back");
                 }
-                if self.portal.as_ref().is_some_and(|p| p.owner && p.id == id) {
-                    match self.control.clone() {
-                        // Our own mouse is on the real window: it stays here with it.
-                        Control::Local => self.clear_portal(),
-                        // Their mouse: it goes back to them.
-                        _ => {
-                            let at = self.portal.as_ref().map(|p| p.at).unwrap_or((0, 0));
-                            self.portal_out_remote(at.0, at.1);
-                        }
-                    }
-                }
-                self.sh.platform.mirror_release(id, None);
-                self.send_to(&peer, Msg::MirrorEnd { id });
-                self.notify("Brought the window back");
             }
+        }
+    }
+
+    /// How much bigger things from `pid` look here (screens of other resolutions).
+    fn peer_k(&self, pid: &str) -> f32 {
+        let Some(sess) = self.sessions.get(pid) else {
+            return 1.0;
+        };
+        let Some(theirs) = sess.screen else {
+            return 1.0;
+        };
+        let mine = self.sh.platform.screen();
+        crate::span::scale_for(sess.side, theirs, (mine.width, mine.height))
+    }
+
+    /// A window from `from` was just let go over here: where the pointer comes in.
+    fn take_drop(&mut self, from: &str) -> Option<(i32, i32)> {
+        let (p, at, t) = self.span_drop.take()?;
+        (p == from && t.elapsed() < Duration::from_secs(3)).then_some(at)
+    }
+
+    /// Mirror `id`'s scale (1 if unknown).
+    fn mk(&self, id: u64) -> f32 {
+        self.mirror_k.get(&id).copied().unwrap_or(1.0)
+    }
+
+    /// Our window `id`, shown on another computer, comes back on this screen (the other
+    /// computer is told by the caller, if it needs telling). False if it wasn't shown.
+    fn bring_home(&mut self, id: u64) -> bool {
+        if self.mirrors_out.remove(&id).is_none() {
+            return false;
+        }
+        if self.portal.as_ref().is_some_and(|p| p.owner && p.id == id) {
+            match self.control.clone() {
+                // Our own mouse is on the real window: it stays here with it.
+                Control::Local => self.clear_portal(),
+                // Their mouse: it goes back to them.
+                _ => {
+                    let at = self.portal.as_ref().map(|p| p.at).unwrap_or((0, 0));
+                    self.portal_out_remote(at.0, at.1);
+                }
+            }
+        }
+        self.sh.platform.mirror_release(id, None);
+        self.sync_windows();
+        true
+    }
+
+    /// Another computer's window `id`, shown here, stops being shown and goes back to it.
+    fn send_back(&mut self, id: u64) -> bool {
+        let Some(owner) = self.mirrors_in.remove(&id) else {
+            return false;
+        };
+        self.mirror_k.remove(&id);
+        if self.portal.as_ref().is_some_and(|p| !p.owner && p.id == id) {
+            let (x, y) = self.sh.platform.cursor_pos();
+            match self.control.clone() {
+                // Our mouse was driving their window: it is ours again, here.
+                Control::Remote { peer, .. } if peer == owner => {
+                    self.portal = None;
+                    self.sh.platform.mirror_cursor(id, None);
+                    self.sh.platform.end_capture(x, y);
+                    self.set_control(Control::Local);
+                }
+                _ => self.clear_portal(),
+            }
+        }
+        self.sh.platform.mirror_close(id);
+        self.send_to(&owner, Msg::MirrorClosed { id });
+        self.sync_windows();
+        true
+    }
+
+    /// "Bring windows back": every window shown across goes home, both ways.
+    fn bring_all_back(&mut self) {
+        let mut n = 0;
+        for (id, peer) in self.mirrors_out.clone() {
+            if self.bring_home(id) {
+                self.send_to(&peer, Msg::MirrorEnd { id });
+                n += 1;
+            }
+        }
+        for id in self.mirrors_in.keys().copied().collect::<Vec<_>>() {
+            if self.send_back(id) {
+                n += 1;
+            }
+        }
+        self.notify(&match n {
+            0 => "No windows are across".to_string(),
+            1 => "Brought the window back".to_string(),
+            n => format!("Brought {n} windows back"),
+        });
+    }
+
+    /// Keeps the bar's count of windows shown across up to date.
+    fn sync_windows(&self) {
+        let n = (self.mirrors_out.len() + self.mirrors_in.len()) as u32;
+        let changed = {
+            let mut st = self.sh.status.lock().unwrap();
+            std::mem::replace(&mut st.windows, n) != n
+        };
+        if changed {
+            self.sh.publish();
         }
     }
 
@@ -2317,7 +2456,15 @@ impl Actor {
             at: (rx, ry),
         });
         self.sh.platform.mirror_cursor(id, Some((rx, ry)));
-        self.send_to(&peer, Msg::PortalEnter { id, rx, ry });
+        let k = self.mk(id);
+        self.send_to(
+            &peer,
+            Msg::PortalEnter {
+                id,
+                rx: crate::span::sc(rx, 1.0 / k),
+                ry: crate::span::sc(ry, 1.0 / k),
+            },
+        );
     }
 
     /// The mirror end, driven by the owner's mouse: it went onto the owner's window.
@@ -2331,7 +2478,15 @@ impl Actor {
             at: (rx, ry),
         });
         self.sh.platform.mirror_cursor(id, Some((rx, ry)));
-        self.send_to(from, Msg::PortalEnter { id, rx, ry });
+        let k = self.mk(id);
+        self.send_to(
+            from,
+            Msg::PortalEnter {
+                id,
+                rx: crate::span::sc(rx, 1.0 / k),
+                ry: crate::span::sc(ry, 1.0 / k),
+            },
+        );
     }
 
     /// The owner: the pointer comes onto our window `id`, shown on `from`.
@@ -2349,6 +2504,8 @@ impl Actor {
             Control::Remote { peer, .. } if ours && peer == from => {
                 if let Some((x, y)) = plat.portal_begin(id, rx, ry) {
                     plat.end_capture(x, y);
+                    // The pointer is seen on the mirror, over there: not here as well.
+                    plat.pointer_hidden(true);
                     self.set_control(Control::Local);
                     self.portal = Some(portal);
                     return;
@@ -2359,6 +2516,7 @@ impl Actor {
                 let side = self.sessions.get(from).map(|s| s.side);
                 if let (Some(ret), Some((x, y))) = (side, plat.portal_begin(id, rx, ry)) {
                     plat.set_cursor(x, y);
+                    plat.pointer_hidden(true);
                     self.set_control(Control::Controlled {
                         peer: from.to_string(),
                         ret,
@@ -2421,6 +2579,8 @@ impl Actor {
             return;
         }
         self.portal = None;
+        let k = self.mk(id);
+        let (rx, ry) = (crate::span::sc(rx, k), crate::span::sc(ry, k));
         let (x, y) = plat
             .mirror_point(id, rx, ry)
             .unwrap_or_else(|| plat.cursor_pos());
@@ -2531,7 +2691,9 @@ impl Actor {
                         self.held = None;
                     }
                     self.sync_carry();
-                    let (x, y) = edge_point(plat.screen(), edge.opposite(), frac);
+                    let (x, y) = self
+                        .take_drop(from)
+                        .unwrap_or_else(|| edge_point(plat.screen(), edge.opposite(), frac));
                     plat.set_cursor(x, y);
                     let me = self.sh.me.id.clone();
                     self.glow(edge.opposite(), frac, &me);
@@ -2546,7 +2708,9 @@ impl Actor {
             Msg::Leave { frac } => {
                 if let Control::Remote { peer, edge } = self.control.clone() {
                     if peer == from {
-                        let (x, y) = edge_point(plat.screen(), edge, frac);
+                        let (x, y) = self
+                            .take_drop(from)
+                            .unwrap_or_else(|| edge_point(plat.screen(), edge, frac));
                         plat.end_capture(x, y);
                         let me = self.sh.me.id.clone();
                         self.glow(edge, frac, &me);
@@ -2916,14 +3080,22 @@ impl Actor {
             }
             Msg::MirrorStart { id, w, h } => {
                 let entry = self.sessions.get(from).map(|s| s.side);
+                // Shown at the size it has on its own screen, relative to that screen.
+                let k = self.peer_k(from);
+                let (sw, sh) = (
+                    crate::span::sc(w as i32, k).max(1) as u32,
+                    crate::span::sc(h as i32, k).max(1) as u32,
+                );
                 let ok = w > 0
                     && h > 0
                     && w <= 16384
                     && h <= 16384
                     && plat.mirror_supported()
-                    && entry.is_some_and(|e| plat.mirror_create(id, w, h, e));
+                    && entry.is_some_and(|e| plat.mirror_create(id, sw, sh, e));
                 if ok {
                     self.mirrors_in.insert(id, from.to_string());
+                    self.mirror_k.insert(id, k);
+                    self.sync_windows();
                 } else {
                     plat.span_hide(0);
                     self.send_to(from, Msg::MirrorEnd { id });
@@ -2931,12 +3103,18 @@ impl Actor {
             }
             Msg::MirrorFrame { id, w, h, jpeg } => {
                 if self.mirrors_in.get(&id).map(String::as_str) == Some(from) {
-                    plat.mirror_frame(id, w, h, jpeg);
+                    let k = self.mk(id);
+                    let (sw, sh) = (
+                        crate::span::sc(w as i32, k).max(1) as u32,
+                        crate::span::sc(h as i32, k).max(1) as u32,
+                    );
+                    plat.mirror_frame(id, sw, sh, jpeg);
                 }
             }
             Msg::MirrorEnd { id } => {
                 if self.mirrors_in.get(&id).map(String::as_str) == Some(from) {
                     self.mirrors_in.remove(&id);
+                    self.mirror_k.remove(&id);
                     if self.portal.as_ref().is_some_and(|p| !p.owner && p.id == id) {
                         self.clear_portal();
                     }
@@ -2954,11 +3132,13 @@ impl Actor {
             Msg::PortalEnter { id, rx, ry } => self.portal_enter(from, id, rx, ry),
             Msg::PortalLeave { id, rx, ry } => self.portal_leave(from, id, rx, ry),
             Msg::PortalCursor { id, rx, ry } => {
+                let k = self.mk(id);
                 if let Some(p) = self
                     .portal
                     .as_mut()
                     .filter(|p| !p.owner && p.peer == from && p.id == id)
                 {
+                    let (rx, ry) = (crate::span::sc(rx, k), crate::span::sc(ry, k));
                     p.at = (rx, ry);
                     plat.mirror_cursor(id, Some((rx, ry)));
                 }
@@ -2967,6 +3147,8 @@ impl Actor {
                 if self.mirrors_in.get(&id).map(String::as_str) != Some(from) {
                     return;
                 }
+                let k = self.mk(id);
+                let (dx, dy) = (crate::span::sc(dx, k), crate::span::sc(dy, k));
                 if let Some(along) = plat.mirror_move(id, dx, dy, done) {
                     // Dragged back over the edge: the window goes home.
                     self.mirrors_in.remove(&id);
@@ -3025,6 +3207,19 @@ impl Actor {
                     }
                 }
             }
+            Msg::Screen { w, h } => {
+                if (1..=65536).contains(&w) && (1..=65536).contains(&h) {
+                    if let Some(sess) = self.sessions.get_mut(from) {
+                        sess.screen = Some((w, h));
+                    }
+                }
+            }
+            Msg::MirrorClosed { id } => {
+                if self.mirrors_out.get(&id).map(String::as_str) == Some(from) {
+                    log::info!("mirror: window {id} was closed over there: it comes back");
+                    self.bring_home(id);
+                }
+            }
             Msg::SpanBegin { w, h } => {
                 if w == 0 || h == 0 || w > 16384 || h > 16384 {
                     return;
@@ -3046,15 +3241,20 @@ impl Actor {
                 if p != from || entry.is_corner() || !along.is_finite() {
                     return;
                 }
-                self.sh.platform.span_show(SpanView {
-                    entry,
-                    crossed,
-                    along: along.clamp(-1.0, 2.0),
-                    w,
-                    h,
-                    gx,
-                    gy,
-                });
+                let v = crate::span::scale_view(
+                    SpanView {
+                        entry,
+                        crossed,
+                        along: along.clamp(-1.0, 2.0),
+                        w,
+                        h,
+                        gx,
+                        gy,
+                    },
+                    self.peer_k(from),
+                );
+                self.span_view = Some(v);
+                self.sh.platform.span_show(v);
             }
             Msg::SpanFrame(jpeg) => {
                 if self.span_in.as_ref().is_some_and(|(p, ..)| p == from) {
@@ -3064,6 +3264,11 @@ impl Actor {
             Msg::SpanEnd { moved } => {
                 if self.span_in.as_ref().is_some_and(|(p, ..)| p == from) {
                     self.span_in = None;
+                    // Let go over here: the pointer comes in where it was holding it.
+                    if let Some(v) = self.span_view.take().filter(|_| moved) {
+                        let at = crate::span::pointer_at(&v, self.sh.platform.screen());
+                        self.span_drop = Some((from.to_string(), at, Instant::now()));
+                    }
                     // Moving: keep the picture up while the real program opens.
                     self.sh.platform.span_hide(if moved { 6000 } else { 0 });
                 }
@@ -3276,6 +3481,7 @@ impl Actor {
                 self.sh.publish();
             }
             Cmd::Undo => self.undo_last(),
+            Cmd::BringBack => self.bring_all_back(),
             Cmd::SetMonitorMode(on) => {
                 let spans = {
                     let mut p = self.sh.persisted.lock().unwrap();

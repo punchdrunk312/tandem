@@ -190,9 +190,10 @@ mod sys {
 
     /// Liquid Glass: the island stays out of screen captures so it can photograph what is
     /// behind itself.
-    pub fn set_capture_excluded(win: &WebviewWindow, on: bool) {
-        if let Some(hwnd) = hwnd_of(win) {
-            tandem_core::win::exclude_from_capture(hwnd.0 as isize, on);
+    pub fn set_capture_excluded(win: &WebviewWindow, on: bool) -> bool {
+        match hwnd_of(win) {
+            Some(hwnd) => tandem_core::win::exclude_from_capture(hwnd.0 as isize, on),
+            None => false,
         }
     }
 
@@ -239,16 +240,23 @@ mod sys {
         let _ = win.show();
     }
     pub fn make_non_activating(_: &WebviewWindow) {}
-    pub fn set_capture_excluded(_: &WebviewWindow, _: bool) {}
+    pub fn set_capture_excluded(_: &WebviewWindow, _: bool) -> bool {
+        true
+    }
 }
 
 /// Liquid Glass on or off: the bar photographs what is behind it while it is open (and,
 /// on Windows, stays out of screenshots, which it can't be in and see through at once).
 pub fn set_glass(app: &AppHandle, gate: &Arc<PollGate>, on: bool) {
-    gate.glass.store(on, Ordering::Relaxed);
+    let mut see_through = on;
     if let Some(win) = window(app) {
-        sys::set_capture_excluded(&win, on);
+        if !sys::set_capture_excluded(&win, on) && on {
+            // It would photograph itself: words over its own words. Frosted glass instead.
+            log::warn!("glass: this Windows can't leave the bar out of captures: frosted glass");
+            see_through = false;
+        }
     }
+    gate.glass.store(see_through, Ordering::Relaxed);
     if on {
         glass::start(app.clone(), gate.clone());
     }

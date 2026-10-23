@@ -383,7 +383,7 @@ pub fn mouse(dx: i32, dy: i32) {
     if o.phase != Phase::Driven {
         return;
     }
-    let (vx, vy) = o.geo.clamp(o.vx + dx, o.vy + dy);
+    let (vx, vy) = o.geo.clamp_room(o.vx + dx, o.vy + dy, span::room());
     if (vx, vy) == (o.vx, o.vy) {
         return;
     }
@@ -645,6 +645,109 @@ enum Cmd {
     Hide(u32),
     Cursor(Option<(i32, i32)>),
     Glow(Edge, f32, [u8; 3]),
+    Veil(Option<Veil>),
+}
+
+/// Second-monitor mode: a picture of the screen as it was, laid over a window slid onto
+/// this screen for the pointer, so it isn't seen on both computers at once. Clicks go
+/// through it to the window. `then`: the window to slide in under it once it is up
+/// (window, invisible-border offset, where its visible part goes).
+pub(crate) struct Veil {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub px: Vec<u8>,
+    pub then: Option<(isize, (i32, i32), i32, i32)>,
+}
+
+static VEIL_HWND: AtomicIsize = AtomicIsize::new(0);
+static VEIL_ON: AtomicBool = AtomicBool::new(false);
+
+/// Lays a veil (see `Veil`).
+pub(crate) fn veil(v: Option<Veil>) {
+    if v.is_none() && !VEIL_ON.load(Relaxed) {
+        return;
+    }
+    VEIL_ON.store(v.is_some(), Relaxed);
+    post(Cmd::Veil(v));
+}
+
+/// The veil's window while it is up (to keep a window just under it).
+pub(crate) fn veil_window() -> Option<isize> {
+    let h = VEIL_HWND.load(Relaxed);
+    (VEIL_ON.load(Relaxed) && h != 0).then_some(h)
+}
+
+/// What is on screen in a rectangle, as opaque BGRA.
+pub(crate) fn screen_pixels(x: i32, y: i32, w: i32, h: i32) -> Option<Vec<u8>> {
+    if w <= 0 || h <= 0 || w > 8192 || h > 8192 {
+        return None;
+    }
+    unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let out = dib(screen, w, h).and_then(|(bmp, bits)| {
+            let old = SelectObject(mem, bmp.into());
+            let ok = BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT).is_ok();
+            let px = ok.then(|| {
+                let mut v = std::slice::from_raw_parts(bits, (w * h * 4) as usize).to_vec();
+                for p in v.as_chunks_mut::<4>().0 {
+                    p[3] = 255;
+                }
+                v
+            });
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            px
+        });
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        out
+    }
+}
+
+/// Our own always-on-top windows (the bar) go back above everything, the veil included.
+fn raise_own(except: &[isize]) {
+    struct Ctx<'a> {
+        pid: u32,
+        except: &'a [isize],
+        found: Vec<isize>,
+    }
+    unsafe extern "system" fn each(h: HWND, lp: LPARAM) -> windows::core::BOOL {
+        let ctx = &mut *(lp.0 as *mut Ctx);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        if pid == ctx.pid
+            && IsWindowVisible(h).as_bool()
+            && ex & WS_EX_TOPMOST.0 != 0
+            && !ctx.except.contains(&(h.0 as isize))
+        {
+            ctx.found.push(h.0 as isize);
+        }
+        TRUE
+    }
+    unsafe {
+        let mut ctx = Ctx {
+            pid: windows::Win32::System::Threading::GetCurrentProcessId(),
+            except,
+            found: Vec::new(),
+        };
+        let _ = EnumWindows(Some(each), LPARAM(&mut ctx as *mut Ctx as isize));
+        // EnumWindows lists from the top: raise the lowest first to keep their order.
+        for h in ctx.found.into_iter().rev() {
+            let _ = SetWindowPos(
+                hwnd(h),
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
 }
 
 static QUEUE: Mutex<VecDeque<Cmd>> = Mutex::new(VecDeque::new());
@@ -762,7 +865,8 @@ fn ui_thread() {
             .map(|h| h.0 as isize)
             .unwrap_or(0)
         };
-        let (pic, arrow, glow) = (make(), make(), make());
+        let (pic, arrow, glow, veil) = (make(), make(), make(), make());
+        VEIL_HWND.store(veil, Relaxed);
         if pic == 0 || arrow == 0 || glow == 0 {
             log::warn!("app span: cannot create the picture window");
             return;
@@ -883,6 +987,39 @@ fn work() {
                 ui.glow = Some((x, y, w, h, px, Instant::now()));
                 unsafe {
                     SetTimer(Some(hwnd(pic)), GLOW_TIMER, 15, None);
+                }
+            }
+            Cmd::Veil(v) => {
+                let vh = VEIL_HWND.load(Relaxed);
+                if vh == 0 {
+                    continue;
+                }
+                match v {
+                    Some(v) => {
+                        layered(vh, v.x, v.y, v.w, v.h, &v.px, 255);
+                        top_at(vh, v.x, v.y);
+                        raise_own(&[vh, pic, arrow]);
+                        if let Some((target, off, x, y)) = v.then {
+                            // Just under the veil: on top of everything else, unseen.
+                            unsafe {
+                                let _ = SetWindowPos(
+                                    hwnd(target),
+                                    Some(hwnd(vh)),
+                                    x - off.0,
+                                    y - off.1,
+                                    0,
+                                    0,
+                                    SWP_NOSIZE
+                                        | SWP_NOACTIVATE
+                                        | SWP_SHOWWINDOW
+                                        | SWP_ASYNCWINDOWPOS,
+                                );
+                            }
+                        }
+                    }
+                    None => unsafe {
+                        let _ = ShowWindow(hwnd(vh), SW_HIDE);
+                    },
                 }
             }
             Cmd::Cursor(None) => {

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -256,6 +256,17 @@ pub enum Msg {
     },
     /// Undo: the files of offer `id` that arrived here go to the Recycle Bin / Trash.
     UndoFiles {
+        id: u64,
+    },
+    /// The size of the sender's screen in pixels (sent when the connection comes up), so
+    /// windows crossing between screens of different resolution keep their size on screen.
+    Screen {
+        w: i32,
+        h: i32,
+    },
+    /// The mirror of window `id` was closed on the computer that showed it (or "bring my
+    /// windows back"): the real window comes back on its own computer's screen.
+    MirrorClosed {
         id: u64,
     },
 }

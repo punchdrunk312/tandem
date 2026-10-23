@@ -107,6 +107,8 @@ pub enum CaptureEvent {
     },
     /// A mirrored window of ours was closed.
     MirrorGone { id: u64 },
+    /// The person closed the mirror of another computer's window shown here.
+    MirrorDismissed { id: u64 },
 }
 
 /// A window being dragged over from another computer, as this computer shows it.

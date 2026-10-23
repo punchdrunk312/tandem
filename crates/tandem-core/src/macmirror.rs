@@ -100,6 +100,13 @@ fn work_area(b: macwin::R) -> Rect {
     }
 }
 
+/// The pointer is done with a window slid in: the veil goes, the pointer shows again
+/// (unless the mouse is driving the other computer).
+fn portal_over() {
+    crate::macoverlay::veil(None);
+    crate::mac::show_pointer_unless_captured();
+}
+
 fn park(o: &mut Owned, size: (i32, i32)) {
     let (x, y) = mirror::park_at(crate::mac::desktop_pub(), o.edge, size.0, size.1, o.parked);
     o.ax.move_to(x as f64, y as f64);
@@ -166,6 +173,7 @@ pub fn release(id: u64, home: Option<f32>) {
     let was_portal = PORTAL_ON.load(Relaxed) && PORTAL_ID.load(Relaxed) == id;
     if was_portal {
         PORTAL_ON.store(false, Relaxed);
+        portal_over();
     }
     let Some(b) = macwin::info(o.id).map(|w| r_of(w.bounds)) else {
         return;
@@ -202,6 +210,17 @@ pub fn portal_begin(id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
     }
     let b = r_of(macwin::info(o.id)?.bounds);
     let r = mirror::slide_in(o.work, b.w, b.h);
+    // A picture of the screen as it is goes over that spot first (above ordinary windows,
+    // clicks pass through), then the window slides in under it: unseen on this screen.
+    let shot = macwin::screen(macwin::R {
+        x: r.x as f64,
+        y: r.y as f64,
+        w: r.w as f64,
+        h: r.h as f64,
+    });
+    if let Some(pic) = shot {
+        crate::macoverlay::veil(Some((r, pic)));
+    }
     o.ax.move_to(r.x as f64, r.y as f64);
     // To the front, so the clicks land on it.
     o.ax.raise();
@@ -219,6 +238,7 @@ pub fn portal_end() {
     if !PORTAL_ON.swap(false, Relaxed) {
         return;
     }
+    portal_over();
     let id = PORTAL_ID.load(Relaxed);
     if let Ok(mut all) = OWNED.lock() {
         if let Some(o) = all.iter_mut().find(|o| o.id as u64 == id) {
@@ -298,8 +318,8 @@ fn look_after(wid: WindowId, prints: &mut HashMap<WindowId, u64>) {
         if let Ok(mut all) = OWNED.lock() {
             all.retain(|o| o.id != wid);
         }
-        if PORTAL_ID.load(Relaxed) == id {
-            PORTAL_ON.store(false, Relaxed);
+        if PORTAL_ID.load(Relaxed) == id && PORTAL_ON.swap(false, Relaxed) {
+            portal_over();
         }
         prints.remove(&wid);
         emit(CaptureEvent::MirrorGone { id });
@@ -472,9 +492,26 @@ pub fn move_by(id: u64, dx: i32, dy: i32, done: bool) -> Option<f32> {
         return None;
     }
     let entry = ENTRIES.lock().ok()?.iter().find(|e| e.0 == id)?.1;
-    let along = mirror::home_along(rect, crate::mac::desktop_pub(), entry)?;
-    close(id);
-    Some(along)
+    let scr = crate::mac::desktop_pub();
+    match mirror::home_along(rect, scr, entry) {
+        Some(along) => {
+            close(id);
+            Some(along)
+        }
+        None => {
+            // Let go anywhere else: it stays where it can be reached, never off screen.
+            let kept = mirror::first_place(rect, scr);
+            if kept != rect {
+                if let Ok(mut m) = crate::macoverlay::MIRRORS.lock() {
+                    if let Some(e) = m.iter_mut().find(|e| e.0 == id) {
+                        e.2 = kept;
+                    }
+                }
+                crate::macoverlay::mirror_move(id, kept);
+            }
+            None
+        }
+    }
 }
 
 pub fn at_cursor() -> Option<(u64, i32, i32)> {

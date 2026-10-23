@@ -269,6 +269,12 @@ fn post_key_pub(code: u16) {
         }
     }
 }
+/// Shows the pointer again unless the mouse is captured or holding a window.
+pub(crate) fn show_pointer_unless_captured() {
+    if !CAPTURING.load(Relaxed) && !HOLDING.load(Relaxed) {
+        pointer_hidden(false);
+    }
+}
 /// Holds the pointer still and hidden while CubeCursor moves a window across with it.
 pub(crate) fn hold_pointer_pub(on: bool) {
     HOLDING.store(on, Relaxed);

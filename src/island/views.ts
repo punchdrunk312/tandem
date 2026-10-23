@@ -122,16 +122,23 @@ export function buildHome(a: ViewActions): ViewHost {
 
       const near = s ? s.nearby.find((n) => n.paired) ?? s.paired.find((p) => p.nearby && !p.connected) : undefined;
       const live = (s?.paired ?? []).filter((p) => p.connected);
-      keyed(actions, `${s?.control}|${live.map((p) => p.id + p.name).join()}|${near?.id}|${s?.nearby.length}|${s?.undo}`, () => {
+      keyed(actions, `${s?.control}|${live.map((p) => p.id + p.name).join()}|${near?.id}|${s?.nearby.length}|${s?.undo}|${s?.windows_away}`, () => {
         if (!s) return [];
         // The last move can be taken back for a couple of minutes.
         const undo = s.undo ? [undoBtn(a, s.undo)] : [];
+        // Second-monitor mode: windows shown across can always be called home (one that
+        // got lost behind other windows, or a computer that was put away).
+        const away = s.windows_away ?? 0;
+        const back = away
+          ? [btn(away === 1 ? "Bring window back" : `Bring ${away} windows back`, () => fire("bring_windows_back"))]
+          : [];
+        const extra = [...back, ...undo].slice(0, 1);
         if (live.length > 1) {
           // One button per computer: jump straight to it.
-          return [...live.slice(0, s.undo ? 1 : 3).map((p) => btn(`→ ${p.name}`, () => fire("engage", { peerId: p.id }), "primary")), ...undo];
+          return [...live.slice(0, extra.length ? 1 : 3).map((p) => btn(`→ ${p.name}`, () => fire("engage", { peerId: p.id }), "primary")), ...extra];
         }
         if (s.connected) {
-          return [btn(`Jump to ${s.connected.name}`, () => fire("engage"), "primary"), ...(s.undo ? undo : [btn("Disconnect", () => fire("disconnect"))])];
+          return [btn(`Jump to ${s.connected.name}`, () => fire("engage"), "primary"), ...(extra.length ? extra : [btn("Disconnect", () => fire("disconnect"))])];
         }
         const out: Node[] = [];
         if (near) out.push(btn("Connect", () => fire("connect_known", { id: near.id }), "primary"));

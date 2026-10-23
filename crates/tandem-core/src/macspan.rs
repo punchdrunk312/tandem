@@ -369,7 +369,7 @@ pub fn mouse(dx: i32, dy: i32) {
     if o.phase != Phase::Driven {
         return;
     }
-    let (vx, vy) = o.geo.clamp(o.vx + dx, o.vy + dy);
+    let (vx, vy) = o.geo.clamp_room(o.vx + dx, o.vy + dy, span::room());
     if (vx, vy) == (o.vx, o.vy) {
         return;
     }

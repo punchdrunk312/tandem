@@ -297,6 +297,12 @@ fn undo_last(st: State<'_, AppState>) {
     st.node.undo();
 }
 
+/// Second-monitor mode: every window shown across goes back to its own computer.
+#[tauri::command]
+fn bring_windows_back(st: State<'_, AppState>) {
+    st.node.bring_windows_back();
+}
+
 /// Second-monitor mode: a window dragged across stays here and is shown over there.
 #[tauri::command]
 fn set_monitor_mode(st: State<'_, AppState>, on: bool) {
@@ -1181,6 +1187,7 @@ pub fn run() {
             set_move_apps,
             set_monitor_mode,
             undo_last,
+            bring_windows_back,
             send_feedback,
             updater::update_status,
             updater::update_check,

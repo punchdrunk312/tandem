@@ -432,20 +432,21 @@ html.dev body { background: #2b2f38; }
 
 :root[data-theme="glass"][data-liquid="on"] #glass { display: block; }
 :root[data-theme="glass"][data-liquid="on"] #bd {
-  filter: blur(13px) saturate(1.8) brightness(1.05);
-  transform: scale(1.03);
+  /* Blurred enough that words behind never read through the bar's own words. */
+  filter: blur(24px) saturate(1.8) brightness(1.05);
+  transform: scale(1.08);
 }
 /* The rim bends the light: a magnified, sharper copy shows along the sides and bottom. */
 :root[data-theme="glass"][data-liquid="on"] #bd-edge {
   -webkit-mask:
-    linear-gradient(90deg, rgba(0,0,0,0.9) 0, transparent 16px, transparent calc(100% - 16px), rgba(0,0,0,0.9) 100%),
-    linear-gradient(0deg, rgba(0,0,0,0.9) 0, transparent 14px);
+    linear-gradient(90deg, rgba(0,0,0,0.7) 0, transparent 9px, transparent calc(100% - 9px), rgba(0,0,0,0.7) 100%),
+    linear-gradient(0deg, rgba(0,0,0,0.7) 0, transparent 8px);
   -webkit-mask-composite: source-over;
   mask-composite: add;
 }
 :root[data-theme="glass"][data-liquid="on"] #bd-edge-img {
   transform: scale(1.1);
-  filter: blur(4px) saturate(2.1) brightness(1.14);
+  filter: blur(9px) saturate(2.1) brightness(1.14);
 }
 
 :root[data-theme="glass"][data-liquid="on"] #island {
@@ -494,6 +495,11 @@ html.dev body { background: #2b2f38; }
 :root[data-theme="glass"][data-liquid="on"][data-tone="dark"] #content { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
 :root[data-theme="glass"][data-liquid="on"][data-tone="light"] #island { background: rgba(255, 255, 255, 0.22); }
 :root[data-theme="glass"][data-liquid="on"][data-tone="dark"] #island { background: rgba(14, 18, 30, 0.22); }
+/* A veil of the glass's own tint between what is behind and the words, so text never
+   sits on text (the rim stays clear). */
+#glass::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+:root[data-theme="glass"][data-liquid="on"][data-tone="light"] #glass::after { background: rgba(250, 251, 255, 0.42); }
+:root[data-theme="glass"][data-liquid="on"][data-tone="dark"] #glass::after { background: rgba(16, 20, 32, 0.42); }
 
 /* Glass buttons, and a solid one for the main action. */
 :root[data-theme="glass"][data-liquid="on"] .btn {
