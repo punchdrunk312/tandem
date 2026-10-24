@@ -2461,6 +2461,9 @@ impl Platform for WinPlatform {
             let _ = std::thread::Builder::new()
                 .name("tandem-desktop".into())
                 .spawn(desktop_watcher_thread);
+            let _ = std::thread::Builder::new()
+                .name("tandem-power".into())
+                .spawn(|| crate::windevice::power_watch(|| emit(CaptureEvent::PowerChanged)));
         }
     }
 }

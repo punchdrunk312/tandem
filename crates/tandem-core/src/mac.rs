@@ -1235,6 +1235,9 @@ impl Platform for MacPlatform {
             let _ = std::thread::Builder::new()
                 .name("tandem-game".into())
                 .spawn(game_watcher);
+            let _ = std::thread::Builder::new()
+                .name("tandem-power".into())
+                .spawn(|| mac_device::power_watch(|| emit(CaptureEvent::PowerChanged)));
         }
     }
 }
@@ -1361,22 +1364,71 @@ mod mac_device {
     static CACHE: Mutex<Option<DeviceInfo>> = Mutex::new(None);
     static START: Once = Once::new();
 
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOPSCopyPowerSourcesInfo() -> core_foundation::base::CFTypeRef;
+        fn IOPSGetProvidingPowerSourceType(
+            blob: core_foundation::base::CFTypeRef,
+        ) -> core_foundation::string::CFStringRef;
+    }
+
+    /// On the charger? (A cheap question for IOKit, unlike running `pmset`.)
+    fn on_ac() -> Option<bool> {
+        use core_foundation::base::{CFRelease, TCFType};
+        use core_foundation::string::CFString;
+        unsafe {
+            let blob = IOPSCopyPowerSourcesInfo();
+            if blob.is_null() {
+                return None;
+            }
+            let ty = IOPSGetProvidingPowerSourceType(blob);
+            let ac = (!ty.is_null())
+                .then(|| CFString::wrap_under_get_rule(ty) == "AC Power");
+            CFRelease(blob);
+            ac
+        }
+    }
+
+    fn refresh() {
+        let mut d = std::process::Command::new("pmset")
+            .args(["-g", "batt"])
+            .output()
+            .map(|o| crate::status::parse_pmset(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or_default();
+        d.uptime_min = boot_minutes().unwrap_or(0);
+        if let Ok(mut c) = CACHE.lock() {
+            *c = Some(d);
+        }
+    }
+
     pub fn info() -> DeviceInfo {
         START.call_once(|| {
+            refresh();
             let _ = std::thread::Builder::new().name("tandem-device".into()).spawn(|| loop {
-                let mut d = std::process::Command::new("pmset")
-                    .args(["-g", "batt"])
-                    .output()
-                    .map(|o| crate::status::parse_pmset(&String::from_utf8_lossy(&o.stdout)))
-                    .unwrap_or_default();
-                d.uptime_min = boot_minutes().unwrap_or(0);
-                if let Ok(mut c) = CACHE.lock() {
-                    *c = Some(d);
-                }
                 std::thread::sleep(Duration::from_secs(30));
+                refresh();
             });
         });
         CACHE.lock().ok().and_then(|c| c.clone()).unwrap_or_default()
+    }
+
+    /// Watches the charger: plugged in or out is read again at once, not at the next
+    /// half-minute reading.
+    pub fn power_watch(changed: impl Fn()) {
+        let mut last = on_ac();
+        loop {
+            std::thread::sleep(Duration::from_millis(300));
+            let now = on_ac();
+            if now != last {
+                last = now;
+                // macOS needs a moment to say "charging" after the cable goes in.
+                refresh();
+                changed();
+                std::thread::sleep(Duration::from_millis(1500));
+                refresh();
+                changed();
+            }
+        }
     }
 
     fn boot_minutes() -> Option<u32> {

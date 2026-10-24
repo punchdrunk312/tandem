@@ -55,17 +55,22 @@ const SPECS: Record<SoundName, Spec> = {
   search: { notes: [n(0, 0.28, 500, 0.32, "sine", 940), n(0.28, 0.28, 940, 0.28, "sine", 500)] },
   rate: { notes: [n(0, 0.16, 349, 0.32, "tri", 311), n(0.18, 0.24, 294, 0.32, "tri", 262)] },
   sleep: { notes: [n(0, 0.9, 392, 0.3, "sine", 262), n(0.05, 0.85, 196, 0.15, "sine", 131)] },
-  // A felt "thunk" as the charger clicks in, then a soft shimmer rising out of it.
+  // The charger clicks in: a soft, glassy two-note chime that rings out slowly (like a
+  // phone's), on a barely-there felt tap. Calm, never a beep.
   plug: {
-    notes: [n(0, 0.14, 150, 0.7, "sine", 70), n(0.1, 0.5, 1568, 0.09, "sine", 1568, 5), n(0.16, 0.5, 2093, 0.08, "sine", 2093, 5), n(0.22, 0.6, 2637, 0.07, "sine", 2637, 4)],
-    noise: [[0, 0.05, 1800, 400, 0.22]],
+    notes: [
+      n(0, 0.06, 180, 0.22, "sine", 120),
+      n(0.0, 1.3, 1175, 0.42), n(0.0, 1.1, 2350, 0.06), n(0.0, 0.9, 3525, 0.02),
+      n(0.13, 1.6, 1760, 0.36), n(0.13, 1.3, 3520, 0.05),
+    ],
+    noise: [[0, 0.03, 1400, 600, 0.05]],
   },
-  // Let go of the charger: a gentle drop.
-  unplug: { notes: [n(0, 0.2, 620, 0.32, "sine", 330), n(0.03, 0.14, 140, 0.4, "sine", 90)], noise: [[0, 0.04, 1200, 300, 0.12]] },
+  // Let go of the charger: one soft note settling down.
+  unplug: { notes: [n(0, 0.9, 1175, 0.34, "sine", 1046), n(0, 0.7, 2350, 0.04, "sine", 2093)] },
   // Tired, not alarming: two soft falling notes.
   low: { notes: [n(0, 0.22, 587, 0.3, "tri", 560), n(0.2, 0.36, 440, 0.3, "tri", 415)] },
-  // Full: a little sparkle.
-  full: { notes: [n(0, 0.1, 1319, 0.22), n(0.07, 0.1, 1568, 0.22), n(0.14, 0.12, 1976, 0.22), n(0.21, 0.45, 2637, 0.2, "sine", 2637, 6)] },
+  // Full: three soft glass notes going up, ringing together.
+  full: { notes: [n(0, 1.4, 1175, 0.3), n(0.12, 1.4, 1480, 0.28), n(0.24, 1.6, 1760, 0.3), n(0.24, 1.2, 3520, 0.04)] },
   // A computer joins: a warm "hey", with a breath of air.
   hello: { notes: [n(0, 0.14, 523, 0.34, "sine", 540), n(0.12, 0.32, 784, 0.32, "sine", 784, 4)], noise: [[0, 0.18, 500, 2500, 0.05]] },
   bye: { notes: [n(0, 0.16, 784, 0.3, "sine", 760), n(0.14, 0.34, 523, 0.28, "sine", 500)] },

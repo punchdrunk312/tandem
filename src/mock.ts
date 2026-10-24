@@ -164,7 +164,7 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       push();
       return;
     case "update_status":
-      return { current: "0.1.0", version: hashHas("update") ? "0.2.0" : null, notes: "- Second monitor mode\n- Liquid Glass\n- Everything on Mac too" };
+      return { current: "0.2.0", version: hashHas("update") ? "0.3.0" : null, notes: "- Second monitor mode\n- Liquid Glass\n- Everything on Mac too" };
     case "update_check":
       return { current: "0.1.0", version: null, notes: "" };
     case "update_install":

@@ -326,7 +326,8 @@ export function buildMoment(a: MomentActions): ViewHost & { show(m: import("./mo
     el,
     sync() {},
     show(m) {
-      el.className = `view moment on k-${m.kind} from-${(m.side ?? "none").toLowerCase()}`;
+      // "on" comes from the bar when it really shows this view (never forced here).
+      el.className = `view moment${State.view === "moment" ? " on" : ""} k-${m.kind} from-${(m.side ?? "none").toLowerCase()}`;
       el.style.setProperty("--c", m.color);
       // Restart the entrance animation.
       void el.offsetWidth;
@@ -505,16 +506,26 @@ export interface UpdateActions {
 }
 
 /** "CubeCursor 0.2.0 is here": what's new, and a button to get it. */
-export function buildUpdate(a: UpdateActions): ViewHost & { show(u: UpdateInfo): void; busy(text: string | null): void } {
+export function buildUpdate(a: UpdateActions & { tour(): void }): ViewHost & { show(u: UpdateInfo): void; showNew(version: string, first: string, count: number): void; busy(text: string | null): void } {
   const title = h("div", { class: "u-title" });
   const notes = h("div", { class: "u-notes" });
-  const go = h("button", { class: "btn primary", text: "Update now", onclick: () => { a.blip(); a.install(); } }) as HTMLButtonElement;
+  // "Update now", or (just updated) "See what's new".
+  let fresh = false;
+  const go = h("button", { class: "btn primary", text: "Update now", onclick: () => { a.blip(); if (fresh) a.tour(); else a.install(); } }) as HTMLButtonElement;
   const later = h("button", { class: "btn", text: "Later", onclick: () => { a.blip(); a.later(); } });
   const el = h("div", { class: "view update" }, h("div", { class: "u-text" }, title, notes, h("div", { class: "u-row" }, go, later)));
   return {
     el,
     sync() {},
+    showNew(version, first, count) {
+      fresh = true;
+      title.textContent = `New in CubeCursor ${version}`;
+      notes.textContent = count > 1 ? `${first}, and ${count - 1} more.` : first;
+      go.disabled = false;
+      go.textContent = "See what's new";
+    },
     show(u) {
+      fresh = false;
       title.textContent = `CubeCursor ${u.version} is here`;
       // The first couple of lines of what's new.
       notes.textContent = u.notes.split("\n").map((l) => l.replace(/^[-*•]\s*/, "").trim()).filter(Boolean).slice(0, 2).join(" · ") || "Fresh improvements and fixes.";

@@ -15,6 +15,8 @@ export interface Moment {
   color: string;
   device: DeviceInfo | null;
   acc?: { name: string; battery: number };
+  /** Its sound already played, the moment it happened. */
+  chimed?: boolean;
 }
 
 interface Seen {

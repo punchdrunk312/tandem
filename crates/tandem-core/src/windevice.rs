@@ -64,6 +64,26 @@ fn cpu_percent() -> u8 {
     pct as u8
 }
 
+/// Watches the charger: plugged in or out is noticed within a quarter of a second (asking
+/// Windows costs next to nothing), not at the next regular reading a few seconds later.
+pub fn power_watch(changed: impl Fn()) {
+    let read = || {
+        let mut p = SYSTEM_POWER_STATUS::default();
+        unsafe { GetSystemPowerStatus(&mut p) }
+            .is_ok()
+            .then_some((p.ACLineStatus, p.BatteryFlag & 8 != 0))
+    };
+    let mut last = read();
+    loop {
+        std::thread::sleep(Duration::from_millis(250));
+        let now = read();
+        if now != last {
+            last = now;
+            changed();
+        }
+    }
+}
+
 pub fn device_info() -> DeviceInfo {
     START.call_once(|| {
         let _ = std::thread::Builder::new()

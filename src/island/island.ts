@@ -20,6 +20,7 @@ import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMomen
 import { saveFocus } from "./state";
 import { nextTip } from "./tips";
 import { MomentWatcher, panFor, type Moment } from "./moments";
+import { pending } from "../whatsnew";
 import { AmbientLayer } from "./ambient";
 import { isMidnightOfNewYear, lookFor, timeOfDay, timeZone, type Look } from "../core/seasons";
 
@@ -202,6 +203,11 @@ export class Island {
         });
       },
       later: () => this.closeBar(),
+      tour: () => {
+        // The settings window shows the tour of what's new when it opens.
+        fire("open_main_window");
+        this.closeBar();
+      },
     });
     this.views.set("update", this.updateView);
     this.viewsEl = h("div", { id: "views" });
@@ -353,6 +359,13 @@ export class Island {
   // ── Device moments ─────────────────────────────────────────────────────────
 
   private enqueueMoment(m: Moment) {
+    // This computer's charger: the chime plays the instant it clicks in (or the battery
+    // fills), day or night, like a phone's, even when the card itself has to wait or
+    // cards are turned off. Only a full-screen game or film keeps it quiet.
+    if (m.id === "me" && (m.kind === "plug" || m.kind === "full") && !this.quiet && State.settings.soundEnabled) {
+      Sound.play(m.kind);
+      m.chimed = true;
+    }
     if (!State.settings.moments) return;
     if (m.kind === "offline") {
       // Sleep, a Wi-Fi blip, a restart: wait a little before saying it went away, and
@@ -436,7 +449,7 @@ export class Island {
     };
     switch (m.kind) {
       case "plug":
-        sound("plug");
+        if (!m.chimed) sound("plug", true);
         this.engine.triggerEmote("happy");
         this.engine.emit("spark", 6);
         break;
@@ -449,7 +462,7 @@ export class Island {
         this.engine.triggerEmote("yawn", 2.4);
         break;
       case "full":
-        sound("full");
+        if (!m.chimed) sound("full");
         this.engine.triggerEmote("proud");
         this.engine.emit("star", 5);
         break;
@@ -682,7 +695,33 @@ export class Island {
   private updateView!: ReturnType<typeof buildUpdate>;
 
   /** A newer version is ready: Bob says so once per version, when nothing else is on. */
+  /** Just updated to a version with new features: Bob says so once, and offers the tour. */
+  whatsNew(current: string) {
+    const things = pending(current);
+    if (!things.length) return;
+    const key = `cc.wnNudged.${current}`;
+    try {
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, "1");
+    } catch {
+      return;
+    }
+    const show = () => {
+      if (this.quiet || State.focus || State.mode === "expanded") {
+        window.setTimeout(show, 30_000);
+        return;
+      }
+      this.updateView.showNew(current, things[0].title, things.length);
+      this.engine.triggerEmote("proud");
+      Sound.play("tink");
+      this.autoly(() => this.alert("update"));
+    };
+    // Not over the hello: a little after start.
+    window.setTimeout(show, 9000);
+  }
+
   updateReady(u: UpdateInfo) {
+    this.whatsNew(u.current);
     if (!u.version) return;
     const key = `cc.update.${u.version}`;
     try {

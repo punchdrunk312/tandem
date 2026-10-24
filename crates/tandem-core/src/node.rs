@@ -2142,6 +2142,7 @@ impl Actor {
                     self.send_to(&to.clone(), Msg::MirrorMoved { id, dx, dy, done });
                 }
             }
+            CaptureEvent::PowerChanged => self.read_device(),
             CaptureEvent::MirrorDismissed { id } => {
                 // Closed here by the person (its taskbar button): the window goes home.
                 if self.send_back(id) {
