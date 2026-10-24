@@ -243,8 +243,10 @@ fn accessories() -> Option<Vec<Accessory>> {
                 continue;
             }
             let wide: Vec<u16> = buf[..size.min(buf.len())]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .take_while(|&c| c != 0)
                 .collect();
             let name = plain_name(&String::from_utf16_lossy(&wide));
