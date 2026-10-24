@@ -290,6 +290,7 @@ pub fn take(edge: Edge, pt: (i32, i32), scr: Screen, remote: bool) -> bool {
     // End macOS' own drag (a button-up of ours), and hold the pointer still.
     crate::mac::post_left_up_pub();
     crate::mac::hold_pointer_pub(true);
+    span::set_shape(span::shape::ARROW);
     crate::macoverlay::cursor_overlay(Some(pt));
     log::info!("app span: the pointer reached the edge: CubeCursor moves the window now");
     place_window(o);

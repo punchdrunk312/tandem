@@ -90,7 +90,7 @@ pub enum CaptureEvent {
     /// (the pointer carries on over the mirror).
     PortalOut { rx: i32, ry: i32 },
     /// Where the pointer is inside the window it is on (the owner, while it has it).
-    PortalCursor { id: u64, rx: i32, ry: i32 },
+    PortalCursor { id: u64, rx: i32, ry: i32, shape: u8 },
     /// A fresh picture of a mirrored window of ours (`w` x `h`, JPEG).
     MirrorFrame {
         id: u64,
@@ -211,6 +211,11 @@ pub trait Platform: Send + Sync + 'static {
     /// The owner: stop mirroring `id` and put the window back on screen; at `home`
     /// (a fraction along the edge it was parked past), or in the middle.
     fn mirror_release(&self, _id: u64, _home: Option<f32>) {}
+    /// The owner: window `id` is shown `k` times its size over there (a screen of another
+    /// resolution), so its frames need be no bigger than that.
+    fn mirror_scale(&self, id: u64, k: f32) {
+        crate::mirror::set_scale(id, k);
+    }
     /// The owner: the pointer comes onto window `id` at (`rx`, `ry`) inside it. The
     /// window slides onto this screen; returns where that point is now on the screen.
     /// From here the platform tells when the pointer leaves it (`PortalOut`, for this

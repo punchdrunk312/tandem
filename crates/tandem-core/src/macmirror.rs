@@ -306,7 +306,13 @@ fn pictures() {
         for id in ids {
             look_after(id, &mut prints);
         }
-        let left = Duration::from_millis(mirror::FRAME_EVERY_MS).saturating_sub(t.elapsed());
+        // Smooth while someone is using a window through its mirror, calmer otherwise.
+        let every = if PORTAL_ON.load(Relaxed) {
+            mirror::FRAME_EVERY_ACTIVE_MS
+        } else {
+            mirror::FRAME_EVERY_MS
+        };
+        let left = Duration::from_millis(every).saturating_sub(t.elapsed());
         std::thread::sleep(left.max(Duration::from_millis(8)));
     }
 }
@@ -390,7 +396,7 @@ fn look_after(wid: WindowId, prints: &mut HashMap<WindowId, u64>) {
         return;
     }
     prints.insert(wid, fp);
-    let (sw, sh) = span::fit(cw, ch, mirror::FRAME_MAX_W, mirror::FRAME_MAX_H);
+    let (sw, sh) = mirror::frame_size(id, cw, ch);
     let small = if (sw, sh) == (cw, ch) {
         px
     } else {
@@ -425,6 +431,7 @@ fn cursor_watch() {
                 id,
                 rx: now.0,
                 ry: now.1,
+                shape: 0,
             });
         }
     }
@@ -531,5 +538,8 @@ pub fn point(id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
 }
 
 pub fn cursor_on(id: u64, at: Option<(i32, i32)>) {
+    if at.is_none() {
+        span::set_shape(span::shape::ARROW);
+    }
     crate::macoverlay::cursor_overlay(at.and_then(|(x, y)| point(id, x, y)));
 }

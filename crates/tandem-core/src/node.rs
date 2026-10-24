@@ -2079,6 +2079,13 @@ impl Actor {
                         Some((id, w, h)) => {
                             log::info!("mirror: window {id} ({w}x{h}) is shown on {who} now");
                             self.mirrors_out.insert(id, to.clone());
+                            // Frames no bigger than it is shown over there.
+                            let k = self.sessions.get(&to).and_then(|s| {
+                                let theirs = s.screen?;
+                                let mine = self.sh.platform.screen();
+                                Some(crate::span::scale_for(s.side, (mine.width, mine.height), theirs))
+                            });
+                            self.sh.platform.mirror_scale(id, k.unwrap_or(1.0));
                             self.send_to(&to, Msg::MirrorStart { id, w, h });
                             self.remember(
                                 Undo::Mirror {
@@ -2110,11 +2117,19 @@ impl Actor {
             }
             CaptureEvent::PortalIn { id, rx, ry } => self.portal_in_here(id, rx, ry, true),
             CaptureEvent::PortalOut { rx, ry } => self.portal_out_here(rx, ry, true),
-            CaptureEvent::PortalCursor { id, rx, ry } => {
+            CaptureEvent::PortalCursor { id, rx, ry, shape } => {
                 if let Some(p) = self.portal.as_mut().filter(|p| p.owner && p.id == id) {
                     p.at = (rx, ry);
                     let peer = p.peer.clone();
-                    self.send_to(&peer, Msg::PortalCursor { id, rx, ry });
+                    self.send_to(
+                        &peer,
+                        Msg::PortalCursor {
+                            id,
+                            rx,
+                            ry,
+                            shape,
+                        },
+                    );
                 }
             }
             CaptureEvent::MirrorFrame { id, w, h, jpeg } => {
@@ -3131,8 +3146,9 @@ impl Actor {
             }
             Msg::PortalEnter { id, rx, ry } => self.portal_enter(from, id, rx, ry),
             Msg::PortalLeave { id, rx, ry } => self.portal_leave(from, id, rx, ry),
-            Msg::PortalCursor { id, rx, ry } => {
+            Msg::PortalCursor { id, rx, ry, shape } => {
                 let k = self.mk(id);
+                crate::span::set_shape(shape);
                 if let Some(p) = self
                     .portal
                     .as_mut()

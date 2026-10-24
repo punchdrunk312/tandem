@@ -353,6 +353,196 @@ pub fn arrow() -> (Vec<u8>, u32, u32, i32, i32) {
     (out, w, h, 3, 2)
 }
 
+// ------------------------------------------------------------------ pointer shapes
+//
+// On a mirrored window the pointer looks the way it does on the real one: a text beam
+// over text, a hand over links, resize arrows on the window's edges. The computer with
+// the window says which standard shape it is (`Shape`); the one showing it draws it.
+
+/// The standard pointer shapes, as sent (`u8`).
+pub mod shape {
+    pub const ARROW: u8 = 0;
+    pub const TEXT: u8 = 1;
+    pub const HAND: u8 = 2;
+    pub const SIZE_WE: u8 = 3;
+    pub const SIZE_NS: u8 = 4;
+    pub const SIZE_NWSE: u8 = 5;
+    pub const SIZE_NESW: u8 = 6;
+    pub const SIZE_ALL: u8 = 7;
+    pub const WAIT: u8 = 8;
+    pub const NO: u8 = 9;
+    pub const CROSS: u8 = 10;
+}
+
+static SHAPE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The shape the stand-in pointer takes from now on.
+pub fn set_shape(s: u8) {
+    SHAPE.store(s, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The shape the stand-in pointer has now.
+pub fn current_shape() -> u8 {
+    SHAPE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+enum Prim {
+    /// A thick line: ends and half its thickness.
+    Seg((f32, f32), (f32, f32), f32),
+    /// A filled polygon.
+    Poly(Vec<(f32, f32)>),
+}
+
+fn seg_dist(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let l = dx * dx + dy * dy;
+    let t = if l > 0.0 {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let (qx, qy) = (a.0 + t * dx - p.0, a.1 + t * dy - p.1);
+    (qx * qx + qy * qy).sqrt()
+}
+
+/// Signed distance to a primitive (negative inside).
+fn prim_dist(p: (f32, f32), prim: &Prim) -> f32 {
+    match prim {
+        Prim::Seg(a, b, r) => seg_dist(p, *a, *b) - r,
+        Prim::Poly(pts) => {
+            let mut inside = false;
+            let mut edge = f32::MAX;
+            let mut j = pts.len() - 1;
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[j]);
+                if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
+                    inside = !inside;
+                }
+                edge = edge.min(seg_dist(p, a, b));
+                j = i;
+            }
+            if inside {
+                -edge
+            } else {
+                edge
+            }
+        }
+    }
+}
+
+/// A double-headed arrow along the x axis, `len` from the centre to each tip.
+fn double_arrow(len: f32) -> Vec<Prim> {
+    let head = 5.0;
+    vec![
+        Prim::Seg((-len + head, 0.0), (len - head, 0.0), 1.0),
+        Prim::Poly(vec![(-len, 0.0), (-len + head, -head), (-len + head, head)]),
+        Prim::Poly(vec![(len, 0.0), (len - head, -head), (len - head, head)]),
+    ]
+}
+
+fn rotate(prims: Vec<Prim>, deg: f32) -> Vec<Prim> {
+    let (s, c) = deg.to_radians().sin_cos();
+    let r = |(x, y): (f32, f32)| (x * c - y * s, x * s + y * c);
+    prims
+        .into_iter()
+        .map(|p| match p {
+            Prim::Seg(a, b, t) => Prim::Seg(r(a), r(b), t),
+            Prim::Poly(v) => Prim::Poly(v.into_iter().map(r).collect()),
+        })
+        .collect()
+}
+
+fn ring(radius: f32, t: f32) -> Vec<Prim> {
+    (0..24)
+        .map(|i| {
+            let a0 = i as f32 / 24.0 * std::f32::consts::TAU;
+            let a1 = (i + 1) as f32 / 24.0 * std::f32::consts::TAU;
+            Prim::Seg(
+                (radius * a0.cos(), radius * a0.sin()),
+                (radius * a1.cos(), radius * a1.sin()),
+                t,
+            )
+        })
+        .collect()
+}
+
+/// The pointer for `s` (premultiplied BGRA), its size and its hot spot.
+pub fn pointer_pic(s: u8) -> (Vec<u8>, u32, u32, i32, i32) {
+    // Shapes are drawn around the centre of a 32 x 32 picture.
+    let prims: Vec<Prim> = match s {
+        shape::TEXT => vec![
+            Prim::Seg((0.0, -8.0), (0.0, 8.0), 0.8),
+            Prim::Seg((-3.5, -9.0), (3.5, -9.0), 0.8),
+            Prim::Seg((-3.5, 9.0), (3.5, 9.0), 0.8),
+        ],
+        shape::HAND => vec![
+            // Pointing finger, folded fingers, palm.
+            Prim::Seg((-2.0, -11.0), (-2.0, 0.0), 2.0),
+            Prim::Seg((1.6, -2.0), (1.6, 1.0), 1.8),
+            Prim::Seg((5.0, -1.0), (5.0, 2.0), 1.8),
+            Prim::Seg((8.2, 0.0), (8.2, 3.0), 1.7),
+            Prim::Poly(vec![(-4.0, -1.0), (10.0, 1.0), (9.0, 9.0), (6.5, 12.0), (-1.0, 12.0), (-5.5, 6.0), (-8.0, 1.5), (-6.5, 0.0), (-4.0, 2.0)]),
+        ],
+        shape::SIZE_WE => double_arrow(10.0),
+        shape::SIZE_NS => rotate(double_arrow(10.0), 90.0),
+        shape::SIZE_NWSE => rotate(double_arrow(9.5), 45.0),
+        shape::SIZE_NESW => rotate(double_arrow(9.5), -45.0),
+        shape::SIZE_ALL => {
+            let mut v = double_arrow(10.0);
+            v.extend(rotate(double_arrow(10.0), 90.0));
+            v
+        }
+        shape::WAIT => ring(7.0, 1.6),
+        shape::NO => {
+            let mut v = ring(7.0, 1.4);
+            v.push(Prim::Seg((-5.0, 5.0), (5.0, -5.0), 1.4));
+            v
+        }
+        shape::CROSS => vec![
+            Prim::Seg((0.0, -10.0), (0.0, 10.0), 0.6),
+            Prim::Seg((-10.0, 0.0), (10.0, 0.0), 0.6),
+        ],
+        _ => return arrow(),
+    };
+    let (w, h) = (32u32, 32u32);
+    let (cx, cy) = (16.0f32, 16.0f32);
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let (mut cover, mut white) = (0f32, 0f32);
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let p = (
+                        x as f32 + (sx as f32 + 0.5) / 4.0 - cx,
+                        y as f32 + (sy as f32 + 0.5) / 4.0 - cy,
+                    );
+                    let d = prims.iter().map(|q| prim_dist(p, q)).fold(f32::MAX, f32::min);
+                    // White body, a dark outline 1.2 px wide around it.
+                    if d < 1.2 {
+                        cover += 1.0 / 16.0;
+                        if d < 0.0 {
+                            white += 1.0 / 16.0;
+                        }
+                    }
+                }
+            }
+            let a = cover.min(1.0);
+            let (r, g, b) = (
+                white * 255.0 + (a - white) * 10.0,
+                white * 255.0 + (a - white) * 17.0,
+                white * 255.0 + (a - white) * 24.0,
+            );
+            let i = ((y * w + x) * 4) as usize;
+            out[i] = b.round() as u8;
+            out[i + 1] = g.round() as u8;
+            out[i + 2] = r.round() as u8;
+            out[i + 3] = (a * 255.0).round() as u8;
+        }
+    }
+    let (hx, hy) = if s == shape::HAND { (14, 5) } else { (16, 16) };
+    (out, w, h, hx, hy)
+}
+
 /// What the receiving side puts on screen: the picture at the window's size (or, until
 /// the first picture arrives, a dim outline) with the pointer drawn where it holds it.
 /// Premultiplied BGRA, `w` x `h`.
@@ -666,4 +856,17 @@ mod tests {
         let s = scale_view(v, 0.5);
         assert_eq!((s.crossed, s.w, s.h, s.gx, s.gy), (50, 400, 300, 20, 5));
     }
+
+    #[test]
+    fn every_pointer_shape_draws() {
+        for s in 0..=10u8 {
+            let (px, w, h, hx, hy) = pointer_pic(s);
+            assert_eq!(px.len(), (w * h * 4) as usize);
+            assert!(hx >= 0 && hy >= 0 && hx < w as i32 && hy < h as i32);
+            assert!(px.chunks(4).any(|p| p[3] == 255), "shape {s} is visible");
+        }
+        // Unknown shapes are the arrow.
+        assert_eq!(pointer_pic(200).1, arrow().1);
+    }
 }
+

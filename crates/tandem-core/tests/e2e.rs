@@ -1539,6 +1539,7 @@ async fn the_owners_mouse_goes_onto_the_mirror_and_drives_the_real_window() {
         id: 7,
         rx: 40,
         ry: 60,
+        shape: 0,
     });
     until("A draws it", || {
         a.plat.st.lock().unwrap().mirror_cursor == Some((7, 40, 60))

@@ -1424,6 +1424,8 @@ export class Island {
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);
+      // An entrance animation holds its end state: never leave one on a hidden view.
+      if (!on) view.el.classList.remove("enter");
       if (on) view.sync();
     }
 

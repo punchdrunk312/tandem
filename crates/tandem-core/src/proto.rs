@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -230,11 +230,13 @@ pub enum Msg {
         ry: i32,
     },
     /// Where the pointer is inside the mirrored window, so the computer showing it can
-    /// draw a pointer there.
+    /// draw a pointer there, and its shape (see `span::Shape`: arrow, text beam, hand,
+    /// resize arrows…), so it looks exactly like a pointer on a real second monitor.
     PortalCursor {
         id: u64,
         rx: i32,
         ry: i32,
+        shape: u8,
     },
     /// The real window was dragged by its title bar by (`dx`, `dy`): the mirror moves
     /// with it. `done`: the drag ended.

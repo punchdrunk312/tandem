@@ -79,6 +79,8 @@ static OWNED: Mutex<Vec<Owned>> = Mutex::new(Vec::new());
 /// The window the pointer is on, for the hook: id, and its visible rectangle.
 static PORTAL_ID: AtomicU64 = AtomicU64::new(0);
 static PORTAL_ON: AtomicBool = AtomicBool::new(false);
+/// When the window last slid in for the pointer.
+static PORTAL_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
 static PR: [AtomicI32; 4] = [
     AtomicI32::new(0),
     AtomicI32::new(0),
@@ -326,6 +328,9 @@ pub fn portal_begin(id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
     set_portal_rect(r);
     PORTAL_ID.store(id, Relaxed);
     PORTAL_ON.store(true, Relaxed);
+    if let Ok(mut t) = PORTAL_SINCE.lock() {
+        *t = Some(Instant::now());
+    }
     Some((r.x + rx.clamp(0, r.w - 1), r.y + ry.clamp(0, r.h - 1)))
 }
 
@@ -402,7 +407,13 @@ fn pictures() {
         for h in hs {
             look_after(h, &mut prints);
         }
-        let left = Duration::from_millis(mirror::FRAME_EVERY_MS).saturating_sub(t.elapsed());
+        // Smooth while someone is using a window through its mirror, calmer otherwise.
+        let every = if PORTAL_ON.load(Relaxed) {
+            mirror::FRAME_EVERY_ACTIVE_MS
+        } else {
+            mirror::FRAME_EVERY_MS
+        };
+        let left = Duration::from_millis(every).saturating_sub(t.elapsed());
         std::thread::sleep(left.max(Duration::from_millis(8)));
     }
 }
@@ -436,6 +447,8 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
     let Some(full) = window_rect(h) else {
         return;
     };
+    // Slid in under the veil and in use: photographed straight off the screen.
+    let mut live = false;
     // Moved by the person (through the mirror), or by anything else.
     if let Ok(mut all) = OWNED.lock() {
         if let Some(o) = all.iter_mut().find(|o| o.hwnd == h) {
@@ -483,6 +496,17 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
                         o.slid = Some(vis);
                         set_portal_rect(vis);
                     }
+                    let settled = PORTAL_SINCE
+                        .lock()
+                        .ok()
+                        .and_then(|t| *t)
+                        .is_some_and(|t| t.elapsed() > Duration::from_millis(150));
+                    live = PORTAL_ON.load(Relaxed)
+                        && PORTAL_ID.load(Relaxed) == id
+                        && !o.dragging
+                        && !moving
+                        && settled
+                        && winspan::veil_see_through();
                 }
                 None => {
                     if !moving && (vis.x, vis.y) != o.parked {
@@ -492,8 +516,12 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
             }
         }
     }
-    let Some((px, cw, ch)) = grab_pixels(h, (vis.x - full.left, vis.y - full.top), vis.w, vis.h)
-    else {
+    let shot = live
+        .then(|| winspan::screen_pixels(vis.x, vis.y, vis.w, vis.h))
+        .flatten()
+        .map(|px| (px, vis.w as u32, vis.h as u32))
+        .or_else(|| grab_pixels(h, (vis.x - full.left, vis.y - full.top), vis.w, vis.h));
+    let Some((px, cw, ch)) = shot else {
         return;
     };
     let fp = mirror::fingerprint(&px);
@@ -501,7 +529,7 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
         return;
     }
     prints.insert(h, fp);
-    let (sw, sh) = span::fit(cw, ch, mirror::FRAME_MAX_W, mirror::FRAME_MAX_H);
+    let (sw, sh) = mirror::frame_size(id, cw, ch);
     let small = if (sw, sh) == (cw, ch) {
         px
     } else {
@@ -517,25 +545,71 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
     }
 }
 
-/// While the pointer is on a window driven here: where it is on it, for the mirror.
+/// The standard shape the pointer has right now (the program over which it is chose it).
+/// The system's own pointer handles keep their identity even while CubeCursor blanks
+/// their pictures to hide the pointer, so they still tell the shape.
+fn pointer_shape(table: &[(isize, u8)]) -> u8 {
+    let mut ci = CURSORINFO {
+        cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetCursorInfo(&mut ci) }.is_err() {
+        return span::shape::ARROW;
+    }
+    let h = ci.hCursor.0 as isize;
+    table
+        .iter()
+        .find(|(c, _)| *c == h && h != 0)
+        .map(|(_, s)| *s)
+        .unwrap_or(span::shape::ARROW)
+}
+
+fn shape_table() -> Vec<(isize, u8)> {
+    use span::shape::*;
+    let ids = [
+        (IDC_IBEAM, TEXT),
+        (IDC_HAND, HAND),
+        (IDC_SIZEWE, SIZE_WE),
+        (IDC_SIZENS, SIZE_NS),
+        (IDC_SIZENWSE, SIZE_NWSE),
+        (IDC_SIZENESW, SIZE_NESW),
+        (IDC_SIZEALL, SIZE_ALL),
+        (IDC_WAIT, WAIT),
+        (IDC_APPSTARTING, WAIT),
+        (IDC_NO, NO),
+        (IDC_CROSS, CROSS),
+        (IDC_ARROW, ARROW),
+    ];
+    ids.iter()
+        .filter_map(|(id, s)| {
+            let h = unsafe { LoadCursorW(None, *id) }.ok()?;
+            Some((h.0 as isize, *s))
+        })
+        .collect()
+}
+
+/// While the pointer is on a window driven here: where it is on it, and its shape, for
+/// the mirror.
 fn cursor_watch() {
-    let mut last = (i32::MIN, i32::MIN, 0u64);
+    let table = shape_table();
+    let mut last = (i32::MIN, i32::MIN, 0u64, 0u8);
     loop {
         std::thread::sleep(Duration::from_millis(mirror::CURSOR_EVERY_MS));
         if !PORTAL_ON.load(Relaxed) {
-            last = (i32::MIN, i32::MIN, 0);
+            last = (i32::MIN, i32::MIN, 0, 0);
             continue;
         }
         let id = PORTAL_ID.load(Relaxed);
         let r = portal_rect();
         let (x, y) = cursor();
-        let now = (x - r.x, y - r.y, id);
+        let now = (x - r.x, y - r.y, id, pointer_shape(&table));
         if now != last {
             last = now;
             emit(CaptureEvent::PortalCursor {
                 id,
                 rx: now.0,
                 ry: now.1,
+                shape: now.3,
             });
         }
     }
@@ -559,7 +633,8 @@ static PICS: Mutex<Vec<(u64, Pic)>> = Mutex::new(Vec::new());
 
 enum Cmd {
     Create(u64, Rect),
-    Frame(u64, u32, u32, Vec<u8>),
+    /// A decoded picture: id, the window's size there, the picture.
+    Frame(u64, u32, u32, Pic),
     Move(u64, Rect),
     Raise(u64),
     /// The mirror's window (0 if it was not made yet).
@@ -650,8 +725,46 @@ fn set_pic(id: u64, px: Vec<u8>, w: u32, h: u32) {
     }
 }
 
+/// Pictures waiting to be decoded, newest per window (decoding a big one takes a few
+/// milliseconds: never on the thread that keeps the mirrors on screen).
+/// id, the window's size there, the JPEG.
+type Jpeg = (u64, u32, u32, Vec<u8>);
+static TO_DECODE: Mutex<Vec<Jpeg>> = Mutex::new(Vec::new());
+static DECODE_WAKE: std::sync::Condvar = std::sync::Condvar::new();
+static DECODER: Once = Once::new();
+
 pub fn frame(id: u64, w: u32, h: u32, jpeg: Vec<u8>) {
-    post(Cmd::Frame(id, w, h, jpeg));
+    DECODER.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("tandem-mirror-decode".into())
+            .spawn(decoder);
+    });
+    if let Ok(mut q) = TO_DECODE.lock() {
+        q.retain(|f| f.0 != id);
+        q.push((id, w, h, jpeg));
+        DECODE_WAKE.notify_one();
+    }
+}
+
+fn decoder() {
+    loop {
+        let next = {
+            let Ok(mut q) = TO_DECODE.lock() else {
+                return;
+            };
+            while q.is_empty() {
+                q = match DECODE_WAKE.wait(q) {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+            }
+            q.remove(0)
+        };
+        let (id, w, h, jpeg) = next;
+        if let Some(pic) = span::decode_jpeg(&jpeg) {
+            post(Cmd::Frame(id, w, h, pic));
+        }
+    }
 }
 
 pub fn close(id: u64) {
@@ -718,7 +831,10 @@ pub fn point(id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
 pub fn cursor_on(id: u64, at: Option<(i32, i32)>) {
     match at.and_then(|(x, y)| point(id, x, y)) {
         Some(p) => winspan::cursor_overlay(Some(p)),
-        None => winspan::cursor_overlay(None),
+        None => {
+            span::set_shape(span::shape::ARROW);
+            winspan::cursor_overlay(None)
+        }
     }
 }
 
@@ -781,7 +897,9 @@ fn paint(h: HWND) {
                     },
                     ..Default::default()
                 };
-                SetStretchBltMode(dc, HALFTONE);
+                // Same size (the usual case): a plain copy, no costly smoothing.
+                let same = (*w as i32, *ht as i32) == (rc.right, rc.bottom);
+                SetStretchBltMode(dc, if same { COLORONCOLOR } else { HALFTONE });
                 StretchDIBits(
                     dc,
                     0,
@@ -914,10 +1032,7 @@ fn work() {
                     }
                 }
             },
-            Cmd::Frame(id, w, h, jpeg) => {
-                let Some((px, fw, fh)) = span::decode_jpeg(&jpeg) else {
-                    continue;
-                };
+            Cmd::Frame(id, w, h, (px, fw, fh)) => {
                 set_pic(id, px, fw, fh);
                 // The window changed size over there: so does the mirror.
                 let resized = SHOWN.lock().ok().and_then(|mut shown| {

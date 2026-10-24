@@ -37,6 +37,9 @@ pub const FRAME_MAX_W: u32 = 2560;
 pub const FRAME_MAX_H: u32 = 1600;
 pub const FRAME_QUALITY: u8 = 80;
 pub const FRAME_EVERY_MS: u64 = 40;
+/// While the pointer is on a window (someone is using it through its mirror): as smooth
+/// as the screen.
+pub const FRAME_EVERY_ACTIVE_MS: u64 = 16;
 /// How often the pointer's position inside the window is sent.
 pub const CURSOR_EVERY_MS: u64 = 8;
 
@@ -119,6 +122,38 @@ pub fn first_place(pic: Rect, scr: Screen) -> Rect {
     let x = pic.x.clamp(scr.x, (scr.x + scr.width - pic.w).max(scr.x));
     let y = pic.y.clamp(scr.y, (scr.y + scr.height - pic.h).max(scr.y));
     Rect { x, y, ..pic }
+}
+
+/// How much smaller each window is shown on the other computer (its screen is smaller,
+/// or has fewer pixels): its frames are sent at that size, never bigger than shown.
+static SCALES: std::sync::Mutex<Vec<(u64, f32)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_scale(id: u64, k: f32) {
+    if let Ok(mut s) = SCALES.lock() {
+        s.retain(|e| e.0 != id);
+        if s.len() > 64 {
+            s.remove(0);
+        }
+        s.push((id, k));
+    }
+}
+
+fn scale_of(id: u64) -> f32 {
+    SCALES
+        .lock()
+        .ok()
+        .and_then(|s| s.iter().find(|e| e.0 == id).map(|e| e.1))
+        .unwrap_or(1.0)
+}
+
+/// The size to send a `w` x `h` frame of window `id` at.
+pub fn frame_size(id: u64, w: u32, h: u32) -> (u32, u32) {
+    let k = scale_of(id).clamp(0.25, 1.0);
+    let (sw, sh) = (
+        ((w as f32 * k).round() as u32).max(1),
+        ((h as f32 * k).round() as u32).max(1),
+    );
+    crate::span::fit(sw, sh, FRAME_MAX_W, FRAME_MAX_H)
 }
 
 /// A cheap fingerprint of a picture, to skip sending frames that did not change.
@@ -226,5 +261,15 @@ mod tests {
         a[0] = 11;
         assert_ne!(fa, fingerprint(&a));
         assert_eq!(fingerprint(&a), fingerprint(&a.clone()));
+    }
+
+    #[test]
+    fn frames_are_sent_no_bigger_than_shown() {
+        set_scale(99, 0.5);
+        assert_eq!(frame_size(99, 1600, 1000), (800, 500));
+        // Shown bigger over there: sent as it is (the other side scales up).
+        set_scale(98, 1.8);
+        assert_eq!(frame_size(98, 1600, 1000), (1600, 1000));
+        assert_eq!(frame_size(97, 4000, 2000), (2560, 1280));
     }
 }

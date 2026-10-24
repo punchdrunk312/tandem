@@ -228,7 +228,9 @@ html.dev body { background: #2b2f38; }
 /* ── device moments ─────────────────────────────────────────────────────── */
 /* The card arrives from the side its computer sits on, settling with a little give. */
 .moment { display: flex; align-items: center; gap: 18px; padding: 4px 108px 4px 18px; }
-.moment.enter { animation: m-in 0.62s cubic-bezier(0.2, 1.25, 0.32, 1) both; }
+/* Only while it is the view on show: the animation's held end state would otherwise keep
+   the card visible over whatever comes next ("… is here" stuck under Bob). */
+.moment.on.enter { animation: m-in 0.62s cubic-bezier(0.2, 1.25, 0.32, 1) both; }
 .moment.from-left.enter, .moment.from-topleft.enter, .moment.from-bottomleft.enter { --dx: -46px; }
 .moment.from-right.enter, .moment.from-topright.enter, .moment.from-bottomright.enter { --dx: 46px; }
 .moment.from-top.enter { --dy: -18px; }

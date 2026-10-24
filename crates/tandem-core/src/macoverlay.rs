@@ -336,13 +336,16 @@ pub fn glow(edge: Edge, frac: f32, rgb: [u8; 3]) {
 }
 
 static ARROW_SHOWN: AtomicBool = AtomicBool::new(false);
+/// The shape the stand-in pointer was last drawn with (see `span::shape`).
+static ARROW_SHAPE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// The stand-in pointer at (`x`, `y`), or gone.
 pub fn cursor_overlay(at: Option<(i32, i32)>) {
     match at {
         Some((x, y)) => {
-            let first = !ARROW_SHOWN.swap(true, Relaxed);
-            let (px, aw, ah, tx, ty) = span::arrow();
+            let s = span::current_shape();
+            let first = !ARROW_SHOWN.swap(true, Relaxed) | (ARROW_SHAPE.swap(s, Relaxed) != s);
+            let (px, aw, ah, tx, ty) = span::pointer_pic(s);
             let r = ((x - tx) as f64, (y - ty) as f64, aw as f64, ah as f64);
             show_in(|u| &mut u.arrow, r, first.then_some((px, aw, ah)), 1.0);
         }

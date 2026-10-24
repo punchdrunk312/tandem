@@ -314,6 +314,7 @@ pub fn take(edge: Edge, pt: (i32, i32), scr: Screen, remote: bool) -> bool {
             let _ = SetCursorPos(cx, cy);
         }
     }
+    span::set_shape(span::shape::ARROW);
     cursor_overlay(Some(pt));
     log::info!("app span: the pointer reached the edge: CubeCursor moves the window now");
     let _ = std::thread::Builder::new()
@@ -663,6 +664,14 @@ pub(crate) struct Veil {
 
 static VEIL_HWND: AtomicIsize = AtomicIsize::new(0);
 static VEIL_ON: AtomicBool = AtomicBool::new(false);
+/// The veil stays out of screen captures, so the window under it can be photographed
+/// straight off the screen (fast, and with its menus and tooltips) while it is up.
+static VEIL_UNSEEN: AtomicBool = AtomicBool::new(false);
+
+/// The veil is up and screen captures see through it.
+pub(crate) fn veil_see_through() -> bool {
+    VEIL_UNSEEN.load(Relaxed) && veil_window().is_some()
+}
 
 /// Lays a veil (see `Veil`).
 pub(crate) fn veil(v: Option<Veil>) {
@@ -814,6 +823,8 @@ struct Ui {
     shown: bool,
     hide_at: Option<Instant>,
     arrow_shown: bool,
+    /// The pointer shape the arrow window shows now (see `span::shape`).
+    arrow_shape: u8,
     /// The glow on screen: where, its picture, and when it started.
     glow: Option<(i32, i32, i32, i32, Vec<u8>, Instant)>,
 }
@@ -867,6 +878,9 @@ fn ui_thread() {
         };
         let (pic, arrow, glow, veil) = (make(), make(), make(), make());
         VEIL_HWND.store(veil, Relaxed);
+        if veil != 0 {
+            VEIL_UNSEEN.store(crate::win::exclude_from_capture(veil, true), Relaxed);
+        }
         if pic == 0 || arrow == 0 || glow == 0 {
             log::warn!("app span: cannot create the picture window");
             return;
@@ -978,7 +992,13 @@ fn work() {
                 }
             }
             Cmd::Cursor(Some((x, y))) => {
-                let (tx, ty) = (3, 2); // where the arrow's tip is in its picture
+                // The shape of the pointer on the real window (a text beam, a hand…).
+                let s = span::current_shape();
+                let (px, aw, ah, tx, ty) = span::pointer_pic(s);
+                if s != ui.arrow_shape {
+                    ui.arrow_shape = s;
+                    layered(arrow, x - tx, y - ty, aw as i32, ah as i32, &px, 255);
+                }
                 top_at(arrow, x - tx, y - ty);
                 ui.arrow_shown = true;
             }
