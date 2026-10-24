@@ -367,6 +367,8 @@ export class Island {
       m.chimed = true;
     }
     if (!State.settings.moments) return;
+    // Accessories already connected when CubeCursor starts aren't news.
+    if (m.kind === "acc-on" && performance.now() - this.launchedAt < 20_000) return;
     if (m.kind === "offline") {
       // Sleep, a Wi-Fi blip, a restart: wait a little before saying it went away, and
       // say nothing if it is back by then.
@@ -478,6 +480,10 @@ export class Island {
       case "accessory":
         sound("tink");
         this.engine.triggerEmote("surprised");
+        break;
+      case "acc-on":
+        sound("pop");
+        this.engine.triggerEmote("happy");
         break;
     }
   }

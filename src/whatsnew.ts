@@ -46,6 +46,11 @@ export const RELEASES: Release[] = [
         art: `<div class="art-plug"><i></i></div>`,
       },
       {
+        title: "Your earbuds' battery",
+        text: "Connect AirPods, Galaxy Buds or any Bluetooth headset, mouse or keyboard that reports its battery, and the bar shows how charged it is. For earbuds that tell each part (AirPods on a Mac), you see each bud and the case.",
+        art: `<div class="art-buds"><i>80</i><i>75</i><i>60</i></div>`,
+      },
+      {
         title: "Tell us what you think",
         text: "Under Account there's a feedback box. It goes straight to us, with a screenshot if you like.",
         art: `<img class="art-bob" src="/brand.png" alt="">`,

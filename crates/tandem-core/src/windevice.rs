@@ -7,7 +7,6 @@
 //! address (once, then every ten minutes).
 
 use crate::proto::{Accessory, AppRef, DeviceInfo, PowerAction};
-use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Mutex, Once};
 use std::time::Duration;
@@ -28,7 +27,6 @@ use windows::Win32::System::SystemInformation::{
 use windows::Win32::System::Threading::{GetCurrentProcessId, GetSystemTimes};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const NO_WINDOW: u32 = 0x0800_0000;
 
 static SLOW: Mutex<(Vec<Accessory>, Option<String>)> = Mutex::new((Vec::new(), None));
 static START: Once = Once::new();
@@ -136,36 +134,139 @@ pub fn device_info() -> DeviceInfo {
 }
 
 fn slow_thread() {
-    let mut n: u64 = 0;
     loop {
-        let acc = accessories();
-        let mac = if n.is_multiple_of(5) { mac_address() } else { None };
+        let mac = mac_address();
         if let Ok(mut s) = SLOW.lock() {
-            if let Some(a) = acc {
-                s.0 = a;
-            }
             if mac.is_some() {
                 s.1 = mac;
             }
         }
-        n += 1;
-        std::thread::sleep(Duration::from_secs(120));
+        std::thread::sleep(Duration::from_secs(600));
     }
 }
 
-/// Wireless accessories that tell Windows their battery (Bluetooth headsets, mice,
-/// keyboards). Windows keeps it as a device property; PowerShell reads it.
+/// Watches the wireless accessories: earbuds connected, a mouse switched on, a battery
+/// that went down. Asked of Windows' device tree directly (a few milliseconds), every few
+/// seconds, so earbuds show up in the bar about as soon as they connect.
+pub fn accessory_watch(changed: impl Fn()) {
+    loop {
+        if let Some(now) = accessories() {
+            let differ = SLOW.lock().map(|s| s.0 != now).unwrap_or(false);
+            if differ {
+                if let Ok(mut s) = SLOW.lock() {
+                    s.0 = now;
+                }
+                changed();
+            }
+        }
+        std::thread::sleep(Duration::from_secs(4));
+    }
+}
+
+/// "AirPods Pro Hands-Free AG" and "AirPods Pro Stereo" are the same AirPods.
+fn plain_name(name: &str) -> String {
+    let mut n = name.trim().to_string();
+    for tail in [" Hands-Free AG Audio", " Hands-Free AG", " Hands-Free", " Stereo", " Avrcp Transport", " LE"] {
+        if let Some(cut) = n.strip_suffix(tail) {
+            n = cut.trim().to_string();
+        }
+    }
+    n
+}
+
+/// Wireless accessories that tell Windows their battery (Bluetooth earbuds, headsets,
+/// mice, keyboards): a property Windows keeps on the device, read through CfgMgr32.
 fn accessories() -> Option<Vec<Accessory>> {
-    const SCRIPT: &str = "$ErrorActionPreference='SilentlyContinue'; \
-        Get-PnpDevice -PresentOnly -Status OK | ForEach-Object { \
-          $b = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName '{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2').Data; \
-          if ($b -ne $null) { \"$($_.FriendlyName)|$b\" } }";
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])
-        .creation_flags(NO_WINDOW)
-        .output()
-        .ok()?;
-    Some(crate::status::parse_accessories(&String::from_utf8_lossy(&out.stdout)))
+    use windows::core::GUID;
+    use windows::Win32::Devices::DeviceAndDriverInstallation::*;
+    use windows::Win32::Devices::Properties::*;
+    use windows::Win32::Foundation::DEVPROPKEY;
+    const BATTERY: DEVPROPKEY = DEVPROPKEY {
+        fmtid: GUID::from_u128(0x104ea319_6ee2_4701_bd47_8ddbf425bbe5),
+        pid: 2,
+    };
+    // Bluetooth devices: connected right now (when Windows says).
+    const CONNECTED: DEVPROPKEY = DEVPROPKEY {
+        fmtid: GUID::from_u128(0x83da6326_97a6_4088_9453_a1923f573b29),
+        pid: 15,
+    };
+    unsafe {
+        let mut len = 0u32;
+        if CM_Get_Device_ID_List_SizeW(&mut len, PCWSTR::null(), CM_GETIDLIST_FILTER_PRESENT) != CR_SUCCESS {
+            return None;
+        }
+        let mut ids = vec![0u16; len as usize + 1];
+        if CM_Get_Device_ID_ListW(PCWSTR::null(), &mut ids, CM_GETIDLIST_FILTER_PRESENT) != CR_SUCCESS {
+            return None;
+        }
+        let prop = |inst: u32, key: &DEVPROPKEY, buf: &mut [u8]| -> Option<(u32, usize)> {
+            let mut ty = DEVPROPTYPE(0);
+            let mut size = buf.len() as u32;
+            (CM_Get_DevNode_PropertyW(inst, key, &mut ty, Some(buf.as_mut_ptr()), &mut size, 0) == CR_SUCCESS)
+                .then_some((ty.0, size as usize))
+        };
+        let mut out: Vec<Accessory> = Vec::new();
+        let mut buf = [0u8; 512];
+        for id in ids.split(|&c| c == 0).filter(|s| !s.is_empty()) {
+            // Only Bluetooth and HID devices carry the battery.
+            let head: String = char::decode_utf16(id.iter().take(8).copied()).filter_map(|c| c.ok()).collect();
+            let head = head.to_ascii_uppercase();
+            if !(head.starts_with("BTH") || head.starts_with("HID") || head.starts_with("{")) {
+                continue;
+            }
+            let mut z: Vec<u16> = id.to_vec();
+            z.push(0);
+            let mut inst = 0u32;
+            if CM_Locate_DevNodeW(&mut inst, PCWSTR(z.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS {
+                continue;
+            }
+            let Some((ty, _)) = prop(inst, &BATTERY, &mut buf) else {
+                continue;
+            };
+            if ty != DEVPROP_TYPE_BYTE.0 || buf[0] > 100 {
+                continue;
+            }
+            let battery = buf[0];
+            if let Some((ty, _)) = prop(inst, &CONNECTED, &mut buf) {
+                if ty == DEVPROP_TYPE_BOOLEAN.0 && buf[0] == 0 {
+                    continue; // paired, but not connected now
+                }
+            }
+            let (mut status, mut problem) = (CM_DEVNODE_STATUS_FLAGS(0), CM_PROB(0));
+            if CM_Get_DevNode_Status(&mut status, &mut problem, inst, 0) == CR_SUCCESS && status.0 & DN_STARTED.0 == 0 {
+                continue;
+            }
+            let Some((ty, size)) = prop(inst, &DEVPKEY_Device_FriendlyName, &mut buf) else {
+                continue;
+            };
+            if ty != DEVPROP_TYPE_STRING.0 {
+                continue;
+            }
+            let wide: Vec<u16> = buf[..size.min(buf.len())]
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .take_while(|&c| c != 0)
+                .collect();
+            let name = plain_name(&String::from_utf16_lossy(&wide));
+            if name.is_empty() {
+                continue;
+            }
+            match out.iter_mut().find(|a| a.name == name) {
+                // The same earbuds show up as several devices: the lowest battery counts.
+                Some(a) => a.battery = a.battery.min(battery),
+                None => out.push(Accessory {
+                    name: name.chars().take(48).collect(),
+                    battery,
+                    kind: crate::status::kind_of(&name),
+                    ..Default::default()
+                }),
+            }
+            if out.len() >= 12 {
+                break;
+            }
+        }
+        Some(out)
+    }
 }
 
 /// The address of the network card that has a way out (a gateway), to wake it later.

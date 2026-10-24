@@ -337,12 +337,24 @@ export function buildMoment(a: MomentActions): ViewHost & { show(m: import("./mo
       sub.textContent = t.sub;
       const d = m.device;
       vis.replaceChildren();
+      vis.classList.toggle("parts", false);
+      const acc = m.acc;
       if (m.kind === "online" || m.kind === "offline") {
         vis.append(h("div", { class: "m-avatar", text: Array.from(m.name)[0]?.toUpperCase() ?? "?" }));
+      } else if (acc && (acc.left != null || acc.right != null)) {
+        // Earbuds: each bud and the case, like a phone shows them.
+        vis.classList.add("parts");
+        const part = (v: number | null | undefined, label: string) => {
+          if (v == null) return null;
+          const r = ring(46, 5);
+          r.set(v, v <= 15 ? "#ff8a5c" : "#34d399", null, `${v}`);
+          return h("div", { class: "m-part" }, r.el, h("span", { text: label }));
+        };
+        vis.append(...[part(acc.left, "L"), part(acc.right, "R"), part(acc.case, "Case")].filter((x): x is HTMLDivElement => !!x));
       } else {
         const r = ring(68, 6);
         vis.append(r.el);
-        const pct = m.kind === "accessory" ? m.acc?.battery ?? 0 : d?.battery ?? 0;
+        const pct = m.kind === "accessory" || m.kind === "acc-on" ? m.acc?.battery ?? 0 : d?.battery ?? 0;
         const color = m.kind === "low" || m.kind === "accessory" ? "#ff8a5c" : m.kind === "full" ? "#34d399" : m.color;
         const icon = m.kind === "plug" ? BOLT : m.kind === "unplug" ? PLUG : null;
         r.set(pct, color, icon, `${pct}%`);
@@ -421,7 +433,13 @@ export function buildDevices(a: DeviceActions): ViewHost {
                     h("span", { text: `${d.disk_free_gb} GB free` }),
                     h("span", { text: `up ${fmtUp(d.uptime_min)}` }),
                     quality ? h("span", { class: `q ${quality}`, text: `${c.ping} ms` }) : null),
-                  acc.length ? h("div", { class: "dv-acc" }, ...acc.map((x) => h("span", { class: x.battery <= 15 ? "low" : "", text: `${x.name} ${x.battery}%` }))) : null)
+                  acc.length ? h("div", { class: "dv-acc" }, ...acc.map((x) => h("span", {
+                    class: x.battery <= 15 ? "low" : "",
+                    title: x.name,
+                    text: x.left != null || x.right != null
+                      ? `${x.name} · L ${x.left ?? "–"}% R ${x.right ?? "–"}%${x.case != null ? ` · case ${x.case}%` : ""}`
+                      : `${x.name} ${x.battery}%`,
+                  }))) : null)
               : h("div", { class: "dv-stats" }),
             c.me
               ? null

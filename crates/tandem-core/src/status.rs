@@ -5,7 +5,7 @@
 //! The platform reads the raw numbers; what is worked out from them over time (how long
 //! until the battery is full) lives here, so it is tested on every machine.
 
-use crate::proto::{Accessory, DeviceInfo};
+use crate::proto::{AccKind, Accessory, DeviceInfo};
 use std::collections::VecDeque;
 
 /// Works out "full in …" from how fast the battery has been filling. Windows only says
@@ -85,12 +85,101 @@ pub fn parse_accessories(text: &str) -> Vec<Accessory> {
         v.push(Accessory {
             name: name.chars().take(48).collect(),
             battery: b as u8,
+            kind: kind_of(name),
+            ..Default::default()
         });
         if v.len() >= 12 {
             break;
         }
     }
     v
+}
+
+/// What an accessory is, from its name (Windows and macOS rarely say more).
+pub fn kind_of(name: &str) -> AccKind {
+    let n = name.to_lowercase();
+    let has = |w: &[&str]| w.iter().any(|x| n.contains(x));
+    if has(&["airpods pro", "airpods (", "airpods", "buds", "earbud", "wf-", "pixel buds", "beats fit", "powerbeats", "jabra elite", "freebuds", "tws"]) && !has(&["max"]) {
+        AccKind::Earbuds
+    } else if has(&["headphone", "headset", "airpods max", "wh-", "bose", "beats", "hands-free", "hands free", "jbl tune", "sennheiser", "momentum"]) {
+        AccKind::Headphones
+    } else if has(&["mouse", "mx master", "mx anywhere", "trackpad", "magic trackpad"]) {
+        AccKind::Mouse
+    } else if has(&["keyboard", "keys", "mx mechanical"]) {
+        AccKind::Keyboard
+    } else if has(&["controller", "gamepad", "dualsense", "dualshock", "xbox"]) {
+        AccKind::Gamepad
+    } else if has(&["speaker", "soundlink", "boom", "charge ", "flip "]) {
+        AccKind::Speaker
+    } else {
+        AccKind::Other
+    }
+}
+
+/// "73%" (what macOS writes) as a number.
+fn pct(v: &serde_json::Value) -> Option<u8> {
+    let s = v.as_str()?;
+    let n: u32 = s.trim().trim_end_matches('%').trim().parse().ok()?;
+    (n <= 100).then_some(n as u8)
+}
+
+/// The connected Bluetooth devices with a battery, from
+/// `system_profiler SPBluetoothDataType -json` (macOS 12 and later).
+pub fn parse_mac_bluetooth(json: &str) -> Vec<Accessory> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let roots = v["SPBluetoothDataType"].as_array().cloned().unwrap_or_default();
+    for root in roots {
+        let Some(list) = root["device_connected"].as_array() else {
+            continue;
+        };
+        for entry in list {
+            let Some(obj) = entry.as_object() else { continue };
+            for (name, d) in obj {
+                let (left, right, case) = (
+                    pct(&d["device_batteryLevelLeft"]),
+                    pct(&d["device_batteryLevelRight"]),
+                    pct(&d["device_batteryLevelCase"]),
+                );
+                let main = pct(&d["device_batteryLevelMain"]).or(pct(&d["device_batteryLevel"]));
+                let parts: Vec<u8> = [left, right].into_iter().flatten().collect();
+                let Some(battery) = parts.iter().copied().min().or(main) else {
+                    continue;
+                };
+                let minor = d["device_minorType"].as_str().unwrap_or("").to_lowercase();
+                let mut kind = kind_of(name);
+                if kind == AccKind::Other {
+                    kind = match minor.as_str() {
+                        m if m.contains("headphone") || m.contains("headset") => {
+                            if left.is_some() { AccKind::Earbuds } else { AccKind::Headphones }
+                        }
+                        m if m.contains("mouse") => AccKind::Mouse,
+                        m if m.contains("keyboard") => AccKind::Keyboard,
+                        m if m.contains("speaker") => AccKind::Speaker,
+                        m if m.contains("gamepad") || m.contains("joystick") => AccKind::Gamepad,
+                        _ => AccKind::Other,
+                    };
+                }
+                if left.is_some() && right.is_some() && kind == AccKind::Headphones {
+                    kind = AccKind::Earbuds;
+                }
+                out.push(Accessory {
+                    name: name.chars().take(48).collect(),
+                    battery,
+                    kind,
+                    left,
+                    right,
+                    case,
+                });
+                if out.len() >= 12 {
+                    return out;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The Mac's `pmset -g batt`:
@@ -166,6 +255,31 @@ mod tests {
         assert_eq!(a.len(), 2);
         assert_eq!(a[0].name, "Galaxy Buds2 Pro");
         assert_eq!((a[1].name.as_str(), a[1].battery), ("MX Master 3", 12));
+    }
+
+    #[test]
+    fn airpods_on_a_mac_tell_each_part() {
+        let json = r#"{"SPBluetoothDataType":[{"controller_properties":{},"device_connected":[
+            {"Nikolas's AirPods Pro":{"device_address":"AA:BB","device_batteryLevelCase":"60%","device_batteryLevelLeft":"80%","device_batteryLevelRight":"75%","device_minorType":"Headphones"}},
+            {"Magic Mouse":{"device_batteryLevelMain":"41%","device_minorType":"Mouse"}},
+            {"Some Speaker":{"device_minorType":"Speaker"}}
+        ],"device_not_connected":[{"Old Buds":{"device_batteryLevelLeft":"10%"}}]}]}"#;
+        let a = parse_mac_bluetooth(json);
+        assert_eq!(a.len(), 2, "only connected ones with a battery");
+        assert_eq!(a[0].kind, AccKind::Earbuds);
+        assert_eq!((a[0].left, a[0].right, a[0].case, a[0].battery), (Some(80), Some(75), Some(60), 75));
+        assert_eq!((a[1].kind, a[1].battery), (AccKind::Mouse, 41));
+        assert!(parse_mac_bluetooth("not json").is_empty());
+    }
+
+    #[test]
+    fn accessory_kinds_from_names() {
+        assert_eq!(kind_of("Galaxy Buds2 Pro"), AccKind::Earbuds);
+        assert_eq!(kind_of("AirPods Max"), AccKind::Headphones);
+        assert_eq!(kind_of("WH-1000XM5 Hands-Free AG"), AccKind::Headphones);
+        assert_eq!(kind_of("MX Master 3"), AccKind::Mouse);
+        assert_eq!(kind_of("Xbox Wireless Controller"), AccKind::Gamepad);
+        assert_eq!(kind_of("Thing"), AccKind::Other);
     }
 
     #[test]

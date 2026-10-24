@@ -47,7 +47,6 @@ const SIDE_LABEL: Record<Side, string> = {
   topleft: "top-left", topright: "top-right", bottomleft: "bottom-left", bottomright: "bottom-right",
 };
 const sideLabel = (name: string) => SIDE_LABEL[name.toLowerCase() as Side] ?? name.toLowerCase();
-const isCorner = (name: string) => name.length > 6;
 
 // ---------------------------------------------------------------- state
 let snap: Snapshot | null = null;
@@ -223,84 +222,150 @@ function renderHeader(s: Snapshot) {
   fb.textContent = String(active);
 }
 
-/** Pairing: this computer's code, who is nearby, manual IP. */
-function pairSection(s: Snapshot, heading: string): Node[] {
-  const out: Node[] = [
-    h("h2", {}, heading),
-    h("div", { class: "code-box" },
-      h("div", {}, h("div", { class: "muted" }, "This computer's code"), h("div", { class: "code" }, s.pairing_code)),
-      h("button", { class: "link", onclick: () => call("new_code") }, "New code")),
-    h("p", { class: "muted", style: "margin-top:10px" },
-      "On the other computer, open CubeCursor, find this computer under Nearby and type this code. You only do this once."),
-  ];
-
+/** Pairing: this computer's code, who is nearby, manual IP. A card of its own. */
+function pairSection(s: Snapshot, heading: string, first = false): Node[] {
   const isLive = (id: string) => s.paired.some((p) => p.id === id && p.connected);
   const nearby = s.nearby.filter((n) => !isLive(n.id));
-  const list = h("div", { class: "stack", style: "margin-top:14px" });
   const paired = s.paired.filter((p) => !p.connected && !nearby.some((n) => n.id === p.id));
+  const list = h("div", { class: "near-list" });
   for (const n of nearby) {
-    const row = h("div", { class: "peer" }, h("div", { class: "grow" }, h("div", { class: "name" }, n.name), h("small", {}, `${n.addr}:${n.port}`)));
+    const row = h("div", { class: "near" },
+      h("span", { class: "near-av" }, Array.from(n.name)[0]?.toUpperCase() ?? "?"),
+      h("div", { class: "grow" }, h("div", { class: "name" }, n.name), h("small", {}, n.paired ? "Paired before" : "On this network")));
     if (n.paired) {
       row.append(h("button", { class: "primary", onclick: () => call("connect_known", { id: n.id }) }, "Connect"));
     } else {
       const input = h("input", {
-        type: "text", class: "codein", placeholder: "000-000", maxLength: 7, inputMode: "numeric",
+        type: "text", class: "codein", placeholder: "000-000", maxLength: 7, inputMode: "numeric", "aria-label": `Code shown on ${n.name}`,
         value: typedCodes.get(n.id) ?? "",
         oninput: (e: Event) => typedCodes.set(n.id, (e.target as HTMLInputElement).value),
         onkeydown: (e: KeyboardEvent) => { if (e.key === "Enter") go(); },
       });
       const go = () => call("connect", { addr: n.addr, port: n.port, code: typedCodes.get(n.id) ?? "" });
-      row.append(input, h("button", { class: "primary", onclick: go }, "Pair"));
+      row.append(h("div", { class: "near-go" }, input, h("button", { class: "primary", onclick: go }, "Pair")));
     }
     list.append(row);
   }
   for (const p of paired) {
-    list.append(h("div", { class: "peer" }, h("div", { class: "grow" }, h("div", { class: "name" }, p.name), h("small", {}, "paired · not seen on the network")),
-      h("button", { onclick: () => call("connect_known", { id: p.id }) }, "Try connect")));
+    list.append(h("div", { class: "near" },
+      h("span", { class: "near-av off" }, Array.from(p.name)[0]?.toUpperCase() ?? "?"),
+      h("div", { class: "grow" }, h("div", { class: "name" }, p.name), h("small", {}, "Paired · not seen on the network")),
+      h("button", { onclick: () => call("connect_known", { id: p.id }) }, "Try again")));
   }
   if (!nearby.length && !paired.length) {
-    list.append(h("div", { class: "muted" }, "Looking for computers running CubeCursor on this network…"));
+    list.append(h("div", { class: "near searching" }, h("span", { class: "radar" }), h("div", { class: "grow" },
+      h("div", { class: "name" }, "Looking for computers…"), h("small", {}, "Open CubeCursor on the other computer, on the same network."))));
   }
-  out.push(h("h2", { style: "margin-top:18px" }, "Nearby"), list);
-
   const ip = h("input", { type: "text", placeholder: "192.168.1.42", value: manualIp, oninput: (e: Event) => (manualIp = (e.target as HTMLInputElement).value) });
   const code = h("input", { type: "text", class: "codein", placeholder: "000-000", maxLength: 7, inputMode: "numeric", value: manualCode, oninput: (e: Event) => (manualCode = (e.target as HTMLInputElement).value) });
-  out.push(h("details", { style: "margin-top:14px" }, h("summary", {}, "Can't see it? Connect by IP address"),
-    h("div", { class: "row" }, ip, code, h("button", { class: "primary", onclick: () => call("connect", { addr: manualIp, port: 24800, code: manualCode }) }, "Pair"))));
-  if (s.error) out.push(h("div", { class: "err", role: "alert" }, s.error));
-  return out;
+  return [
+    h("div", { class: `pair${first ? " first" : ""}` },
+      h("div", { class: "pair-me" },
+        h("h2", {}, heading),
+        first ? h("ol", { class: "steps" },
+          h("li", {}, "Install CubeCursor on your other computer"),
+          h("li", {}, "Find this computer in its list"),
+          h("li", {}, "Type this code there")) : null,
+        h("div", { class: "code-box" },
+          h("div", {}, h("div", { class: "muted" }, "This computer's code"), h("div", { class: "code" }, s.pairing_code)),
+          h("button", { class: "link", onclick: () => call("new_code") }, "New code")),
+        h("p", { class: "muted", style: "margin-top:8px" }, "You only do this once per computer.")),
+      h("div", { class: "pair-near" },
+        h("h2", {}, "Nearby"),
+        list,
+        h("details", { style: "margin-top:10px" }, h("summary", {}, "Can't see it? Connect by IP address"),
+          h("div", { class: "row" }, ip, code, h("button", { class: "primary", onclick: () => call("connect", { addr: manualIp, port: 24800, code: manualCode }) }, "Pair"))))),
+    s.error ? h("div", { class: "err", role: "alert" }, s.error) : null,
+  ].filter(Boolean) as Node[];
 }
 
 const MAX_COMPUTERS = 8;
 
+/** A little ring with a number in it (battery, load). */
+function miniRing(pct: number, color: string, label: string): HTMLElement {
+  const r = 15, c = 2 * Math.PI * r;
+  const w = h("span", { class: "mring", title: label });
+  w.innerHTML = `<svg viewBox="0 0 36 36" width="36" height="36"><circle cx="18" cy="18" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="3.5"/><circle cx="18" cy="18" r="${r}" fill="none" stroke="${color}" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${(c * Math.max(0, Math.min(100, pct))) / 100} ${c}" transform="rotate(-90 18 18)"/></svg>`; // numbers only
+  w.append(h("b", {}, String(Math.round(pct))));
+  return w;
+}
+
+/** One computer: who it is, how it is doing, and what you can do with it. */
+function peerCard(s: Snapshot, p: Snapshot["paired"][number]): HTMLElement {
+  const color = p.color ?? "#14b8a6";
+  const d = p.device ?? null;
+  const inControl = p.id === s.control_peer;
+  const where = `On your ${sideLabel(p.side)}`;
+  const status = !p.connected ? (p.nearby ? "Seen nearby · not connected" : "Not connected")
+    : inControl ? (s.control === "remote" ? "You're using it now" : "It's using this computer")
+    : `${where}${p.ping_ms != null ? ` · ${p.ping_ms} ms` : ""}`;
+  const stats: Node[] = [];
+  if (p.connected && d) {
+    if (d.battery != null) stats.push(h("div", { class: "stat" }, miniRing(d.battery, d.battery <= 20 && !d.plugged ? "#e8743b" : "#22a559", "Battery"), h("span", {}, d.charging ? "Charging" : d.plugged ? "Plugged in" : "Battery")));
+    stats.push(h("div", { class: "stat" }, miniRing(d.cpu, d.cpu > 80 ? "#e8743b" : color, "Processor"), h("span", {}, "Busy")));
+    for (const a of (d.accessories ?? []).slice(0, 2)) stats.push(h("div", { class: "stat" }, miniRing(a.battery, a.battery <= 15 ? "#e8743b" : "#2c6fd6", a.name), h("span", { class: "acc" }, a.name)));
+  }
+  const actions: Node[] = p.connected
+    ? [h("button", { class: "primary", onclick: () => call("engage", { peerId: p.id }) }, inControl && s.control === "remote" ? "Come back" : "Jump there"),
+       h("button", { onclick: () => call("disconnect", { peerId: p.id }) }, "Disconnect")]
+    : [h("button", { class: "primary", onclick: () => call("connect_known", { id: p.id }) }, "Connect"),
+       ...(p.wakeable ? [h("button", { onclick: () => call("wake_peer", { peerId: p.id }) }, "Wake it")] : [])];
+  return h("div", { class: `pc${p.connected ? " on" : ""}${inControl ? " live" : ""}`, style: `--c:${color}` },
+    h("div", { class: "pc-top" },
+      h("span", { class: "pc-av" }, Array.from(p.name)[0]?.toUpperCase() ?? "?"),
+      h("div", { class: "grow" }, h("div", { class: "pc-name" }, p.name), h("div", { class: "pc-sub" }, h("i", { class: "pc-dot" }), status))),
+    stats.length ? h("div", { class: "pc-stats" }, ...stats) : null,
+    h("div", { class: "pc-act" }, ...actions));
+}
+
+const ACC_ICON: Record<string, string> = {
+  earbuds: "M7 4a3 3 0 0 0-3 3v3a3 3 0 0 0 3 3v7M17 4a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3v7",
+  headphones: "M3 15v-3a9 9 0 0 1 18 0v3M3 15a2 2 0 0 1 2-2h1v7H5a2 2 0 0 1-2-2zM21 15a2 2 0 0 0-2-2h-1v7h1a2 2 0 0 0 2-2z",
+  mouse: "M12 3a6 6 0 0 0-6 6v6a6 6 0 0 0 12 0V9a6 6 0 0 0-6-6zM12 7v4",
+  keyboard: "M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10",
+  gamepad: ICONS.game,
+  speaker: "M6 3h12v18H6zM12 15a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM12 7h.01",
+  other: "M7 7l10 10-5 5V2l5 5L7 17",
+};
+
+/** Bluetooth accessories on this computer: earbuds show each bud and the case. */
+function accCard(list: NonNullable<Snapshot["me"]>["accessories"]): HTMLElement {
+  return h("section", { class: "card acc-card" },
+    h("h2", {}, "Bluetooth on this computer"),
+    h("div", { class: "accs" }, ...list.map((a) => {
+      const parts = a.left != null || a.right != null
+        ? [["L", a.left], ["R", a.right], ["Case", a.case]].filter(([, v]) => v != null).map(([l, v]) =>
+            h("div", { class: "acc-part" }, miniRing(v as number, (v as number) <= 15 ? "#e8743b" : "#22a559", `${l}`), h("span", {}, l as string)))
+        : [h("div", { class: "acc-part" }, miniRing(a.battery, a.battery <= 15 ? "#e8743b" : "#22a559", "Battery"))];
+      return h("div", { class: "acc" },
+        h("span", { class: "t-ico", style: "background:#e1efff;color:#2c6fd6" }, ico(ACC_ICON[a.kind ?? "other"] ?? ACC_ICON.other, 20)),
+        h("div", { class: "grow" }, h("div", { class: "pc-name" }, a.name), h("div", { class: "pc-sub" }, "Connected")),
+        h("div", { class: "acc-parts" }, ...parts));
+    })),
+    h("p", { class: "muted", style: "margin-top:10px" }, "Earbuds, headsets, mice and keyboards that report their battery show up here, and in the bar when they connect."));
+}
+
 function renderStage(s: Snapshot) {
   const live = s.paired.filter((p) => p.connected);
-  update(stage, "stage", [s.control, s.control_peer, live.map((p) => [p.id, p.name, p.side]), s.pairing_code, s.nearby, s.paired.map((p) => [p.id, p.nearby, p.connected]), s.error, addOpen], () => {
-    if (!live.length) return pairSection(s, "Pair a computer");
-
-    const ctl = s.paired.find((p) => p.id === s.control_peer)?.name ?? s.connected?.name ?? "";
-    const sub =
-      s.control === "remote" ? "Your mouse and keyboard are on that computer now. Move off its edge, or press Scroll Lock, to come back."
-      : s.control === "controlled" ? "That computer is using this one. Move to the edge to hand control back."
-      : live.length > 1 ? "Push your cursor through an edge to jump to that computer. Copy and paste works between all of them."
-      : "Push your cursor through the screen edge to cross over. Copy and paste works between both.";
-    const rows = live.map((p) =>
-      h("div", { class: "peer" },
-        h("div", { class: "grow" }, h("div", { class: "name" }, p.name), h("small", {}, `on your ${sideLabel(p.side)}${p.id === s.control_peer ? " · in control" : ""}`)),
-        h("button", { class: "primary", onclick: () => call("engage", { peerId: p.id }) }, "Jump"),
-        h("button", { class: "danger", onclick: () => call("disconnect", { peerId: p.id }) }, "Disconnect")));
-    const out: Node[] = [
-      h("div", { class: "hero" },
-        h("div", { class: "big" },
-          s.control === "remote" ? "On " : live.length > 1 ? `Connected to ${live.length} computers` : "Connected to ",
-          s.control === "remote" || live.length === 1 ? h("em", {}, s.control === "remote" ? ctl : live[0].name) : null),
-        h("div", { class: "muted" }, sub)),
-      h("div", { class: "stack", style: "margin-top:12px" }, ...rows),
-    ];
-    if (live.length < MAX_COMPUTERS) {
-      const more = h("details", { style: "margin-top:16px", open: addOpen, ontoggle: (e: Event) => { addOpen = (e.target as HTMLDetailsElement).open; } },
-        h("summary", {}, "Add another computer"), ...pairSection(s, "Pair a computer"));
-      out.push(more);
+  update(stage, "stage", [s.control, s.control_peer, s.paired.map((p) => [p.id, p.name, p.side, p.connected, p.nearby, p.ping_ms, p.color, p.wakeable, p.device?.battery, p.device?.charging, p.device?.plugged, p.device ? Math.round(p.device.cpu / 10) : null, p.device?.accessories]), s.me?.accessories, s.pairing_code, s.nearby, s.error, addOpen], () => {
+    stage.className = s.paired.length ? "stage" : "card";
+    if (!s.paired.length) return pairSection(s, "Add your first computer", true);
+    const ctl = s.paired.find((p) => p.id === s.control_peer)?.name ?? "";
+    const hero = h("div", { class: "hero2" },
+      h("div", { class: "big" },
+        s.control === "remote" ? "You're on " : s.control === "controlled" ? "" : live.length ? "Connected to " : "Waiting for ",
+        h("em", {}, s.control === "remote" || s.control === "controlled" ? ctl : live.length > 1 ? `${live.length} computers` : live[0]?.name ?? (s.paired.length > 1 ? "your computers" : s.paired[0].name)),
+        s.control === "controlled" ? " is using this one" : ""),
+      h("div", { class: "muted" },
+        s.control === "remote" ? "Your mouse and keyboard are over there. Move back through the edge, or press Scroll Lock, to come back."
+        : live.length ? "Push your cursor through an edge to cross. Copy and paste works everywhere." : "They connect by themselves when they're on and on this network."));
+    const out: Node[] = [hero, h("div", { class: "pcs" }, ...s.paired.map((p) => peerCard(s, p)))];
+    const mine = s.me?.accessories ?? [];
+    if (mine.length) out.push(accCard(mine));
+    if (s.paired.length < MAX_COMPUTERS) {
+      out.push(h("details", { class: "add", open: addOpen, ontoggle: (e: Event) => { addOpen = (e.target as HTMLDetailsElement).open; } },
+        h("summary", {}, h("span", { class: "plus" }, "+"), "Add another computer"),
+        h("div", { class: "card" }, ...pairSection(s, "Pair a computer"))));
     } else if (s.error) {
       out.push(h("div", { class: "err", role: "alert" }, s.error));
     }
@@ -312,7 +377,7 @@ function renderLayout(s: Snapshot) {
   layout.hidden = s.paired.length === 0;
   if (!s.paired.length) return;
   if (held && !s.paired.some((p) => p.id === held)) held = null;
-  update(layout, "layout", [s.paired.map((p) => [p.id, p.name, p.side, p.connected]), held], () => {
+  update(layout, "layout", [s.paired.map((p) => [p.id, p.name, p.side, p.connected, p.color]), held, s.device_name], () => {
     const heldPeer = s.paired.find((p) => p.id === held);
     const cells = SIDES.map((sd) => {
       const p = s.paired.find((x) => x.side.toLowerCase() === sd);
@@ -320,6 +385,7 @@ function renderLayout(s: Snapshot) {
         const picked = p.id === held;
         return h("button", {
           class: `cell other at-${sd}${picked ? " held" : ""}${p.connected ? "" : " away"}`,
+          style: `--c:${p.color ?? "#f59e0b"}`,
           title: picked ? "Click again to put it back" : heldPeer ? `Swap with ${heldPeer.name}` : `Pick up ${p.name}`,
           onclick: () => {
             if (!held) held = p.id;
@@ -328,23 +394,20 @@ function renderLayout(s: Snapshot) {
             keys.layout = "";
             renderLayout(snap!);
           },
-        }, h("span", {}, p.name), p.connected ? h("i", { class: "on-dot" }) : null);
+        }, h("i", { class: "scr" }), h("span", {}, p.name), p.connected ? h("i", { class: "on-dot" }) : null);
       }
       return h("button", {
         class: `cell slot at-${sd}`,
         disabled: !held,
         onclick: () => { const id = held; held = null; if (id) call("set_side", { peerId: id, side: sd }); keys.layout = ""; renderLayout(snap!); },
-      }, held ? `Put it here` : SIDE_LABEL[sd]);
+      }, held ? "Put it here" : "");
     });
-    const live = s.paired.filter((p) => p.connected);
     return [
-      h("h2", {}, s.paired.length > 1 ? "Where are your computers?" : "Where is the other computer?"),
-      h("div", { class: "grid3" }, h("div", { class: "cell me" }, "This computer"), ...cells),
-      h("p", { class: "muted", style: "margin-top:10px" },
-        heldPeer
-          ? `Now click an empty side — or another computer to swap places with ${heldPeer.name}.`
-          : "Click a computer to pick it up, then click where it should sit. Corners work too — push into the corner to reach a diagonal computer."),
-      ...live.map((p) => h("p", { class: "muted", style: "margin-top:4px" }, `Push the cursor into the ${sideLabel(p.side)} ${isCorner(p.side) ? "corner" : "edge"} to reach ${p.name}.`)),
+      h("h2", {}, "Your desk"),
+      h("p", { class: "muted", style: "margin:-6px 0 14px" }, heldPeer
+        ? `Now click an empty spot, or another computer to swap places with ${heldPeer.name}.`
+        : "Put each computer where it really is, so the cursor crosses the right edge. Click one to pick it up."),
+      h("div", { class: "grid3 desk" }, h("div", { class: "cell me" }, h("i", { class: "scr" }), h("span", {}, s.device_name), h("small", {}, "This computer")), ...cells),
     ];
   });
 }

@@ -25,7 +25,7 @@ const base: Snapshot = {
   switch_delay_ms: 0,
   error: null,
   notice: null,
-  me: { battery: null, plugged: true, charging: false, mins_left: null, mins_to_full: null, saver: false, cpu: 14, mem: 46, disk_free_gb: 412, disk_total_gb: 953, uptime_min: 312, accessories: [{ name: "MX Master 3", battery: 64 }], mac: "aa:bb:cc:00:11:22" },
+  me: { battery: null, plugged: true, charging: false, mins_left: null, mins_to_full: null, saver: false, cpu: 14, mem: 46, disk_free_gb: 412, disk_total_gb: 953, uptime_min: 312, accessories: [{ name: "AirPods Pro", battery: 75, kind: "earbuds", left: 80, right: 75, case: 60 }, { name: "MX Master 3", battery: 64, kind: "mouse" }], mac: "aa:bb:cc:00:11:22" },
   my_color: "#2dd4bf",
 };
 const dev = (o: Partial<NonNullable<Snapshot["me"]>>): NonNullable<Snapshot["me"]> => ({

@@ -1362,6 +1362,7 @@ async fn each_computer_shows_how_the_other_is_doing() {
         accessories: vec![tandem_core::proto::Accessory {
             name: "MX Master 3".into(),
             battery: 12,
+            ..Default::default()
         }],
         ..Default::default()
     };

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 11;
+pub const PROTOCOL_VERSION: u16 = 12;
 /// UDP port used for "I'm here" broadcasts on the LAN.
 pub const DISCOVERY_PORT: u16 = 24801;
 /// Default TCP port for the control/file listener.
@@ -302,10 +302,35 @@ pub struct DeviceInfo {
     pub mac: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A wireless accessory with a battery (earbuds, a headset, a mouse…).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Accessory {
     pub name: String,
+    /// Percent: the lowest part's for earbuds (what runs out first).
     pub battery: u8,
+    /// What it is (see `AccKind`), for its picture.
+    #[serde(default)]
+    pub kind: AccKind,
+    /// Earbuds that tell each part: left, right and the case (percent).
+    #[serde(default)]
+    pub left: Option<u8>,
+    #[serde(default)]
+    pub right: Option<u8>,
+    #[serde(default)]
+    pub case: Option<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccKind {
+    #[default]
+    Other,
+    Earbuds,
+    Headphones,
+    Mouse,
+    Keyboard,
+    Gamepad,
+    Speaker,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

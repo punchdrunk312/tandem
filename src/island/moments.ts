@@ -2,9 +2,9 @@
 // joining or leaving; a wireless mouse or headset running out. Worked out by comparing
 // each snapshot with the one before, so nothing extra has to come from Rust.
 
-import type { DeviceInfo, SideName, Snapshot } from "../types";
+import type { Accessory, DeviceInfo, SideName, Snapshot } from "../types";
 
-export type MomentKind = "plug" | "unplug" | "low" | "full" | "online" | "offline" | "accessory";
+export type MomentKind = "plug" | "unplug" | "low" | "full" | "online" | "offline" | "accessory" | "acc-on";
 
 export interface Moment {
   kind: MomentKind;
@@ -14,7 +14,7 @@ export interface Moment {
   side: SideName | null;
   color: string;
   device: DeviceInfo | null;
-  acc?: { name: string; battery: number };
+  acc?: Accessory;
   /** Its sound already played, the moment it happened. */
   chimed?: boolean;
 }
@@ -84,11 +84,18 @@ export class MomentWatcher {
             out.push({ ...base, kind: "full" });
           }
         }
+        // Earbuds (or a headset, a mouse) just connected to this computer: how charged.
+        if (dev.id === "me" && hasInfo) {
+          for (const a of d?.accessories ?? []) {
+            if (!before.acc.has(a.name) && this.connectedOnce(a.name, now)) out.push({ ...base, kind: "acc-on", acc: a });
+          }
+        }
         if (hasInfo && dev.connected) {
           for (const [name, b] of now_.acc) {
             const was = before.acc.get(name);
             if (was != null && was > ACC_LOW && b <= ACC_LOW && this.accessoryOnce(name, now)) {
-              out.push({ ...base, kind: "accessory", acc: { name, battery: b } });
+              const full = d?.accessories.find((x) => x.name === name);
+              out.push({ ...base, kind: "accessory", acc: full ?? { name, battery: b } });
             }
           }
         }
@@ -106,6 +113,15 @@ export class MomentWatcher {
       this.last.set(k, now);
       return true;
     });
+  }
+
+  /** The same earbuds put in and out of their case all day: say so at most every 10 min. */
+  private lastOn = new Map<string, number>();
+  private connectedOnce(name: string, now: number): boolean {
+    const t = this.lastOn.get(name) ?? -Infinity;
+    if (now - t < 10 * 60_000) return false;
+    this.lastOn.set(name, now);
+    return true;
   }
 
   private accessoryOnce(name: string, now: number): boolean {
@@ -166,6 +182,13 @@ export function momentText(m: Moment): { title: string; sub: string } {
       return { title: `${m.name} is here`, sub: side ? `On your ${side}. Push the cursor that way.` : "Connected." };
     case "offline":
       return { title: `${m.name} went away`, sub: "It reconnects on its own when it's back." };
+    case "acc-on": {
+      const a = m.acc;
+      const parts = a && (a.left != null || a.right != null)
+        ? [a.left != null ? `Left ${a.left}%` : "", a.right != null ? `Right ${a.right}%` : "", a.case != null ? `Case ${a.case}%` : ""].filter(Boolean).join(" · ")
+        : `${a?.battery ?? 0}% charged`;
+      return { title: `${a?.name ?? "Accessory"} connected`, sub: parts };
+    }
     case "accessory":
       return { title: `${m.acc?.name} is at ${m.acc?.battery}%`, sub: me ? "Charge it soon." : `On ${m.name}. Charge it soon.` };
   }

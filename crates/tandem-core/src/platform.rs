@@ -109,8 +109,9 @@ pub enum CaptureEvent {
     MirrorGone { id: u64 },
     /// The person closed the mirror of another computer's window shown here.
     MirrorDismissed { id: u64 },
-    /// The charger was plugged in or pulled out just now: read how the computer is doing
-    /// at once (the bar says so within a moment, like the system itself).
+    /// The charger was plugged in or pulled out, or a Bluetooth accessory came or went,
+    /// just now: read how the computer is doing at once (the bar says so within a moment,
+    /// like the system itself).
     PowerChanged,
 }
 

@@ -79,7 +79,7 @@ export interface DeviceInfo {
   disk_free_gb: number;
   disk_total_gb: number;
   uptime_min: number;
-  accessories: { name: string; battery: number }[];
+  accessories: Accessory[];
   mac: string | null;
 }
 
@@ -94,4 +94,16 @@ export interface UiOptions {
   monitor_cursor: boolean;
   /** Automatic error reports; null until asked. */
   error_reports?: boolean | null;
+}
+
+/** A wireless accessory with a battery: earbuds, a headset, a mouse… */
+export interface Accessory {
+  name: string;
+  /** Percent; for earbuds the lower bud. */
+  battery: number;
+  kind?: "other" | "earbuds" | "headphones" | "mouse" | "keyboard" | "gamepad" | "speaker";
+  /** Earbuds that tell each part (percent). */
+  left?: number | null;
+  right?: number | null;
+  case?: number | null;
 }

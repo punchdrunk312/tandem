@@ -558,3 +558,8 @@ html.dev body { background: #2b2f38; }
 .u-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
 .u-notes { font-size: 12.5px; color: var(--dim); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .u-row { display: flex; gap: 8px; margin-top: 12px; }
+
+/* Earbuds connected: each bud and the case */
+.m-vis.parts { flex: 0 0 auto; display: flex; gap: 10px; }
+.m-vis.parts::before { display: none; }
+.m-part { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10.5px; font-weight: 600; color: var(--dim); }

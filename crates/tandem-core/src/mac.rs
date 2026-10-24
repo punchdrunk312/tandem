@@ -1238,6 +1238,9 @@ impl Platform for MacPlatform {
             let _ = std::thread::Builder::new()
                 .name("tandem-power".into())
                 .spawn(|| mac_device::power_watch(|| emit(CaptureEvent::PowerChanged)));
+            let _ = std::thread::Builder::new()
+                .name("tandem-bluetooth".into())
+                .spawn(|| mac_device::bluetooth_watch(|| emit(CaptureEvent::PowerChanged)));
         }
     }
 }
@@ -1363,6 +1366,32 @@ mod mac_device {
 
     static CACHE: Mutex<Option<DeviceInfo>> = Mutex::new(None);
     static START: Once = Once::new();
+    /// Connected Bluetooth accessories with a battery (AirPods: each bud and the case).
+    static ACC: Mutex<Vec<crate::proto::Accessory>> = Mutex::new(Vec::new());
+
+    fn bluetooth() -> Option<Vec<crate::proto::Accessory>> {
+        let out = std::process::Command::new("system_profiler")
+            .args(["SPBluetoothDataType", "-json", "-detailLevel", "basic"])
+            .output()
+            .ok()?;
+        Some(crate::status::parse_mac_bluetooth(&String::from_utf8_lossy(&out.stdout)))
+    }
+
+    /// Watches the Bluetooth accessories: earbuds put in, a mouse switched on.
+    pub fn bluetooth_watch(changed: impl Fn()) {
+        loop {
+            if let Some(now) = bluetooth() {
+                let differ = ACC.lock().map(|a| *a != now).unwrap_or(false);
+                if differ {
+                    if let Ok(mut a) = ACC.lock() {
+                        *a = now;
+                    }
+                    changed();
+                }
+            }
+            std::thread::sleep(Duration::from_secs(8));
+        }
+    }
 
     #[link(name = "IOKit", kind = "framework")]
     extern "C" {
@@ -1409,7 +1438,9 @@ mod mac_device {
                 refresh();
             });
         });
-        CACHE.lock().ok().and_then(|c| c.clone()).unwrap_or_default()
+        let mut d = CACHE.lock().ok().and_then(|c| c.clone()).unwrap_or_default();
+        d.accessories = ACC.lock().map(|a| a.clone()).unwrap_or_default();
+        d
     }
 
     /// Watches the charger: plugged in or out is read again at once, not at the next
