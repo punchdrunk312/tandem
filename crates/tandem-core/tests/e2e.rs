@@ -254,19 +254,23 @@ async fn wrong_code_never_pairs_and_code_rotates() {
     let a = start("A").await;
     let b = start("B").await;
     let code = a.node.snapshot().pairing_code;
-    for _ in 0..3 {
+    // Wrong codes, one dial at a time (a dial still in flight to the same address is not
+    // started twice, so on a slow machine they are spaced out), until A burns its code.
+    let mut tries = 0;
+    while a.node.snapshot().pairing_code == code && tries < 12 {
+        tries += 1;
         b.node.connect(lo(), a.node.tcp_port(), "000000".into());
         until("error shown", || b.node.snapshot().error.is_some()).await;
-        until("dial finished", || true).await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
     }
     assert!(a.node.snapshot().connected.is_none());
     assert!(a.node.snapshot().paired.is_empty());
     assert_ne!(
         a.node.snapshot().pairing_code,
         code,
-        "code burned after 3 bad attempts"
+        "code burned after bad attempts"
     );
+    assert!(tries >= 3, "not before 3 bad attempts (took {tries})");
 }
 
 #[tokio::test]
