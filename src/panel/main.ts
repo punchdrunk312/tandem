@@ -534,6 +534,8 @@ async function startSignIn() {
   } catch (e) { licenseMessage = String(e); }
   finally { licenseBusy = false; rerenderSettings(); }
 }
+// Signing in by email comes with the next app build (the app side isn't there yet).
+void startSignIn;
 function stopSignIn(message: string) {
   window.clearTimeout(signInTimer);
   if (signIn) void call("signin_cancel").catch(() => {});
@@ -578,20 +580,15 @@ function licenseSection(): Node[] {
     return [...out, ...err];
   }
 
-  // Signed out, or on the free trial.
+  // No licence yet, or on the free trial: the key from the account page.
   out.push(h("div", { class: "lic-card" },
-    h("b", {}, L.active ? `Free trial · ${daysLeft(L.ends)} day${daysLeft(L.ends) === 1 ? "" : "s"} left` : "Sign in to use CubeCursor"),
-    h("p", {}, "Sign in with the email you bought CubeCursor with. Your other computers don't need to sign in; only this one."),
-    h("div", { class: "actions" },
-      h("button", { class: "primary", disabled: licenseBusy, onclick: () => void startSignIn() }, licenseBusy ? "Working…" : "Sign in"),
-      ...(L.active ? [] : [h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_trial"), "Your 14-day trial has started.") }, "Start free trial")]),
-      h("button", { class: "link", onclick: () => { showKeyEntry = !showKeyEntry; rerenderSettings(); } }, showKeyEntry ? "Hide key" : "Enter a key instead"))));
-  if (showKeyEntry) {
-    out.push(h("div", { class: "license-entry" },
+    h("b", {}, L.active ? `Free trial · ${daysLeft(L.ends)} day${daysLeft(L.ends) === 1 ? "" : "s"} left` : "Activate CubeCursor"),
+    h("p", {}, "Enter the licence key from your account at cubecursor.shop/dashboard. Only this computer needs it: the computers connected to it don't."),
+    h("div", { class: "license-entry" },
       h("input", { type: "text", class: "name-in", value: licenseKeyInput, placeholder: "CUBE-XXXX-XXXX-XXXX-XXXX", autocomplete: "off", spellcheck: false, oninput: (e: Event) => { licenseKeyInput = (e.target as HTMLInputElement).value; } }),
-      h("button", { class: "primary", disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: false }), "Licence activated.") }, "Activate"),
-      h("button", { disabled: licenseBusy, title: "Move it from the computer that has it now", onclick: () => licenseDo(() => call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: true }), "Licence moved to this computer.") }, "Move here")));
-  }
+      h("button", { class: "primary", disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: false }), "Licence activated.") }, licenseBusy ? "Working…" : "Activate")),
+    ...(L.active ? [] : [h("div", { class: "actions" },
+      h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_trial"), "Your 14-day trial has started.") }, "Start free trial"))])));
   return [...out, ...err];
 }
 
@@ -651,12 +648,15 @@ const WINDOWS_HELP: Record<WindowsMode, string> = {
 
 /** What dragging a window across the edge does: three pictures to pick from. */
 function windowsChooser(s: Snapshot): HTMLElement {
-  const mode: WindowsMode = s.monitor_mode ? "monitor" : s.move_apps ? "move" : "off";
+  // Second monitor is held back for now: anyone who had it on goes back to normal.
+  if (s.monitor_mode) void call("set_monitor_mode", { on: false });
+  const mode: WindowsMode = s.move_apps ? "move" : "off";
   const pick = (v: WindowsMode) => {
     void call("set_monitor_mode", { on: v === "monitor" });
     void call("set_move_apps", { on: v === "move" });
   };
-  const cards = WINDOWS_OPTS.map((o) => {
+  // Second monitor isn't in this release: only "stay put" and "move the app".
+  const cards = WINDOWS_OPTS.filter((o) => o.id !== "monitor").map((o) => {
     const b = h("button", { class: `wopt${o.id === mode ? " on" : ""}`, role: "radio", "aria-checked": String(o.id === mode), onclick: () => pick(o.id) },
       h("div", { class: "wopt-art" }),
       h("div", { class: "wopt-title" }, o.title),
@@ -667,7 +667,7 @@ function windowsChooser(s: Snapshot): HTMLElement {
   const mac = isMac() && mode !== "off" ? " macOS asks once for Screen Recording, so the window can be shown on the other computer." : "";
   return h("section", { class: "group" },
     h("h2", { class: "g-title" }, "Windows across screens"),
-    h("div", { class: "wopts", role: "radiogroup" }, ...cards),
+    h("div", { class: "wopts two", role: "radiogroup" }, ...cards),
     h("p", { class: "g-help" }, WINDOWS_HELP[mode] + mac));
 }
 
@@ -1038,7 +1038,7 @@ const TOUR: TourStep[] = [
     focus: ".nav-item[data-page=computers]", art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
   { title: "Drag files across", text: "Pick up a file or folder in Explorer or on the desktop, push it through the edge, and let go on the other computer. It lands in the folder under your cursor. Ctrl+C and Ctrl+V work between computers too.",
     art: () => artHtml(`<div class="art-file"></div>${cursorSvg}`) },
-  { title: "Try the features", text: "Features has one tile per thing CubeCursor can do, like using the other computer as a second monitor. Closing this window doesn't quit CubeCursor: it keeps running next to the clock, and clicking its icon there brings this window back.",
+  { title: "Try the features", text: "Features has one tile per thing CubeCursor can do, like dragging an app over to the other computer. Closing this window doesn't quit CubeCursor: it keeps running next to the clock, and clicking its icon there brings this window back.",
     focus: ".nav-item[data-page=features]", art: () => artHtml(`<div class="art-mon"><b><i class="win"></i></b><b><i class="win ghost"></i></b></div>`) },
   { title: "Handy keys", text: "Ctrl+Alt+Z opens the control bar on the screen your cursor is on. If anything ever feels stuck, press Scroll Lock and your mouse comes straight back. \"Show the tour\" at the bottom left replays this.",
     art: () => artHtml(`<div class="art-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Z</kbd></div>`) },

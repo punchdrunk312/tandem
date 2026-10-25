@@ -469,3 +469,4 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 .art-buds { display: flex; gap: 14px; }
 .art-buds i { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font: 700 17px var(--display); font-style: normal; color: var(--ink); background: radial-gradient(circle, #fff 58%, transparent 60%), conic-gradient(var(--green) 0 78%, var(--line) 78%); animation: bob 3s ease-in-out infinite; }
 .art-buds i:nth-child(2) { animation-delay: 0.2s; } .art-buds i:nth-child(3) { animation-delay: 0.4s; }
+.wopts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }

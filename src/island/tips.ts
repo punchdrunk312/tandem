@@ -5,7 +5,6 @@ const TIPS: { text: string; mac?: boolean; pc?: boolean }[] = [
   { text: "Tip: drag a window through the edge and watch it slide onto your other computer." },
   { text: "Tip: copy on one computer, paste on the other. Text, pictures and files." },
   { text: "Tip: pick up a file, press Space, and drop it on me to send it over." },
-  { text: "Tip: turn on Second monitor in Settings, and your other computer becomes an extra screen." },
   { text: "Tip: open Your computers in the bar to see every battery, and lock or wake them." },
   { text: "Tip: running low on a laptop? I'll offer to bring its apps over to the other computer." },
   { text: "Tip: the timer button starts a focus session. I keep the cards quiet until it's done." },

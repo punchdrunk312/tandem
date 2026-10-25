@@ -21,13 +21,8 @@ export const RELEASES: Release[] = [
     version: "0.2.0",
     things: [
       {
-        title: "Use the other computer as a second monitor",
-        text: "Pick “Second monitor” under Features, then drag any window through the edge. It keeps running here and you click and type in it over there, like on a real second screen.",
-        art: `<div class="art-mon"><b><i class="win"></i></b><b><i class="win ghost"></i></b></div>`,
-      },
-      {
         title: "Changed your mind? Undo",
-        text: "For two minutes after you move an app, send files or show a window across, the bar has an Undo button that puts it all back.",
+        text: "For two minutes after you move an app or send files, the bar has an Undo button that puts it all back.",
         art: `<div class="art-keys"><kbd>↶ Undo</kbd></div>`,
       },
       {
