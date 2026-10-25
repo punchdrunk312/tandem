@@ -1411,6 +1411,8 @@ async fn the_bar_can_lock_or_put_the_other_computer_to_sleep() {
     let bid = b.node.snapshot().device_id;
     a.node
         .power(bid.clone(), tandem_core::proto::PowerAction::Lock);
+    // Each runs on a thread of its own over there: one at a time, so the order is fixed.
+    until("B locked", || b.plat.st.lock().unwrap().power_done.len() == 1).await;
     a.node.power(bid, tandem_core::proto::PowerAction::Sleep);
     until("B locked, then slept", || {
         b.plat.st.lock().unwrap().power_done.len() == 2
