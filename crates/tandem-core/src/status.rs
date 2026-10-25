@@ -116,6 +116,26 @@ pub fn kind_of(name: &str) -> AccKind {
     }
 }
 
+/// AirPods (and Beats) say how charged they are in the Bluetooth adverts they send out
+/// all the time (Apple's "proximity pairing" message, company 0x004C, type 0x07): each
+/// bud and the case in tens of percent. Windows doesn't show it, so CubeCursor listens.
+/// Returns (left, right, case) in percent; `None` for a part that isn't there.
+pub fn parse_apple_pods(data: &[u8]) -> Option<(Option<u8>, Option<u8>, Option<u8>)> {
+    // 0x07, length 0x19, then: prefix, model (2), status, buds, case + charging, …
+    if data.len() < 9 || data[0] != 0x07 || data[1] as usize + 2 > data.len() || data[1] < 7 {
+        return None;
+    }
+    let status = data[5];
+    let buds = data[6];
+    let case = data[7] & 0x0F;
+    // Which nibble is the left bud depends on which bud is "primary".
+    let flipped = status & 0x20 == 0;
+    let (l, r) = if flipped { (buds >> 4, buds & 0x0F) } else { (buds & 0x0F, buds >> 4) };
+    let pct = |v: u8| (v <= 10).then_some(v * 10);
+    let (l, r, c) = (pct(l), pct(r), pct(case));
+    (l.is_some() || r.is_some()).then_some((l, r, c))
+}
+
 /// "73%" (what macOS writes) as a number.
 fn pct(v: &serde_json::Value) -> Option<u8> {
     let s = v.as_str()?;
@@ -270,6 +290,24 @@ mod tests {
         assert_eq!((a[0].left, a[0].right, a[0].case, a[0].battery), (Some(80), Some(75), Some(60), 75));
         assert_eq!((a[1].kind, a[1].battery), (AccKind::Mouse, 41));
         assert!(parse_mac_bluetooth("not json").is_empty());
+    }
+
+    #[test]
+    fn airpods_adverts_tell_each_bud_and_the_case() {
+        // AirPods Pro: right is primary (bit 0x20 set), left 8 (80%), right 7, case 6.
+        let mut d = vec![0x07, 0x19, 0x01, 0x0E, 0x20, 0x2B, 0x78, 0x36, 0x00];
+        d.resize(27, 0);
+        assert_eq!(parse_apple_pods(&d), Some((Some(80), Some(70), Some(60))));
+        // The other bud primary: the nibbles swap.
+        d[5] = 0x0B;
+        assert_eq!(parse_apple_pods(&d), Some((Some(70), Some(80), Some(60))));
+        // A bud that isn't there (15) and no case.
+        d[6] = 0xF9;
+        d[7] = 0x0F;
+        assert_eq!(parse_apple_pods(&d), Some((None, Some(90), None)));
+        // Not an AirPods message.
+        assert_eq!(parse_apple_pods(&[0x10, 0x05, 1, 2, 3, 4, 5, 6, 7]), None);
+        assert_eq!(parse_apple_pods(&[0x07]), None);
     }
 
     #[test]

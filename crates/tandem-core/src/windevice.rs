@@ -6,7 +6,7 @@
 //! of Windows' device list through PowerShell every two minutes) and the network card's
 //! address (once, then every ten minutes).
 
-use crate::proto::{Accessory, AppRef, DeviceInfo, PowerAction};
+use crate::proto::{AccKind, Accessory, AppRef, DeviceInfo, PowerAction};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Mutex, Once};
 use std::time::Duration;
@@ -163,6 +163,74 @@ pub fn accessory_watch(changed: impl Fn()) {
     }
 }
 
+/// The latest AirPods advert heard nearby: signal strength, (left, right, case), when.
+type Pods = (i16, (Option<u8>, Option<u8>, Option<u8>), std::time::Instant);
+static APPLE: Mutex<Option<Pods>> = Mutex::new(None);
+
+/// AirPods' charge, from the adverts they send (Windows itself never shows it): the
+/// strongest one heard lately, which is the pair in your ears or the case next to you.
+fn apple_pods() -> Option<(Option<u8>, Option<u8>, Option<u8>)> {
+    let g = APPLE.lock().ok()?;
+    let (rssi, p, at) = (*g)?;
+    (at.elapsed() < Duration::from_secs(20) && rssi > -75).then_some(p)
+}
+
+/// Listens to Bluetooth adverts for AirPods' charge (no pairing, nothing sent).
+pub fn pods_watch() {
+    use windows::Devices::Bluetooth::Advertisement::*;
+    use windows::Foundation::TypedEventHandler;
+    use windows::Storage::Streams::DataReader;
+    use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+    let run = || -> windows::core::Result<BluetoothLEAdvertisementWatcher> {
+        unsafe {
+            let _ = RoInitialize(RO_INIT_MULTITHREADED);
+        }
+        let w = BluetoothLEAdvertisementWatcher::new()?;
+        w.SetScanningMode(BluetoothLEScanningMode::Active)?;
+        w.Received(&TypedEventHandler::new(
+            |_, args: windows::core::Ref<BluetoothLEAdvertisementReceivedEventArgs>| {
+                let Some(a) = args.as_ref() else {
+                    return Ok(());
+                };
+                let rssi = a.RawSignalStrengthInDBm()?;
+                let list = a.Advertisement()?.ManufacturerData()?;
+                for i in 0..list.Size()? {
+                    let m = list.GetAt(i)?;
+                    if m.CompanyId()? != 0x004C {
+                        continue;
+                    }
+                    let buf = m.Data()?;
+                    let mut v = vec![0u8; buf.Length()? as usize];
+                    DataReader::FromBuffer(&buf)?.ReadBytes(&mut v)?;
+                    let Some(p) = crate::status::parse_apple_pods(&v) else {
+                        continue;
+                    };
+                    if let Ok(mut g) = APPLE.lock() {
+                        // Keep the strongest; a weaker one only once that has gone quiet.
+                        let take = match *g {
+                            Some((r, _, at)) => rssi >= r - 6 || at.elapsed() > Duration::from_secs(6),
+                            None => true,
+                        };
+                        if take {
+                            *g = Some((rssi, p, std::time::Instant::now()));
+                        }
+                    }
+                }
+                Ok(())
+            },
+        ))?;
+        w.Start()?;
+        Ok(w)
+    };
+    match run() {
+        Ok(_watcher) => loop {
+            // The watcher lives as long as this thread.
+            std::thread::sleep(Duration::from_secs(3600));
+        },
+        Err(e) => log::info!("airpods: can't listen to Bluetooth adverts ({e})"),
+    }
+}
+
 /// "AirPods Pro Hands-Free AG" and "AirPods Pro Stereo" are the same AirPods.
 fn plain_name(name: &str) -> String {
     let mut n = name.trim().to_string();
@@ -220,13 +288,15 @@ fn accessories() -> Option<Vec<Accessory>> {
             if CM_Locate_DevNodeW(&mut inst, PCWSTR(z.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS {
                 continue;
             }
-            let Some((ty, _)) = prop(inst, &BATTERY, &mut buf) else {
-                continue;
+            // The battery Windows knows (most headsets, mice, keyboards)…
+            let battery = match prop(inst, &BATTERY, &mut buf) {
+                Some((ty, _)) if ty == DEVPROP_TYPE_BYTE.0 && buf[0] <= 100 => Some(buf[0]),
+                _ => None,
             };
-            if ty != DEVPROP_TYPE_BYTE.0 || buf[0] > 100 {
+            // …or none: AirPods tell theirs only in their adverts (see `apple_pods`).
+            if battery.is_none() && !head.starts_with("BTHENUM") {
                 continue;
             }
-            let battery = buf[0];
             if let Some((ty, _)) = prop(inst, &CONNECTED, &mut buf) {
                 if ty == DEVPROP_TYPE_BOOLEAN.0 && buf[0] == 0 {
                     continue; // paired, but not connected now
@@ -253,14 +323,33 @@ fn accessories() -> Option<Vec<Accessory>> {
             if name.is_empty() {
                 continue;
             }
+            let lower = name.to_lowercase();
+            let apple = lower.contains("airpods") || lower.contains("beats");
+            let pods = if apple { apple_pods() } else { None };
+            let (left, right, case) = pods.unwrap_or((None, None, None));
+            let battery = match (battery, [left, right].into_iter().flatten().min()) {
+                (_, Some(b)) => b,
+                (Some(b), None) => b,
+                (None, None) => continue,
+            };
             match out.iter_mut().find(|a| a.name == name) {
                 // The same earbuds show up as several devices: the lowest battery counts.
-                Some(a) => a.battery = a.battery.min(battery),
+                Some(a) => {
+                    if a.left.is_none() {
+                        a.battery = a.battery.min(battery);
+                    }
+                }
                 None => out.push(Accessory {
                     name: name.chars().take(48).collect(),
                     battery,
-                    kind: crate::status::kind_of(&name),
-                    ..Default::default()
+                    kind: if apple && !lower.contains("max") && !lower.contains("studio") && !lower.contains("solo") {
+                        AccKind::Earbuds
+                    } else {
+                        crate::status::kind_of(&name)
+                    },
+                    left,
+                    right,
+                    case,
                 }),
             }
             if out.len() >= 12 {

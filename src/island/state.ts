@@ -23,6 +23,8 @@ export interface IslandSettings {
   tips: boolean;
   /** Minutes the focus timer starts with. */
   focusMinutes: number;
+  /** A card with the battery when earbuds (or a headset, a mouse) connect. */
+  accCards: boolean;
 }
 
 /** A focus timer that is running: when it ends and how long it was (ms). */
@@ -57,6 +59,7 @@ const DEFAULTS: IslandSettings = {
   theme: "glass",
   tips: true,
   focusMinutes: 25,
+  accCards: true,
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;

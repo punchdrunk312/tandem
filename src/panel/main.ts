@@ -672,7 +672,8 @@ function windowsChooser(s: Snapshot): HTMLElement {
 }
 
 function renderFeatures(s: Snapshot) {
-  update(features, "features", [s.clipboard_sync, s.drag_files, s.move_apps, s.monitor_mode, s.game_mode, s.switch_delay_ms, autostart, plat.os], () => [
+  const isl = islandSettings();
+  update(features, "features", [s.clipboard_sync, s.drag_files, s.move_apps, s.monitor_mode, s.game_mode, s.switch_delay_ms, autostart, plat.os, isl.accCards, s.me?.accessories], () => [
     windowsChooser(s),
     group("Everyday",
       tile({ id: "clip", icon: ICONS.clipboard, color: "teal", title: "Shared clipboard", line: "Copy here, paste there.", on: s.clipboard_sync,
@@ -684,6 +685,12 @@ function renderFeatures(s: Snapshot) {
       tile({ id: "game", icon: ICONS.game, color: "violet", title: "Game mode", line: "Never switch in the middle of a game.", on: s.game_mode,
         more: "While a game or any full-screen app is open, the cursor stays on this computer even at the edge.",
         control: switchEl(s.game_mode, (v) => call("set_game_mode", { on: v })) }),
+      tile({ id: "buds", icon: ACC_ICON.earbuds, color: "blue", title: "Earbuds' battery", line: "AirPods, Galaxy Buds, headsets, mice.", on: isl.accCards,
+        more: (s.me?.accessories?.length
+          ? `Connected now: ${s.me.accessories.map((a) => `${a.name} ${a.left != null || a.right != null ? `(L ${a.left ?? "–"}% · R ${a.right ?? "–"}%${a.case != null ? ` · case ${a.case}%` : ""})` : `${a.battery}%`}`).join(", ")}. `
+          : "Nothing connected right now. ")
+          + "When they connect, the bar shows how charged they are; AirPods show each bud and the case. All of them are listed on the Computers page.",
+        control: switchEl(isl.accCards, (v) => { saveIsland({ accCards: v }); if (snap) { keys.features = ""; renderFeatures(snap); } }) }),
       tile({ id: "start", icon: ICONS.power, color: "green", title: isMac() ? "Open at login" : "Start with Windows", line: "Ready the moment you sign in.", on: autostart,
         control: switchEl(autostart, async (on) => { await call("autostart_set", { on }); autostart = on; if (snap) renderFeatures(snap); }) })),
     group("Crossing",
@@ -853,12 +860,14 @@ interface IslandOpts {
   seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
   theme: "glass" | "dark";
   tips: boolean;
+  accCards: boolean;
 }
 const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
   theme: "glass",
   tips: true,
+  accCards: true,
 };
 function islandSettings(): IslandOpts {
   try {

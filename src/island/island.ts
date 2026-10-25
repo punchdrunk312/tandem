@@ -366,9 +366,14 @@ export class Island {
       Sound.play(m.kind);
       m.chimed = true;
     }
+    if (m.kind === "acc-on") {
+      // Its own switch ("Earbuds' battery"), whatever the other cards do. Accessories
+      // already connected when CubeCursor starts aren't news.
+      if (!State.settings.accCards || performance.now() - this.launchedAt < 20_000) return;
+      this.queueMoment(m);
+      return;
+    }
     if (!State.settings.moments) return;
-    // Accessories already connected when CubeCursor starts aren't news.
-    if (m.kind === "acc-on" && performance.now() - this.launchedAt < 20_000) return;
     if (m.kind === "offline") {
       // Sleep, a Wi-Fi blip, a restart: wait a little before saying it went away, and
       // say nothing if it is back by then.
@@ -397,7 +402,7 @@ export class Island {
   }
 
   private queueMoment(m: Moment) {
-    if (!State.settings.moments) return;
+    if (!State.settings.moments && m.kind !== "acc-on") return;
     // Only the latest of each kind per computer waits (plugged in, then out: just "out").
     this.momentQueue = this.momentQueue.filter((q) => q.id !== m.id || (q.kind !== m.kind && !(isPlug(q) && isPlug(m))));
     this.momentQueue.push(m);
