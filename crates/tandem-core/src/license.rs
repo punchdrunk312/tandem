@@ -51,17 +51,27 @@ pub fn verify(token: &str, key: &[u8; 32], now: u64) -> Result<Pass, Invalid> {
     vk.verify(&body, &Signature::from_bytes(&sig))
         .map_err(|_| Invalid::BadSignature)?;
     let pass: Pass = serde_json::from_slice(&body).map_err(|_| Invalid::Malformed)?;
-    if now >= pass.exp {
+    // Expired, or issued "in the future" (the clock was set back before it): not valid.
+    if now >= pass.exp || now + 600 < pass.iat {
         return Err(Invalid::Expired);
     }
     Ok(pass)
 }
 
+/// The latest time the app has ever seen (saved by the app): `now` never goes below it, so
+/// setting the clock back doesn't bring an expired pass back to life.
+static FLOOR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_floor(t: u64) {
+    FLOOR.fetch_max(t, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn now() -> u64 {
-    std::time::SystemTime::now()
+    let clock = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    clock.max(FLOOR.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Signs a pass (tests and tools only; the real key lives on the website).
@@ -102,6 +112,12 @@ mod tests {
         let t = sign(&pass(1000), &sk);
         assert_eq!(verify(&t, &pk, 500).unwrap().dev, "abc");
         assert_eq!(verify(&t, &pk, 1000), Err(Invalid::Expired));
+        // The clock set back to well before the pass was issued.
+        let mut late = pass(20_000);
+        late.iat = 10_000;
+        let t = sign(&late, &sk);
+        assert_eq!(verify(&t, &pk, 100), Err(Invalid::Expired));
+        assert!(verify(&t, &pk, 9_800).is_ok(), "a few minutes of clock drift are fine");
     }
 
     #[test]

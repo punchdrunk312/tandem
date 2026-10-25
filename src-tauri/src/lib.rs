@@ -179,6 +179,37 @@ fn license_release(app: AppHandle, st: State<'_, AppState>) -> Result<license_cl
     license_client::release(&license_path(&app)?, &st.node)
 }
 
+/// Settings › Sign in: opens the browser to allow this PC.
+#[tauri::command(async)]
+fn signin_start(st: State<'_, AppState>) -> Result<license_client::SignInStart, String> {
+    license_client::signin_start(&st.node)
+}
+
+#[tauri::command(async)]
+fn signin_poll(app: AppHandle, st: State<'_, AppState>) -> Result<license_client::SignInPoll, String> {
+    license_client::signin_poll(&license_path(&app)?, &st.node)
+}
+
+#[tauri::command]
+fn signin_cancel() {
+    license_client::signin_cancel();
+}
+
+#[tauri::command]
+fn signin_open() -> Result<(), String> {
+    license_client::signin_open()
+}
+
+#[tauri::command(async)]
+fn signout(app: AppHandle, st: State<'_, AppState>) -> Result<license_client::LicenseView, String> {
+    license_client::signout(&license_path(&app)?, &st.node)
+}
+
+#[tauri::command(async)]
+fn license_use_here(app: AppHandle, st: State<'_, AppState>) -> Result<license_client::LicenseView, String> {
+    license_client::use_here(&license_path(&app)?, &st.node)
+}
+
 #[tauri::command]
 fn connect(st: State<'_, AppState>, addr: String, port: Option<u16>, code: String) -> R {
     let ip: IpAddr = addr
@@ -968,8 +999,8 @@ pub fn run() {
                 discovery: true,
                 default_name: std::env::var("COMPUTERNAME")
                     .unwrap_or_else(|_| "My computer".into()),
-                // Licence checking stays off until the app can fetch and renew passes.
-                license_key: None,
+                // Two computers work together when at least one shows a valid pass.
+                license_key: Some(tandem_core::license::PUBLIC_KEY),
             };
             let node = tauri::async_runtime::block_on(Node::start(
                 cfg,
@@ -1164,6 +1195,12 @@ pub fn run() {
             license_activate,
             license_trial,
             license_release,
+            signin_start,
+            signin_poll,
+            signin_cancel,
+            signin_open,
+            signout,
+            license_use_here,
             connect,
             connect_known,
             disconnect,

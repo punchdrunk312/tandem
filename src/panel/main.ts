@@ -534,8 +534,6 @@ async function startSignIn() {
   } catch (e) { licenseMessage = String(e); }
   finally { licenseBusy = false; rerenderSettings(); }
 }
-// Signing in by email comes with the next app build (the app side isn't there yet).
-void startSignIn;
 function stopSignIn(message: string) {
   window.clearTimeout(signInTimer);
   if (signIn) void call("signin_cancel").catch(() => {});
@@ -580,15 +578,13 @@ function licenseSection(): Node[] {
     return [...out, ...err];
   }
 
-  // No licence yet, or on the free trial: the key from the account page.
+  // Signed out, or on the free trial: sign in with the account the key was redeemed to.
   out.push(h("div", { class: "lic-card" },
-    h("b", {}, L.active ? `Free trial · ${daysLeft(L.ends)} day${daysLeft(L.ends) === 1 ? "" : "s"} left` : "Activate CubeCursor"),
-    h("p", {}, "Enter the licence key from your account at cubecursor.shop/dashboard. Only this computer needs it: the computers connected to it don't."),
-    h("div", { class: "license-entry" },
-      h("input", { type: "text", class: "name-in", value: licenseKeyInput, placeholder: "CUBE-XXXX-XXXX-XXXX-XXXX", autocomplete: "off", spellcheck: false, oninput: (e: Event) => { licenseKeyInput = (e.target as HTMLInputElement).value; } }),
-      h("button", { class: "primary", disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_activate", { key: licenseKeyInput, takeover: false }), "Licence activated.") }, licenseBusy ? "Working…" : "Activate")),
-    ...(L.active ? [] : [h("div", { class: "actions" },
-      h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_trial"), "Your 14-day trial has started.") }, "Start free trial"))])));
+    h("b", {}, L.active ? `Free trial · ${daysLeft(L.ends)} day${daysLeft(L.ends) === 1 ? "" : "s"} left` : "Sign in to use CubeCursor"),
+    h("p", {}, "Sign in with the CubeCursor account your key is redeemed to (redeem it at cubecursor.shop/dashboard). Only this computer signs in: the computers connected to it don't need to."),
+    h("div", { class: "actions" },
+      h("button", { class: "primary", disabled: licenseBusy, onclick: () => void startSignIn() }, licenseBusy ? "Working…" : "Sign in"),
+      ...(L.active ? [] : [h("button", { disabled: licenseBusy, onclick: () => licenseDo(() => call<LicenseView>("license_trial"), "Your 14-day trial has started.") }, "Start free trial")]))));
   return [...out, ...err];
 }
 
