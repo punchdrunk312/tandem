@@ -1107,16 +1107,39 @@ pub fn run() {
             island::spawn_cursor_poll(app.handle().clone(), gate);
 
             // Ctrl+Alt+Z opens / closes the control bar, Ctrl+Alt+U the transfer bar.
-            for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
-                if let Err(e) = app.global_shortcut().register(Shortcut::new(
-                    Some(Modifiers::CONTROL | Modifiers::ALT),
-                    key,
-                )) {
-                    log_line(
-                        app.handle(),
-                        &format!("hotkey Ctrl+Alt+{label} not registered: {e}"),
-                    );
-                }
+            // If a leftover copy of CubeCursor is still running it already holds these, so the
+            // register fails: wait a moment in case it's quitting, try once more, and if it still
+            // fails, tell the person instead of leaving the shortcut silently dead.
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    for attempt in 0..2 {
+                        if attempt > 0 {
+                            std::thread::sleep(Duration::from_millis(1500));
+                        }
+                        let mut held = Vec::new();
+                        for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
+                            let sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), key);
+                            if handle.global_shortcut().is_registered(sc) {
+                                continue;
+                            }
+                            if let Err(e) = handle.global_shortcut().register(sc) {
+                                log_line(&handle, &format!("hotkey Ctrl+Alt+{label} not registered: {e}"));
+                                held.push(label);
+                            }
+                        }
+                        if held.is_empty() {
+                            return;
+                        }
+                        if attempt == 1 {
+                            let _ = handle.emit_to(
+                                island::WINDOW_LABEL,
+                                "note",
+                                "Another copy of CubeCursor is already running, so the keyboard shortcuts (Ctrl+Alt+Z and Ctrl+Alt+U) are turned off here. Quit the other copy and reopen CubeCursor.",
+                            );
+                        }
+                    }
+                });
             }
 
             // Keep the right-click entry pointing at this copy of the program.
