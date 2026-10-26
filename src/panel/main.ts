@@ -1,5 +1,5 @@
 import "./panel.css";
-import { call, onFileDrop, onSnapshot } from "./api";
+import { call, onEvent, onFileDrop, onSnapshot } from "./api";
 import type { ElevState, Side, Snapshot, UiOptions } from "../types";
 import { RELEASES, markSeen, pending } from "../whatsnew";
 
@@ -1018,30 +1018,49 @@ void call<Snapshot>("snapshot").then((s) => { if (s && !snap) render(s); });
 
 // ---------------------------------------------------------------- first-launch tour
 const TOUR_KEY = "cubecursor.tour.done";
-interface TourStep { title: string; text: string; art: () => HTMLElement; focus?: string }
+/** `wait`: the step moves on by itself once the person really does it (an event from the
+ * app, or a change in the snapshot). They can always skip the step. */
+interface TourStep {
+  title: string; text: string; art: () => HTMLElement; focus?: string;
+  wait?: { hint: string; event?: string; until?: (s: Snapshot) => boolean };
+}
 const cursorSvg = `<svg viewBox="0 0 24 24" class="art-cursor"><path d="M5 3l14 8-6 2-2 6z" fill="#12202c" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 function artHtml(html: string): HTMLElement {
   const w = h("div", { class: "art" });
   w.innerHTML = html; // static, trusted markup
   return w;
 }
-const TOUR: TourStep[] = [
-  { title: "You're connected!", text: "Nice — your computers are linked. Move your cursor off the edge of one screen and it appears on the other. Here's a 30-second tour of where everything is.",
+const keysArt = (keys: string[]) => () => artHtml(`<div class="art-keys">${keys.map((k) => `<kbd>${k}</kbd>`).join("")}</div>`);
+/** Built when it starts, because only then do we know which computer this is (Mac or PC). */
+const buildTour = (): TourStep[] => {
+const MAC = isMac();
+const KEY_BAR = MAC ? "⌃⌥Z" : "Ctrl+Alt+Z";
+const KEY_PILL = MAC ? "⌃⌥U" : "Ctrl+Alt+U";
+return [
+  { title: "Welcome to CubeCursor", text: "One mouse and keyboard for all your computers. This guide takes about two minutes and you do each step yourself, so the shortcuts stick. You can leave any time and replay it from the bottom left.",
     art: () => artHtml(`<img class="art-bob" src="/brand.png" alt="">`) },
-  { title: "Everything is in this window", text: "Computers: who is connected and where they sit. Features: what CubeCursor can do, one switch each. Files sends things across. Bar & Bob: how the bar looks and sounds. Account: licence, updates and feedback.",
-    focus: ".nav", art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
-  { title: "Arrange them like your desk", text: "On the Computers page, click a computer in the layout map, then click where it sits — a side, or a corner for a diagonal. Up to eight computers around this one.",
+  { title: "Connect your other computer", text: "Install CubeCursor on your other computer too and open it. Keep both on the same Wi-Fi or network. They find each other, and you accept the pairing once on each side.",
+    wait: { hint: "Waiting for your other computer… (skip if you'll do it later)", until: (s) => !!s.connected },
     focus: ".nav-item[data-page=computers]", art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
-  { title: "Drag files across", text: "Pick up a file or folder in Explorer or on the desktop, push it through the edge, and let go on the other computer. It lands in the folder under your cursor. Ctrl+C and Ctrl+V work between computers too.",
+  { title: "Arrange them like your desk", text: "On the Computers page, click a computer in the layout map, then click where it sits on your desk: left, right, above or below. Then push your cursor through that edge and it appears on the other screen.",
+    focus: ".nav-item[data-page=computers]", art: () => artHtml(`<div class="art-desk"><b></b><b class="pulse"></b><b></b><b class="pulse"></b><b class="me"></b><b></b><b></b><b></b><b class="pulse"></b></div>`) },
+  { title: `Try it: press ${KEY_BAR}`, text: "This opens the control bar at the top of the screen your cursor is on. It shows who is connected, and has Lock, Sleep and the other quick actions. Press it again to close it.",
+    wait: { hint: `Press ${KEY_BAR} now`, event: "hotkey:bar" }, art: keysArt(MAC ? ["⌃", "⌥", "Z"] : ["Ctrl", "Alt", "Z"]) },
+  { title: `Try it: press ${KEY_PILL}`, text: "This opens the transfer bar, where you can see and manage files being sent between your computers. Press it again to put it away.",
+    wait: { hint: `Press ${KEY_PILL} now`, event: "hotkey:pill" }, art: keysArt(MAC ? ["⌃", "⌥", "U"] : ["Ctrl", "Alt", "U"]) },
+  { title: "Send a file", text: "Pick up a file or folder, push it through the edge, and let go on the other computer. Or pick it up, press Space and drop it on the other computer's name in the bar. Ctrl+C and Ctrl+V work between computers too.",
     art: () => artHtml(`<div class="art-file"></div>${cursorSvg}`) },
-  { title: "Try the features", text: "Features has one tile per thing CubeCursor can do, like dragging an app over to the other computer. Closing this window doesn't quit CubeCursor: it keeps running next to the clock, and clicking its icon there brings this window back.",
+  { title: MAC ? "If anything feels stuck: Esc, Esc, Esc" : "If anything feels stuck: Scroll Lock", text: MAC ? "Press Esc three times quickly and your mouse and keyboard come straight back to this computer. You'll rarely need it, but it's good to know it's there." : "Press Scroll Lock and your mouse and keyboard come straight back to this computer. You'll rarely need it, but it's good to know it's there.",
+    art: keysArt([MAC ? "Esc ×3" : "Scroll Lock"]) },
+  { title: "It lives next to the clock", text: "Closing this window doesn't quit CubeCursor. It keeps running in the tray by the clock, and when your computer starts it goes straight there. Click its icon to bring this window back, and right-click for Quit.",
+    art: () => artHtml(`<img class="art-bob" src="/brand.png" alt="">`) },
+  { title: "You're all set", text: "Features has a switch for everything CubeCursor can do, and Bar & Bob changes how the bar looks and sounds. Enjoy!",
     focus: ".nav-item[data-page=features]", art: () => artHtml(`<div class="art-mon"><b><i class="win"></i></b><b><i class="win ghost"></i></b></div>`) },
-  { title: "Handy keys", text: "Ctrl+Alt+Z opens the control bar on the screen your cursor is on. If anything ever feels stuck, press Scroll Lock and your mouse comes straight back. \"Show the tour\" at the bottom left replays this.",
-    art: () => artHtml(`<div class="art-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Z</kbd></div>`) },
 ];
+};
 let tourStep = 0;
 /** The steps on show: the welcome tour, or what's new after an update. */
-let steps: TourStep[] = TOUR;
+let steps: TourStep[] = [];
 let onTourEnd: () => void = () => { try { localStorage.setItem(TOUR_KEY, "1"); } catch { /* storage unavailable */ } };
 const tour = h("div", { id: "tour", role: "dialog", "aria-modal": "true", "aria-label": "Welcome tour" });
 document.body.append(tour);
@@ -1055,6 +1074,21 @@ function endTour() {
   tour.classList.remove("show");
   onTourEnd();
 }
+let stepDone = false;
+let advanceTimer = 0;
+function nextStep() {
+  window.clearTimeout(advanceTimer);
+  if (tourStep >= steps.length - 1) endTour();
+  else { tourStep++; stepDone = false; renderTour(); }
+}
+/** The person did what the step asked: show a tick, then move on. */
+function stepCompleted() {
+  const st = steps[tourStep];
+  if (!tour.classList.contains("show") || !st?.wait || stepDone) return;
+  stepDone = true;
+  renderTour();
+  advanceTimer = window.setTimeout(nextStep, 1100);
+}
 function renderTour() {
   const st = steps[tourStep];
   clearFocus();
@@ -1063,37 +1097,49 @@ function renderTour() {
     tour.classList.add("aside");
   }
   const last = tourStep === steps.length - 1;
+  const waiting = !!st.wait && !stepDone;
   const art = h("div", { class: "tour-art" });
   art.append(st.art());
   tour.replaceChildren(
     h("div", { class: "tour-card" },
       art,
-      h("div", { class: "tour-body tour-step", key: tourStep }, h("h3", {}, st.title), h("p", {}, st.text)),
+      h("div", { class: "tour-body tour-step", key: tourStep }, h("h3", {}, st.title), h("p", {}, st.text),
+        st.wait ? h("p", { class: stepDone ? "tour-wait done" : "tour-wait" }, stepDone ? "✓ Nice, that's it!" : st.wait.hint) : null),
       h("div", { class: "tour-foot" },
         h("div", { class: "dots" }, ...steps.map((_, i) => h("i", { class: i === tourStep ? "on" : "" }))),
-        last ? null : h("button", { class: "link", onclick: endTour }, "Skip"),
-        tourStep > 0 ? h("button", { onclick: () => { tourStep--; renderTour(); } }, "Back") : null,
-        h("button", { class: "primary", onclick: () => { if (last) endTour(); else { tourStep++; renderTour(); } } }, last ? "Get started" : "Next"))));
+        last ? null : h("button", { class: "link", onclick: endTour }, "Skip guide"),
+        tourStep > 0 ? h("button", { onclick: () => { window.clearTimeout(advanceTimer); tourStep--; stepDone = false; renderTour(); } }, "Back") : null,
+        h("button", { class: waiting ? "" : "primary", onclick: nextStep }, last ? "Get started" : waiting ? "Skip this step" : "Next"))));
 }
 function startTour() {
-  steps = TOUR;
+  steps = buildTour();
   onTourEnd = () => { try { localStorage.setItem(TOUR_KEY, "1"); } catch { /* storage unavailable */ } };
   tourStep = 0;
+  stepDone = false;
   renderTour();
   tour.classList.add("show");
   go("computers");
 }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tour.classList.contains("show")) endTour(); });
-// The tour opens once, right after the first successful connection — not at launch, when
-// there is nothing to point at yet. (If storage is unavailable it is simply skipped.)
+// The guide opens by itself the first time CubeCursor is opened, and can be replayed any time.
 let tourArmed = true;
 function maybeTour(s: Snapshot) {
-  if (!tourArmed || !s.connected) return;
+  if (tourSnap(s) || !tourArmed) return;
   tourArmed = false;
   try {
-    if (!localStorage.getItem(TOUR_KEY)) setTimeout(startTour, 1200);
+    if (!localStorage.getItem(TOUR_KEY)) setTimeout(startTour, 600);
   } catch { /* storage unavailable */ }
 }
+/** Lets a waiting step see the new snapshot. Returns false so maybeTour carries on. */
+function tourSnap(s: Snapshot): boolean {
+  const w = steps[tourStep]?.wait;
+  if (tour.classList.contains("show") && w?.until?.(s)) stepCompleted();
+  return false;
+}
+void onEvent<string>("hotkey", (what) => {
+  const w = steps[tourStep]?.wait;
+  if (w?.event === `hotkey:${what}`) stepCompleted();
+});
 
 // ---------------------------------------------------------------- what's new
 // After an update, the new features are shown once, as a short tour like the welcome one.
@@ -1124,7 +1170,7 @@ async function showWhatsNew(force: boolean) {
 // Opened right after an update (or from the bar's "See what's new"): show it.
 window.setTimeout(() => {
   try {
-    if (!localStorage.getItem(TOUR_KEY) && !snap?.connected) return; // the welcome tour comes first
+    if (!localStorage.getItem(TOUR_KEY)) return; // the welcome guide comes first
   } catch { /* storage unavailable */ }
   void showWhatsNew(false);
 }, 900);

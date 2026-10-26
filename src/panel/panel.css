@@ -470,3 +470,7 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 .art-buds i { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; font: 700 17px var(--display); font-style: normal; color: var(--ink); background: radial-gradient(circle, #fff 58%, transparent 60%), conic-gradient(var(--green) 0 78%, var(--line) 78%); animation: bob 3s ease-in-out infinite; }
 .art-buds i:nth-child(2) { animation-delay: 0.2s; } .art-buds i:nth-child(3) { animation-delay: 0.4s; }
 .wopts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.tour-wait { margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: var(--teal-l); font-weight: 600; font-size: 13px; animation: pulse-soft 1.6s ease-in-out infinite; }
+.tour-wait.done { background: #dff6e8; color: #17653a; animation: none; }
+@keyframes pulse-soft { 50% { opacity: 0.6; } }

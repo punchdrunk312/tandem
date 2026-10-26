@@ -844,6 +844,8 @@ fn quit_app(app: AppHandle) {
 /// "pill" (transfer bar, Ctrl+Alt+U). If the bar is switched off in the settings there is
 /// nothing to show: the control bar's key opens the settings window instead.
 fn bar_hotkey(app: &AppHandle, what: &'static str) {
+    // The welcome guide waits for the person to press the shortcut for real.
+    let _ = app.emit_to("main", "hotkey", what);
     let Some(sh) = app.try_state::<Shared>() else {
         return;
     };
@@ -957,8 +959,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Explorer's "Send with Tandem" lands here; starting Tandem a second time
             // by hand brings the control bar up.
-            let sends = send_args(args);
-            if sends.is_empty() {
+            let sends = send_args(args.clone());
+            if args.iter().any(|a| a == "--hidden") {
+                // A second start-up entry firing at logon (Run key + logon task): the copy
+                // that is already running stays quietly in the tray, nothing pops up.
+            } else if sends.is_empty() {
                 bar_hotkey(app, "bar");
             } else {
                 queue_sends(app, sends, Duration::ZERO);
@@ -1250,7 +1255,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building CubeCursor")
         .run(|_app, event| {
-            // Never leave the pointer hidden behind us.
+            // Never leave the pointer hidden, or a window parked off screen, behind us.
             if let tauri::RunEvent::Exit = event {
                 #[cfg(windows)]
                 tandem_core::win::on_exit();

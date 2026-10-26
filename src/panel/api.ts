@@ -1,6 +1,6 @@
-import { call, onDragDrop, onSnapshot, type Dropped } from "../bridge";
+import { call, onDragDrop, onEvent, onSnapshot, type Dropped } from "../bridge";
 
-export { call, onSnapshot };
+export { call, onEvent, onSnapshot };
 
 export function onFileDrop(onDrop: (d: Dropped) => void, onHover: (over: boolean) => void) {
   void onDragDrop((e) => {

@@ -166,7 +166,7 @@ fn machine_identity() -> String {
     #[cfg(target_os = "windows")]
     let raw = {
         use std::os::windows::process::CommandExt;
-        let mut c = Command::new("reg");
+        let mut c = Command::new(r"C:\Windows\System32\reg.exe");
         c.creation_flags(0x0800_0000);
         c
     }
@@ -181,7 +181,7 @@ fn machine_identity() -> String {
     .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
     .unwrap_or_default();
     #[cfg(target_os = "macos")]
-    let raw = Command::new("ioreg")
+    let raw = Command::new("/usr/sbin/ioreg")
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
         .output()
         .ok()
@@ -248,6 +248,9 @@ fn apply_reply(
             }
             Some("trial_over") => {
                 "The 14-day trial on this computer has ended. Sign in with the account your key is redeemed to.".into()
+            }
+            Some("trial_limit") => {
+                "Too many trials were started from this network today. Try again tomorrow, or sign in with your account.".into()
             }
             Some("sign_in_required") => {
                 "Keys are redeemed to an account now: redeem yours at cubecursor.shop/dashboard, then choose Sign in.".into()
