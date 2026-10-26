@@ -538,7 +538,8 @@ pub fn release(path: &Path, node: &Node) -> Result<LicenseView, String> {
     node.set_license_pass(None);
     Ok(view(&saved))
 }
-/// Restore a cached pass immediately, then renew once an hour. Network outages don't erase a still-valid pass.
+/// Restore a cached pass immediately, then renew every few minutes. Network outages don't erase a
+/// still-valid pass, but a pass is short-lived, so a computer the licence has left stops quickly.
 pub fn start_renewal(path: PathBuf, node: Node) {
     let mut saved = read(&path);
     // A clock set back behind the latest time seen doesn't revive an expired pass.
@@ -562,7 +563,8 @@ pub fn start_renewal(path: PathBuf, node: Node) {
         .name("license-renewal".into())
         .spawn(move || {
             // The first check right after start (a new computer gets its trial before its
-            // first connection is checked), then every hour.
+            // first connection is checked), then every few minutes so a pass that has moved
+            // to another computer lapses here soon after.
             std::thread::sleep(Duration::from_secs(2));
             loop {
             let mut saved = read(&path);
@@ -597,12 +599,17 @@ pub fn start_renewal(path: PathBuf, node: Node) {
                 )
                 .and_then(|r| apply_reply(&path, &mut saved, r, &node).map(|_| ()))
             };
-            if let Err(e) = result {
+            // Normally renew every 5 minutes; after a network error retry in 1 minute so a
+            // brief outage doesn't leave the pass to lapse.
+            let wait = if let Err(e) = result {
                 let mut saved = read(&path);
                 saved.last_error = Some(e);
                 let _ = write(&path, &saved);
-            }
-            std::thread::sleep(Duration::from_secs(3600));
+                60
+            } else {
+                300
+            };
+            std::thread::sleep(Duration::from_secs(wait));
             }
         })
         .ok();

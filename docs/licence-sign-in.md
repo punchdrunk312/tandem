@@ -39,14 +39,14 @@ can go (sign out replaces it).
 
 ## Renewal (replace the key branch in `start_renewal`)
 
-At start and every hour, if `token` is set: `POST /api/app/renew { token, hw, dev, name }`.
+At start and every few minutes, if `token` is set: `POST /api/app/renew { token, hw, dev, name }`.
 
 - `ok: true` → save `pass`/`exp`, `set_license_pass(Some(pass))`, clear `moved_to`, `last_error`.
 - `reason: "moved", on` → **stop now**: clear `pass`/`exp`, `set_license_pass(None)`,
   set `moved_to = on`. (This is what makes "not at the same time" hold while online.)
 - `reason: "signed_out"` → clear `token`, `email`, `pass`, `exp`; `set_license_pass(None)`.
 - `reason: "revoked"` → clear `pass`, `exp`; `set_license_pass(None)`; `last_error` = "This licence was refunded or revoked."
-- Network error → keep the pass until it expires (passes now last 7 days offline).
+- Network error → keep the pass until it expires (passes are short-lived (~30 min) and renewed every few minutes).
 
 If there is no `token`: renew the trial as today (`/api/license/trial`). A `trial_over` reply
 clears the pass.

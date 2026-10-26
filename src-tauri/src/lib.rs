@@ -1085,10 +1085,14 @@ pub fn run() {
             ghost::spawn(app.handle().clone());
 
             // Island: borderless, transparent, never takes focus.
+            // Started at logon ("Start with Windows" passes --hidden): stay in the tray and
+            // show nothing. The bar comes up from the tray, the hotkey, or when it has
+            // something to say — it never pops up as a window the moment the PC turns on.
+            let hidden_start = std::env::args().any(|a| a == "--hidden");
             if let Some(win) = island::window(app.handle()) {
                 island::make_non_activating(&win);
                 island::apply_geometry(app.handle(), gate.pref(), true);
-                if ui.enabled {
+                if ui.enabled && !hidden_start {
                     let _ = win.show();
                 }
                 log_line(
