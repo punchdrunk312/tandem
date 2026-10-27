@@ -843,6 +843,29 @@ fn quit_app(app: AppHandle) {
 /// A hotkey / tray entry for the bar. `what` is "bar" (control bar, Ctrl+Alt+Z) or
 /// "pill" (transfer bar, Ctrl+Alt+U). If the bar is switched off in the settings there is
 /// nothing to show: the control bar's key opens the settings window instead.
+/// Registers (idempotently) the two global shortcuts, logging each outcome so a failure is
+/// never silent. Safe to call more than once: an already-registered key is left alone.
+fn register_hotkeys(app: &AppHandle, first_try: bool) {
+    for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
+        let sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), key);
+        // Attempt the registration unconditionally rather than pre-checking is_registered:
+        // if that query returns a stale `true` early in start-up the key would otherwise be
+        // skipped and never actually hooked, leaving the shortcut silently dead.
+        match app.global_shortcut().register(sc) {
+            Ok(()) => log_line(app, &format!("hotkey Ctrl+Alt+{label} registered ok")),
+            Err(e) => {
+                if app.global_shortcut().is_registered(sc) {
+                    if first_try {
+                        log_line(app, &format!("hotkey Ctrl+Alt+{label} already registered (ok)"));
+                    }
+                } else {
+                    log_line(app, &format!("hotkey Ctrl+Alt+{label} NOT registered: {e}"));
+                }
+            }
+        }
+    }
+}
+
 fn bar_hotkey(app: &AppHandle, what: &'static str) {
     // The welcome guide waits for the person to press the shortcut for real.
     let _ = app.emit_to("main", "hotkey", what);
@@ -976,8 +999,14 @@ pub fn run() {
                         return;
                     }
                     match shortcut.key {
-                        Code::KeyZ => bar_hotkey(app, "bar"),
-                        Code::KeyU => bar_hotkey(app, "pill"),
+                        Code::KeyZ => {
+                            log_line(app, "hotkey fired: Ctrl+Alt+Z (bar)");
+                            bar_hotkey(app, "bar");
+                        }
+                        Code::KeyU => {
+                            log_line(app, "hotkey fired: Ctrl+Alt+U (pill)");
+                            bar_hotkey(app, "pill");
+                        }
                         _ => {}
                     }
                 })
@@ -1111,37 +1140,32 @@ pub fn run() {
             island::spawn_cursor_poll(app.handle().clone(), gate);
 
             // Ctrl+Alt+Z opens / closes the control bar, Ctrl+Alt+U the transfer bar.
-            // If a leftover copy of CubeCursor is still running it already holds these, so the
-            // register fails: wait a moment in case it's quitting, try once more, and if it still
-            // fails, tell the person instead of leaving the shortcut silently dead.
+            // Register on the setup (main) thread first — the location Tauri expects — and log
+            // the result so the log file shows plainly whether the system accepted the hotkeys.
+            // If a leftover copy of CubeCursor still holds them, register fails: a background
+            // retry waits a moment in case that copy is quitting, then tells the person.
+            register_hotkeys(app.handle(), /* first_try */ true);
             {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
-                    for attempt in 0..2 {
-                        if attempt > 0 {
-                            std::thread::sleep(Duration::from_millis(1500));
-                        }
-                        let mut held = Vec::new();
-                        for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
-                            let sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), key);
-                            if handle.global_shortcut().is_registered(sc) {
-                                continue;
-                            }
-                            if let Err(e) = handle.global_shortcut().register(sc) {
-                                log_line(&handle, &format!("hotkey Ctrl+Alt+{label} not registered: {e}"));
-                                held.push(label);
-                            }
-                        }
-                        if held.is_empty() {
-                            return;
-                        }
-                        if attempt == 1 {
-                            let _ = handle.emit_to(
-                                island::WINDOW_LABEL,
-                                "note",
-                                "Another copy of CubeCursor is already running, so the keyboard shortcuts (Ctrl+Alt+Z and Ctrl+Alt+U) are turned off here. Quit the other copy and reopen CubeCursor.",
-                            );
-                        }
+                    // Only the keys that didn't take on the first (main-thread) try are retried.
+                    let still_missing = |h: &AppHandle| {
+                        [Code::KeyZ, Code::KeyU].into_iter().any(|k| {
+                            !h.global_shortcut()
+                                .is_registered(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), k))
+                        })
+                    };
+                    if !still_missing(&handle) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(1500));
+                    register_hotkeys(&handle, false);
+                    if still_missing(&handle) {
+                        let _ = handle.emit_to(
+                            island::WINDOW_LABEL,
+                            "note",
+                            "Something else on this PC is already using Ctrl+Alt+Z / Ctrl+Alt+U, so they're turned off here. Quit any other copy of CubeCursor, or use the tray icon (right-click → Top bar) to open it.",
+                        );
                     }
                 });
             }
