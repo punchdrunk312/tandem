@@ -12,7 +12,9 @@ use tauri::{AppHandle, Emitter, Manager, State, Theme, WindowEvent};
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, ShortcutState};
+#[cfg(not(windows))]
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 
 mod elevate;
 mod ghost;
@@ -843,32 +845,7 @@ fn quit_app(app: AppHandle) {
 /// A hotkey / tray entry for the bar. `what` is "bar" (control bar, Ctrl+Alt+Z) or
 /// "pill" (transfer bar, Ctrl+Alt+U). If the bar is switched off in the settings there is
 /// nothing to show: the control bar's key opens the settings window instead.
-/// Registers (idempotently) the two global shortcuts, logging each outcome so a failure is
-/// never silent. Safe to call more than once: an already-registered key is left alone.
-fn register_hotkeys(app: &AppHandle, first_try: bool) {
-    for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
-        let sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), key);
-        // Attempt the registration unconditionally rather than pre-checking is_registered:
-        // if that query returns a stale `true` early in start-up the key would otherwise be
-        // skipped and never actually hooked, leaving the shortcut silently dead.
-        match app.global_shortcut().register(sc) {
-            Ok(()) => log_line(app, &format!("hotkey Ctrl+Alt+{label} registered ok")),
-            Err(e) => {
-                if app.global_shortcut().is_registered(sc) {
-                    if first_try {
-                        log_line(app, &format!("hotkey Ctrl+Alt+{label} already registered (ok)"));
-                    }
-                } else {
-                    log_line(app, &format!("hotkey Ctrl+Alt+{label} NOT registered: {e}"));
-                }
-            }
-        }
-    }
-}
-
 fn bar_hotkey(app: &AppHandle, what: &'static str) {
-    // The welcome guide waits for the person to press the shortcut for real.
-    let _ = app.emit_to("main", "hotkey", what);
     let Some(sh) = app.try_state::<Shared>() else {
         return;
     };
@@ -878,6 +855,45 @@ fn bar_hotkey(app: &AppHandle, what: &'static str) {
     } else if what == "bar" {
         show_main(app);
     }
+}
+
+/// Windows: watch the physical Ctrl+Alt+Z / Ctrl+Alt+U keys ourselves, in a light 30 ms
+/// poll, instead of a system global hotkey.
+///
+/// Why: on keyboard layouts where Ctrl+Alt is AltGr (Greek, German, Polish and many more)
+/// Windows consumes some Ctrl+Alt+<letter> presses for text entry before a registered
+/// hotkey is ever delivered. That is exactly why Ctrl+Alt+Z worked but Ctrl+Alt+U did
+/// nothing on a Greek layout. Reading the keys' real state with GetAsyncKeyState is immune
+/// to the layout, so both combos work the same everywhere. Edge-triggered, so holding the
+/// keys fires once (a clean toggle), never a stream.
+#[cfg(windows)]
+fn spawn_hotkey_poll(app: AppHandle) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU};
+    const VK_Z: i32 = 0x5A;
+    const VK_U: i32 = 0x55;
+    let down = |vk: i32| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 };
+    std::thread::Builder::new()
+        .name("hotkey-poll".into())
+        .spawn(move || {
+            let (mut was_z, mut was_u) = (false, false);
+            loop {
+                let mods = down(VK_CONTROL.0 as i32) && down(VK_MENU.0 as i32);
+                let z = mods && down(VK_Z);
+                let u = mods && down(VK_U);
+                if z && !was_z {
+                    log_line(&app, "hotkey fired (poll): Ctrl+Alt+Z (bar)");
+                    bar_hotkey(&app, "bar");
+                }
+                if u && !was_u {
+                    log_line(&app, "hotkey fired (poll): Ctrl+Alt+U (pill)");
+                    bar_hotkey(&app, "pill");
+                }
+                was_z = z;
+                was_u = u;
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+        })
+        .ok();
 }
 
 /// Paths after each `--send` on a command line (Explorer's "Send with Tandem").
@@ -982,11 +998,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Explorer's "Send with Tandem" lands here; starting Tandem a second time
             // by hand brings the control bar up.
-            let sends = send_args(args.clone());
-            if args.iter().any(|a| a == "--hidden") {
-                // A second start-up entry firing at logon (Run key + logon task): the copy
-                // that is already running stays quietly in the tray, nothing pops up.
-            } else if sends.is_empty() {
+            let sends = send_args(args);
+            if sends.is_empty() {
                 bar_hotkey(app, "bar");
             } else {
                 queue_sends(app, sends, Duration::ZERO);
@@ -999,14 +1012,8 @@ pub fn run() {
                         return;
                     }
                     match shortcut.key {
-                        Code::KeyZ => {
-                            log_line(app, "hotkey fired: Ctrl+Alt+Z (bar)");
-                            bar_hotkey(app, "bar");
-                        }
-                        Code::KeyU => {
-                            log_line(app, "hotkey fired: Ctrl+Alt+U (pill)");
-                            bar_hotkey(app, "pill");
-                        }
+                        Code::KeyZ => bar_hotkey(app, "bar"),
+                        Code::KeyU => bar_hotkey(app, "pill"),
                         _ => {}
                     }
                 })
@@ -1140,34 +1147,21 @@ pub fn run() {
             island::spawn_cursor_poll(app.handle().clone(), gate);
 
             // Ctrl+Alt+Z opens / closes the control bar, Ctrl+Alt+U the transfer bar.
-            // Register on the setup (main) thread first — the location Tauri expects — and log
-            // the result so the log file shows plainly whether the system accepted the hotkeys.
-            // If a leftover copy of CubeCursor still holds them, register fails: a background
-            // retry waits a moment in case that copy is quitting, then tells the person.
-            register_hotkeys(app.handle(), /* first_try */ true);
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    // Only the keys that didn't take on the first (main-thread) try are retried.
-                    let still_missing = |h: &AppHandle| {
-                        [Code::KeyZ, Code::KeyU].into_iter().any(|k| {
-                            !h.global_shortcut()
-                                .is_registered(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), k))
-                        })
-                    };
-                    if !still_missing(&handle) {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(1500));
-                    register_hotkeys(&handle, false);
-                    if still_missing(&handle) {
-                        let _ = handle.emit_to(
-                            island::WINDOW_LABEL,
-                            "note",
-                            "Something else on this PC is already using Ctrl+Alt+Z / Ctrl+Alt+U, so they're turned off here. Quit any other copy of CubeCursor, or use the tray icon (right-click → Top bar) to open it.",
-                        );
-                    }
-                });
+            // Windows reads the physical keys itself (see spawn_hotkey_poll) so the combos
+            // survive AltGr layouts; elsewhere a normal global hotkey is fine.
+            #[cfg(windows)]
+            spawn_hotkey_poll(app.handle().clone());
+            #[cfg(not(windows))]
+            for (key, label) in [(Code::KeyZ, "Z"), (Code::KeyU, "U")] {
+                if let Err(e) = app.global_shortcut().register(Shortcut::new(
+                    Some(Modifiers::CONTROL | Modifiers::ALT),
+                    key,
+                )) {
+                    log_line(
+                        app.handle(),
+                        &format!("hotkey Ctrl+Alt+{label} not registered: {e}"),
+                    );
+                }
             }
 
             // Keep the right-click entry pointing at this copy of the program.
@@ -1306,7 +1300,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building CubeCursor")
         .run(|_app, event| {
-            // Never leave the pointer hidden, or a window parked off screen, behind us.
+            // Never leave the pointer hidden behind us.
             if let tauri::RunEvent::Exit = event {
                 #[cfg(windows)]
                 tandem_core::win::on_exit();

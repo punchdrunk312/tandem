@@ -2,7 +2,7 @@
 //!
 //! How licensing works: a key is redeemed to a CubeCursor account on the website, and the
 //! app signs in with that account (the browser asks the person to allow this PC). The
-//! website then signs a pass for this computer, which the app renews every hour with a
+//! website then signs a pass for this computer, which the app renews every few minutes with a
 //! token only this PC holds. The licence runs on one computer at a time: signing in on
 //! another moves it there, and this one hears "moved" at its next renewal and stops.
 //! Without an account, a computer gets one 14-day trial. The app stores the token and the
@@ -166,7 +166,7 @@ fn machine_identity() -> String {
     #[cfg(target_os = "windows")]
     let raw = {
         use std::os::windows::process::CommandExt;
-        let mut c = Command::new(r"C:\Windows\System32\reg.exe");
+        let mut c = Command::new("reg");
         c.creation_flags(0x0800_0000);
         c
     }
@@ -181,7 +181,7 @@ fn machine_identity() -> String {
     .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
     .unwrap_or_default();
     #[cfg(target_os = "macos")]
-    let raw = Command::new("/usr/sbin/ioreg")
+    let raw = Command::new("ioreg")
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
         .output()
         .ok()
@@ -248,9 +248,6 @@ fn apply_reply(
             }
             Some("trial_over") => {
                 "The 14-day trial on this computer has ended. Sign in with the account your key is redeemed to.".into()
-            }
-            Some("trial_limit") => {
-                "Too many trials were started from this network today. Try again tomorrow, or sign in with your account.".into()
             }
             Some("sign_in_required") => {
                 "Keys are redeemed to an account now: redeem yours at cubecursor.shop/dashboard, then choose Sign in.".into()
@@ -538,8 +535,7 @@ pub fn release(path: &Path, node: &Node) -> Result<LicenseView, String> {
     node.set_license_pass(None);
     Ok(view(&saved))
 }
-/// Restore a cached pass immediately, then renew every few minutes. Network outages don't erase a
-/// still-valid pass, but a pass is short-lived, so a computer the licence has left stops quickly.
+/// Restore a cached pass immediately, then renew once an hour. Network outages don't erase a still-valid pass.
 pub fn start_renewal(path: PathBuf, node: Node) {
     let mut saved = read(&path);
     // A clock set back behind the latest time seen doesn't revive an expired pass.
