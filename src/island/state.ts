@@ -19,6 +19,10 @@ export interface IslandSettings {
   calm: boolean;
   /** The look: frosted "glass" (default) or the classic black bar. */
   theme: "glass" | "dark";
+  /** Accent colour (hex), or "" for the default teal. Applies to both looks. */
+  accent: string;
+  /** Bob's wardrobe pick (an id, or "none" for seasonal/plain). */
+  outfit: string;
   /** Bob shows one tip a day about something CubeCursor can do. */
   tips: boolean;
   /** Minutes the focus timer starts with. */
@@ -57,6 +61,8 @@ const DEFAULTS: IslandSettings = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
   theme: "glass",
+  accent: "",
+  outfit: "none",
   tips: true,
   focusMinutes: 25,
   accCards: true,
@@ -89,6 +95,8 @@ class IslandState {
   dropTarget: string | null = null;
   /** Dropped files being copied to the staging folder before the transfer starts. */
   staging = 0;
+  /** Shift-drop: the "prepare before sending" menu is open (zip / convert). */
+  dropMenu = false;
   isPinned = false;
   lastActivity = performance.now();
 

@@ -474,3 +474,13 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 .tour-wait { margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: var(--teal-l); font-weight: 600; font-size: 13px; animation: pulse-soft 1.6s ease-in-out infinite; }
 .tour-wait.done { background: #dff6e8; color: #17653a; animation: none; }
 @keyframes pulse-soft { 50% { opacity: 0.6; } }
+
+/* Bar & Bob: accent swatches + Bob's wardrobe */
+.swatches { display: flex; flex-wrap: wrap; gap: 10px; }
+.sw { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--surface-3, rgba(128,128,128,.3)); background: var(--sw); cursor: pointer; padding: 0; transition: transform 140ms ease, box-shadow 160ms ease; }
+.sw:hover { transform: scale(1.08); }
+.sw.on { border-color: var(--sw); box-shadow: 0 0 0 2px var(--bg, #fff), 0 0 0 4px var(--sw); }
+.wardrobe { display: flex; flex-wrap: wrap; gap: 8px; }
+.wbtn { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--surface-3, rgba(128,128,128,.3)); background: var(--surface-2, transparent); color: inherit; font: inherit; font-size: .9rem; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease; }
+.wbtn:hover { border-color: var(--accent, #2dd4bf); }
+.wbtn.on { background: var(--accent, #2dd4bf); border-color: var(--accent, #2dd4bf); color: #042; font-weight: 600; }

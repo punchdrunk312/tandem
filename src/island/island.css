@@ -563,3 +563,10 @@ html.dev body { background: #2b2f38; }
 .m-vis.parts { flex: 0 0 auto; display: flex; gap: 10px; }
 .m-vis.parts::before { display: none; }
 .m-part { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10.5px; font-weight: 600; color: var(--dim); }
+
+/* Shift-drop: prepare-before-sending menu */
+.view.drop .d-menu { display: none; }
+.view.drop.menu .d-menu { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 8px; }
+.view.drop.menu .d-targets { display: none; }
+.d-act { padding: 6px 12px; font-size: .82rem; }
+.d-act.ghost { opacity: .7; }

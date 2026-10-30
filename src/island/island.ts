@@ -111,6 +111,9 @@ export class Island {
   private hintActive = false;
   private dropCloseTimer: number | null = null;
   private lastDropAt = 0;
+  /** Shift-drop: files waiting while the person picks how to prepare them. */
+  private pendingDrop: Dropped | null = null;
+  private pendingTarget?: string;
 
   private confusedRecovery: number | null = null;
   private flashTimer: number | null = null;
@@ -158,6 +161,20 @@ export class Island {
         State.saveSettings();
         State.notify();
       },
+      dropAction: (act) => {
+        State.dropMenu = false;
+        const d = this.pendingDrop;
+        this.pendingDrop = null;
+        State.notify();
+        if (d) this.swallow(d, this.pendingTarget, act);
+      },
+      cancelDrop: () => {
+        State.dropMenu = false;
+        this.pendingDrop = null;
+        State.notify();
+        this.engine.animateMorph(0);
+        this.closeBar();
+      },
     };
 
     this.lineEl = h("div", { id: "line" });
@@ -168,7 +185,7 @@ export class Island {
 
     this.header = buildHeader(actions);
     this.views.set("home", buildHome(actions));
-    this.views.set("drop", buildDrop());
+    this.views.set("drop", buildDrop(actions));
     this.views.set("note", buildNote());
     this.momentView = buildMoment({
       takeApps: (id) => { Sound.play("send"); fire("take_apps", { peerId: id }); this.closeBar(); },
@@ -500,6 +517,10 @@ export class Island {
   private applyTheme() {
     const glass = State.settings.theme !== "dark";
     document.documentElement.dataset.theme = glass ? "glass" : "dark";
+    // The accent colour the person picked recolours the bar (dots, glow, progress, buttons).
+    const accent = State.settings.accent;
+    if (accent) document.documentElement.style.setProperty("--teal", accent);
+    else document.documentElement.style.removeProperty("--teal");
     if (!glass) {
       delete document.documentElement.dataset.liquid;
       this.bd = null;
@@ -536,6 +557,9 @@ export class Island {
     const changed = JSON.stringify(look) !== JSON.stringify(this.look);
     this.look = look;
     this.engine.look = look;
+    // The person's own accent colour and wardrobe pick, on top of the season.
+    this.engine.setAccent(State.settings.accent || null);
+    this.engine.setWardrobe(State.settings.outfit);
     this.ambient.kind = look && !State.settings.calm ? look.ambient : null;
     State.greeting = look?.greeting ?? null;
     if (changed) {
@@ -940,6 +964,15 @@ export class Island {
           this.showNote("Drop it on a computer's name.", 2600, "home");
           return;
         }
+        // Shift held: don't send yet — open the "prepare before sending" menu.
+        if (e.shift) {
+          this.pendingDrop = dropped;
+          this.pendingTarget = e.target;
+          State.dropMenu = true;
+          this.alert("drop");
+          State.notify();
+          return;
+        }
         this.swallow(dropped, e.target);
         break;
       }
@@ -947,11 +980,11 @@ export class Island {
   }
 
   /** Bob eats the file(s); the transfer itself runs in Rust. */
-  private swallow(dropped: Dropped, target?: string) {
+  private swallow(dropped: Dropped, target?: string, action?: "asis" | "zip" | "png" | "jpg") {
     State.staging++;
     this.pillSuppressed = false;
     dropped
-      .send(target)
+      .send(target, action)
       .catch(() => {
         Sound.play("error");
         this.showNote("Couldn't read that file.");

@@ -20,6 +20,10 @@ export interface ViewActions {
   toggleDevices(): void;
   /** The header's timer button: the focus timer, or back. */
   toggleFocus(): void;
+  /** Shift-drop menu: prepare the files this way, then send. */
+  dropAction(a: "asis" | "zip" | "png" | "jpg"): void;
+  /** Shift-drop menu: back out without sending. */
+  cancelDrop(): void;
 }
 
 const ICON = {
@@ -196,14 +200,33 @@ export function buildHome(a: ViewActions): ViewHost {
 
 // ------------------------------------------------------------------ drop / note
 
-export function buildDrop(): ViewHost {
+export function buildDrop(a: ViewActions): ViewHost {
   const big = h("div", { class: "d-title" });
   const small = h("div", { class: "d-sub" });
   const targets = h("div", { class: "d-targets" });
-  const el = h("div", { class: "view drop" }, h("div", { class: "d-text" }, big, small), targets);
+  const menu = h("div", { class: "d-menu" });
+  const el = h("div", { class: "view drop" }, h("div", { class: "d-text" }, big, small), targets, menu);
+  const mbtn = (label: string, act: "asis" | "zip" | "png" | "jpg") =>
+    h("button", { class: "btn d-act", text: label, onclick: () => { a.blip(); a.dropAction(act); } });
   return {
     el,
     sync() {
+      // Shift-drop: ask how to prepare the files, instead of sending at once.
+      el.classList.toggle("menu", State.dropMenu);
+      if (State.dropMenu) {
+        big.textContent = "Send as…";
+        small.textContent = "Prepare the files, then they're sent.";
+        keyed(menu, "menu", () => [
+          mbtn("Send as is", "asis"),
+          mbtn("Zip it", "zip"),
+          mbtn("As PNG", "png"),
+          mbtn("As JPG", "jpg"),
+          h("button", { class: "btn d-act ghost", text: "Cancel", onclick: () => { a.blip(); a.cancelDrop(); } }),
+        ]);
+        keyed(targets, "", () => []);
+        return;
+      }
+      keyed(menu, "", () => []);
       const peers = State.connectedPeers;
       const many = peers.length > 1;
       const peer = State.connected?.name;

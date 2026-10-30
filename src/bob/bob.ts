@@ -174,6 +174,17 @@ const FONT = `system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif`;
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
+/** The wardrobe the person can pick from (Bar & Bob settings), on top of any seasonal look. */
+const WARDROBE: Record<string, Partial<Look>> = {
+  party: { hat: "party" },
+  beanie: { hat: "beanie" },
+  santa: { hat: "santa" },
+  pumpkin: { hat: "pumpkin" },
+  glasses: { glasses: true },
+  scarf: { scarf: true },
+  flower: { flower: true },
+};
+
 export class Bob {
   isMini = false;
   /** Liquid Glass: a jelly Bob that catches the light (on the glass bar). */
@@ -248,6 +259,10 @@ export class Bob {
 
   /** What he wears (the season, a special day), or null for plain Bob. */
   look: Look | null = null;
+  /** A user-chosen outfit (the wardrobe), drawn over any seasonal look. */
+  wardrobe: Partial<Look> | null = null;
+  /** A user-chosen accent colour for his idle body, or null for the default teal. */
+  accent: RGB | null = null;
   /** Where his antenna bulb was last drawn (for the spring flower). */
   private bulbAt = { x: 0, y: 0, r: 0 };
   /** Quick boops in a row (four → dizzy). */
@@ -255,12 +270,24 @@ export class Bob {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
+  /** The user's accent colour (hex, or null to go back to the default teal). */
+  setAccent(hex: string | null) {
+    this.accent = hex ? hexToRGB(hex) : null;
+    if (this.state === "idle") this.colT = this.accent ?? BOT_STATES.idle.color;
+  }
+
+  /** The user's wardrobe pick (an id from WARDROBE, or "none"/unknown for seasonal/plain). */
+  setWardrobe(id: string) {
+    this.wardrobe = WARDROBE[id] ?? null;
+  }
+
   setState(next: BotStateName, force = false) {
     if (this.state === next && !force) return;
     const prev = this.state;
     this.state = next;
     this.cfg = BOT_STATES[next];
-    this.colT = this.cfg.color;
+    // Idle Bob wears the user's accent colour when one is set.
+    this.colT = next === "idle" && this.accent ? this.accent : this.cfg.color;
     if (!this.locks.has("tint")) this.tint = this.cfg.tint;
     if (!this.locks.has("tilt")) this.tgTilt = this.cfg.tilt;
     this.setBadge(this.cfg.badge);
@@ -322,6 +349,8 @@ export class Bob {
     setTimeout(() => {
       this.slotHTarget = 0;
       this.isChewing = true;
+      this.eyeOverride = "happy";
+      this.eyeOverrideUntil = now() + 0.8;
       setTimeout(() => { this.isChewing = false; }, 800);
     }, 460);
     this.anim("sy", [[0.78, 80, Ease.out], [1.18, 130, Ease.out], [1, 220, Ease.back]]);
@@ -932,7 +961,7 @@ export class Bob {
     this.drawEyes(x, body, R, hw, hh);
     if (m > 0.05) this.drawSlot(x, body, R, hh);
     else this.drawMouth(x, R, hh);
-    if (this.look && m < 0.5 && R >= 10) this.drawOutfit(x, R, hw, hh, 1 - m * 2);
+    if ((this.look || this.wardrobe) && m < 0.5 && R >= 10) this.drawOutfit(x, R, hw, hh, 1 - m * 2);
 
     x.restore();
 
@@ -1337,6 +1366,29 @@ export class Bob {
     x.lineJoin = "round";
     x.lineWidth = Math.max(1.4, R * 0.07);
     const w = R * 0.26;
+
+    // Catching a dropped file. In cube mode the big slot (drawSlot) does this; in his normal
+    // face the switch below drew a flat line and nothing opened — so a drop looked like nothing
+    // happened. Drive the same catch from the gulp here: a dark, amber-rimmed mouth that opens
+    // wide as the file lands, then bobs while he chews.
+    if (this.slotH > 0.04 || this.isChewing) {
+      const open = this.isChewing
+        ? R * (0.14 + 0.05 * Math.sin(now() * 24))
+        : R * Math.min(0.44, 0.1 + this.slotH * 0.95);
+      const mw = w * 1.5;
+      roundRectPath(x, -mw / 2, R * 0.02, mw, open, Math.min(mw / 2, open / 2));
+      const g = x.createLinearGradient(0, R * 0.02, 0, R * 0.02 + open);
+      g.addColorStop(0, "rgb(6,18,22)");
+      g.addColorStop(1, "rgb(14,40,46)");
+      x.fillStyle = g;
+      x.fill();
+      x.lineWidth = Math.max(1.2, R * 0.05);
+      x.strokeStyle = "rgba(251,191,36,0.9)";
+      x.stroke();
+      x.restore();
+      return;
+    }
+
     switch (shape) {
       case "smile":
         x.beginPath();
@@ -1495,7 +1547,18 @@ export class Bob {
   // Drawn in his own (leaning, squashing) frame, after the face.
 
   private drawOutfit(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, a: number) {
-    const L = this.look!;
+    // The seasonal look is the base; the user's wardrobe pick is layered on top.
+    const b = this.look;
+    const w = this.wardrobe;
+    const L = {
+      season: b?.season ?? "spring",
+      special: b?.special ?? null,
+      hat: (w?.hat ?? b?.hat ?? "none") as Look["hat"],
+      scarf: w?.scarf ?? b?.scarf ?? false,
+      glasses: w?.glasses ?? b?.glasses ?? false,
+      flower: w?.flower ?? b?.flower ?? false,
+      egg: w?.egg ?? b?.egg ?? false,
+    };
     x.save();
     x.globalAlpha *= a;
     if (L.scarf) this.drawScarf(x, R, hw, hh, L.special === "christmas");

@@ -855,6 +855,8 @@ interface IslandOpts {
   soundEnabled: boolean; soundVolume: number; autoCloseInterval: number;
   seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
   theme: "glass" | "dark";
+  accent: string;
+  outfit: string;
   tips: boolean;
   accCards: boolean;
 }
@@ -862,6 +864,8 @@ const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
   theme: "glass",
+  accent: "",
+  outfit: "none",
   tips: true,
   accCards: true,
 };
@@ -943,11 +947,40 @@ function renderTopBar() {
       type: "range", class: "vol", min: "0", max: "0.2", step: "0.01", value: String(is.soundVolume), "aria-label": "Volume", disabled: !is.soundEnabled,
       onchange: (e: Event) => saveIsland({ soundVolume: Number((e.target as HTMLInputElement).value) }),
     });
+    const ACCENTS: [string, string, string][] = [
+      ["", "#2dd4bf", "Default teal"],
+      ["#3b82f6", "#3b82f6", "Blue"],
+      ["#6366f1", "#6366f1", "Indigo"],
+      ["#8b5cf6", "#8b5cf6", "Violet"],
+      ["#ec4899", "#ec4899", "Pink"],
+      ["#f43f5e", "#f43f5e", "Rose"],
+      ["#f59e0b", "#f59e0b", "Amber"],
+      ["#22c55e", "#22c55e", "Green"],
+      ["#06b6d4", "#06b6d4", "Cyan"],
+    ];
+    const swatches = h("div", { class: "swatches", role: "radiogroup", "aria-label": "Accent colour" },
+      ...ACCENTS.map(([id, hex, label]) =>
+        h("button", { class: `sw${is.accent === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.accent === id), title: label, "aria-label": label, style: `--sw:${hex}`, onclick: () => set({ accent: id }) })));
+    const OUTFITS: [string, string][] = [
+      ["none", "None"], ["glasses", "Glasses"], ["party", "Party hat"], ["beanie", "Beanie"],
+      ["santa", "Santa"], ["pumpkin", "Pumpkin"], ["scarf", "Scarf"], ["flower", "Flower"],
+    ];
+    const wardrobe = h("div", { class: "wardrobe", role: "radiogroup", "aria-label": "Bob's outfit" },
+      ...OUTFITS.map(([id, label]) =>
+        h("button", { class: `wbtn${is.outfit === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.outfit === id), onclick: () => set({ outfit: id }) }, label)));
     return [
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Look"),
         looks,
         h("p", { class: "g-help" }, isMac() ? "Liquid Glass asks once for Screen Recording, so the bar can see what's behind it." : "To see through itself, the Liquid Glass bar stays out of screenshots and screen recordings.")),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Colour"),
+        swatches,
+        h("p", { class: "g-help" }, "The accent colour of the bar — dots, glow, progress and buttons. Works on both looks, and tints Bob too.")),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Bob's wardrobe"),
+        wardrobe,
+        h("p", { class: "g-help" }, "What Bob wears. Set here, it stays on over the seasons — turn on Seasons & holidays below to let him dress for the time of year instead.")),
       group("Sound",
         tile({ id: "sound", icon: ICONS.sound, color: "teal", title: "Sounds", line: "Soft, calm sounds. Never a beep.", on: is.soundEnabled,
           more: "A gentle chime when your laptop starts charging or is full, a warm hello when a computer joins, and little noises from Bob. Nothing plays during games or films.",
