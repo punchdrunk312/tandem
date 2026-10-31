@@ -34,6 +34,8 @@ export interface IslandSettings {
   lyrics: boolean;
   /** A slim strip with the song pops up when music starts playing. */
   mediaPopup: boolean;
+  /** A YouTube video plays on in the bar when its browser is minimised. */
+  videoPopup: boolean;
 }
 
 /** What Windows says is playing (see src-tauri/src/media.rs). */
@@ -49,6 +51,8 @@ export interface NowPlaying {
   can_prev: boolean;
   /** The player lets us jump to a spot in the song. */
   can_seek?: boolean;
+  /** A YouTube video in a browser whose window is minimised. */
+  video_hidden?: boolean;
   /** The album art as a data: URL, or "". */
   art: string;
 }
@@ -98,6 +102,7 @@ const DEFAULTS: IslandSettings = {
   accCards: true,
   lyrics: false,
   mediaPopup: true,
+  videoPopup: true,
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;
@@ -142,6 +147,9 @@ class IslandState {
   /** The song playing, and when it arrived (performance.now), to move the position on. */
   media: NowPlaying | null = null;
   mediaAt = 0;
+  /** The video playing in the bar: its YouTube id, title, where it started (ms), and how
+   *  far it has got (ms, from the player). */
+  video: { id: string; title: string; startMs: number; nowMs: number } | null = null;
   /** The album art's colour ("rgb(r, g, b)"), for tinting the bar while the song shows. */
   mediaColor = "";
   /** Lyrics for `lyricsFor` ("title|artist"): time-stamped lines, or plain text, or none. */

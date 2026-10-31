@@ -1435,6 +1435,8 @@ pub fn run() {
             set_fleet,
             media::media_control,
             media::media_lyrics,
+            media::media_video_id,
+            media::media_show_video,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CubeCursor")

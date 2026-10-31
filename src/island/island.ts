@@ -16,7 +16,7 @@ import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNowPlaying, buildRecipients, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -263,6 +263,18 @@ export class Island {
       cancel: () => {
         this.pendingDrop = null;
         this.closeBar();
+      },
+    }));
+    this.views.set("video", buildVideo({
+      blip: () => Sound.play("blip"),
+      back: () => {
+        const v = State.video;
+        if (v) void call("media_show_video", { title: v.title }).catch(() => {});
+        this.endVideo(true);
+      },
+      close: () => {
+        if (State.video) this.videoClosedFor = State.video.title;
+        this.endVideo(false);
       },
     }));
     this.views.set("nowplaying", buildNowPlaying({
@@ -960,6 +972,7 @@ export class Island {
     const before = State.media;
     State.media = m;
     State.mediaAt = performance.now();
+    if (this.onVideo(m, before)) return;
     if (m?.art !== before?.art) {
       const art = m?.art ?? "";
       void pictureColor(art).then((c) => {
@@ -977,6 +990,54 @@ export class Island {
     this.fetchLyrics();
     State.notify();
     this.mediaTick();
+  }
+
+  /** The video the person closed in the bar (it doesn't come back until another one). */
+  private videoClosedFor = "";
+  private videoLooking = "";
+
+  /** A YouTube video's browser was minimised while it played: it plays on in the bar.
+   *  The browser is paused; brought back, it carries on from where the bar got to.
+   *  True while the bar has the video (the rest of onMedia waits). */
+  private onVideo(m: NowPlaying | null, before: NowPlaying | null): boolean {
+    const v = State.video;
+    if (v) {
+      // The browser window is back (or the video is gone): it takes over again.
+      if (!m || m.title !== v.title || !m.video_hidden) this.endVideo(!!m && m.title === v.title);
+      return !!State.video;
+    }
+    if (!m?.video_hidden || before?.video_hidden || !m.playing || !State.settings.videoPopup) return false;
+    if (this.quiet || this.videoClosedFor === m.title || this.videoLooking === m.title) return false;
+    const title = m.title;
+    const at = m.position_ms;
+    this.videoLooking = title;
+    void call<string | null>("media_video_id", { title, artist: m.artist })
+      .then((id) => {
+        this.videoLooking = "";
+        const now = State.media;
+        if (!id || !now || now.title !== title || !now.video_hidden) return;
+        const startMs = now.playing ? mediaPosition() : at;
+        // The browser pauses; the bar plays.
+        if (now.playing) void call("media_control", { action: "play_pause" }).catch(() => {});
+        State.video = { id, title, startMs, nowMs: startMs };
+        State.isPinned = true;
+        this.autoly(() => this.alert("video"));
+        State.notify();
+      })
+      .catch(() => { this.videoLooking = ""; });
+    return false;
+  }
+
+  /** The bar lets go of the video; `resume`: the browser carries on from where it got to. */
+  private endVideo(resume: boolean) {
+    const v = State.video;
+    if (!v) return;
+    State.video = null;
+    void call("media_control", { action: `seek:${v.nowMs}` })
+      .catch(() => {})
+      .then(() => { if (resume) void call("media_control", { action: "play_pause" }).catch(() => {}); });
+    State.notify();
+    if (State.view === "video") this.closeBar();
   }
 
   private pausedAt = 0;
@@ -1113,6 +1174,8 @@ export class Island {
 
   private closeBar() {
     this.notesView?.stopWriting();
+    // Closing the bar over a video stops it in the bar (the browser keeps it, paused).
+    if (State.video && State.view === "video") return this.endVideo(false);
     // Something else had the bar (a card, a note, the control bar): the song strip returns.
     const strip = State.view !== "nowplaying" && this.wantsStrip();
     if (strip) window.setTimeout(() => { if (State.mode !== "expanded") this.popNowPlaying(); }, 900);
@@ -1786,7 +1849,7 @@ export class Island {
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
 
     this.header.sync();
-    this.header.el.style.display = State.view === "moment" || State.view === "nowplaying" ? "none" : "";
+    this.header.el.style.display = State.view === "moment" || State.view === "nowplaying" || State.view === "video" ? "none" : "";
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);

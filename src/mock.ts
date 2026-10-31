@@ -210,6 +210,8 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
         synced: true,
         text: ["[00:02.00]City lights are calling out my name tonight", "[00:06.50]Every little window glowing gold", "[00:10.80]And I keep on running through the rain until the morning finds me standing in the road", "[00:17.00]Hold on", "[00:19.00]Hold on to the night"].join("\n"),
       };
+    case "media_video_id":
+      return "dQw4w9WgXcQ";
     default:
       return;
   }

@@ -600,6 +600,13 @@ html.dev body { background: #2b2f38; }
 .np-btn:disabled { opacity: 0.35; pointer-events: none; }
 .seek.np-seek { position: absolute; left: 54px; right: 18px; bottom: -5px; }
 
+/* ── a video playing on in the bar ───────────────────────────────────────── */
+.vd-frame { position: absolute; inset: 0; border-radius: 14px; overflow: hidden; background: #000; }
+.vd-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+.vd-row { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s ease; }
+.video:hover .vd-row { opacity: 1; }
+#island .vd-btn { width: 26px; height: 26px; border-radius: 13px; background: rgba(0, 0, 0, 0.55); color: #fff; backdrop-filter: blur(6px); }
+
 /* ── sung lyrics ──────────────────────────────────────────────────────────── */
 .kar { position: relative; overflow: hidden; white-space: nowrap; -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent); mask-image: linear-gradient(90deg, #000 92%, transparent); }
 .kar-row { position: absolute; left: 0; top: 0; line-height: inherit; transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1); animation: kar-in 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }

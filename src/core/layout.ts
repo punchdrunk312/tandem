@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video";
 
 export type BotStateName =
   | "idle"
@@ -57,6 +57,8 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   recipients: { height: 214, botX: 0, botY: 0, botDiameter: 0 },
   // A song just started: a slim strip with Bob, the song and two buttons (no header).
   nowplaying: { height: 56, botX: 30, botY: 26, botDiameter: 28, width: 430 },
+  // A YouTube video whose browser was minimised, playing on in the bar (Bob steps aside).
+  video: { height: 250, botX: 0, botY: 0, botDiameter: 0, width: 428 },
   // Notes: a reminder that is due, or the next note and a couple more, or writing one.
   notes: { height: 196, botX: 68, botY: 104, botDiameter: 58 },
   // A new version: Bob holds up the news, the words and two buttons beside him.

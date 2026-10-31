@@ -27,6 +27,8 @@ pub struct NowPlaying {
     pub can_prev: bool,
     /// The player lets us jump to a spot in the song.
     pub can_seek: bool,
+    /// A YouTube video in a browser whose window is minimised (the bar can play it on).
+    pub video_hidden: bool,
     /// The album art as a `data:` URL (the bar takes its colour from it), or "".
     pub art: String,
 }
@@ -62,6 +64,54 @@ pub async fn media_lyrics(title: String, artist: String, album: String, duration
     tauri::async_runtime::spawn_blocking(move || lyrics(&title, &artist, &album, duration_ms))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// The YouTube video with this title (and channel), found by a YouTube search: its id.
+#[tauri::command]
+pub async fn media_video_id(title: String, artist: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || video_id(&title, &artist))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Brings the minimised browser window with the video back.
+#[tauri::command]
+pub fn media_show_video(title: String) {
+    #[cfg(windows)]
+    sys::show_video(&title);
+    #[cfg(not(windows))]
+    let _ = title;
+}
+
+fn video_id(title: &str, artist: &str) -> Result<Option<String>, String> {
+    let page = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36")
+        .build()
+        .get("https://www.youtube.com/results")
+        .query("search_query", &format!("{title} {artist}"))
+        // Skips the cookie question YouTube asks in Europe.
+        .set("Cookie", "SOCS=CAI; CONSENT=YES+1")
+        .call()
+        .map_err(|e| format!("Couldn't reach YouTube: {e}"))?
+        .into_string()
+        .map_err(|e| e.to_string())?;
+    let want = squash(title);
+    let key = "\"videoRenderer\":{\"videoId\":\"";
+    let mut first = None;
+    for (i, _) in page.match_indices(key) {
+        let id: String = page[i + key.len()..].chars().take_while(|c| *c != '"').collect();
+        if id.len() != 11 {
+            continue;
+        }
+        first.get_or_insert(id.clone());
+        // The result whose title is this one (not an ad or a similar video).
+        let near = &page[i..(i + 3000).min(page.len())];
+        if !want.is_empty() && squash(near).contains(&want) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(first)
 }
 
 #[derive(Serialize)]
@@ -300,6 +350,66 @@ mod sys {
         Manager::RequestAsync().ok()?.get().ok()
     }
 
+    /// The player to show: the one Windows calls current, unless that is the bar itself
+    /// (playing a video), then the first other one.
+    fn session(m: &Manager) -> Option<Session> {
+        let ours = |s: &Session| {
+            let id = s.SourceAppUserModelId().map(|h| h.to_string().to_lowercase()).unwrap_or_default();
+            id.contains("cubecursor") || id.contains("webview")
+        };
+        if let Ok(s) = m.GetCurrentSession() {
+            if !ours(&s) {
+                return Some(s);
+            }
+        }
+        m.GetSessions().ok()?.into_iter().find(|s| !ours(s))
+    }
+
+    /// The browser window showing the YouTube video with this title, and whether it is minimised.
+    pub fn video_window(title: &str) -> Option<(isize, bool)> {
+        use windows::core::BOOL;
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW, IsIconic, IsWindowVisible};
+        struct Find {
+            title: String,
+            found: Option<(isize, bool)>,
+        }
+        unsafe extern "system" fn each(h: HWND, lp: LPARAM) -> BOOL {
+            let f = &mut *(lp.0 as *mut Find);
+            if !IsWindowVisible(h).as_bool() {
+                return BOOL(1);
+            }
+            let mut buf = [0u16; 512];
+            let n = GetWindowTextW(h, &mut buf);
+            let text = String::from_utf16_lossy(&buf[..n.max(0) as usize]);
+            if text.contains(" - YouTube") && text.contains(&f.title) {
+                f.found = Some((h.0 as isize, IsIconic(h).as_bool()));
+                return BOOL(0);
+            }
+            BOOL(1)
+        }
+        if title.trim().is_empty() {
+            return None;
+        }
+        let mut f = Find { title: title.to_string(), found: None };
+        unsafe {
+            let _ = EnumWindows(Some(each), LPARAM(&mut f as *mut Find as isize));
+        }
+        f.found
+    }
+
+    pub fn show_video(title: &str) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+        if let Some((h, _)) = video_window(title) {
+            let h = HWND(h as *mut core::ffi::c_void);
+            unsafe {
+                let _ = ShowWindow(h, SW_RESTORE);
+                let _ = SetForegroundWindow(h);
+            }
+        }
+    }
+
     /// A TimeSpan counts 100 ns ticks.
     fn ms(ticks: i64) -> u64 {
         (ticks.max(0) / 10_000) as u64
@@ -366,6 +476,7 @@ mod sys {
             can_next: controls.IsNextEnabled().unwrap_or(false),
             can_prev: controls.IsPreviousEnabled().unwrap_or(false),
             can_seek: controls.IsPlaybackPositionEnabled().unwrap_or(false),
+            video_hidden: false,
         })
     }
 
@@ -393,9 +504,13 @@ mod sys {
             }
             let now = mgr
                 .as_ref()
-                .and_then(|m| m.GetCurrentSession().ok())
+                .and_then(session)
                 .and_then(|s| read(&s, last.as_ref()))
-                .filter(|n| !n.title.is_empty());
+                .filter(|n| !n.title.is_empty())
+                .map(|mut n| {
+                    n.video_hidden = video_window(&n.title).is_some_and(|(_, min)| min);
+                    n
+                });
             // The island moves the position on by itself: send when anything else changes,
             // or when its idea of the position has drifted (a jump, a stall, a late start),
             // so the lyrics stay on the beat.
@@ -420,9 +535,7 @@ mod sys {
     }
 
     pub fn control(action: &str) -> Result<(), String> {
-        let s = manager()
-            .and_then(|m| m.GetCurrentSession().ok())
-            .ok_or("Nothing is playing.")?;
+        let s = manager().as_ref().and_then(session).ok_or("Nothing is playing.")?;
         let op = match action {
             "play_pause" => s.TryTogglePlayPauseAsync(),
             "next" => s.TrySkipNextAsync(),
