@@ -722,14 +722,16 @@ export function buildRecipients(a: RecipientActions): ViewHost {
 }
 
 /** The slim strip that pops up when a song starts: the song, play/pause and next. */
-export function buildNowPlaying(a: MediaActions & { open(): void }): ViewHost {
+export function buildNowPlaying(a: MediaActions & { open(): void; close(): void }): ViewHost {
   const title = h("div", { class: "np-title" });
   const artist = h("div", { class: "np-artist" });
   const icon = (d: string) => svg(d, 16, { fill: "currentColor" });
   const play = h("button", { class: "icon-btn np-btn", title: "Play / pause", "aria-label": "Play / pause", onclick: () => { a.blip(); a.control("play_pause"); } });
   const next = h("button", { class: "icon-btn np-btn", title: "Next", "aria-label": "Next", onclick: () => { a.blip(); a.control("next"); } }, icon(MEDIA_ICON.next));
+  const lyr = h("button", { class: "icon-btn np-btn np-lyr", title: "Lyrics", "aria-label": "Lyrics", onclick: () => { a.blip(); a.toggleLyrics(); } }, svg("M4 6h16M4 11h16M4 16h10M18 15v5", 16, { stroke: 2 }));
+  const close = h("button", { class: "icon-btn np-btn", title: "Hide until the next song", "aria-label": "Hide", onclick: () => { a.blip(); a.close(); } }, svg("M6 6l12 12M18 6L6 18", 14, { stroke: 2 }));
   const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, artist);
-  const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, play, next));
+  const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, lyr, play, next, close));
   let shown: boolean | null = null;
   return {
     el,
@@ -737,7 +739,12 @@ export function buildNowPlaying(a: MediaActions & { open(): void }): ViewHost {
       const m = State.media;
       if (!m) return;
       title.textContent = m.title;
-      artist.textContent = m.artist;
+      lyr.classList.toggle("on", State.settings.lyrics);
+      // With lyrics on, the second line sings along; otherwise it names the artist.
+      const lines = State.settings.lyrics && Array.isArray(State.lyrics) ? State.lyrics : null;
+      const now = lines ? lyricAt(mediaPosition()).now : "";
+      artist.textContent = now || m.artist;
+      artist.classList.toggle("singing", !!now);
       next.disabled = !m.can_next;
       if (shown !== m.playing) {
         shown = m.playing;

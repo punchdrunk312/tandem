@@ -589,10 +589,12 @@ html.dev body { background: #2b2f38; }
 .rc-row { position: absolute; left: 24px; right: 24px; bottom: 16px; display: flex; gap: 8px; justify-content: flex-end; }
 
 /* ── the song strip ───────────────────────────────────────────────────────── */
-.np-text { position: absolute; left: 76px; right: 104px; top: 13px; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
+.np-text { position: absolute; left: 76px; right: 160px; top: 13px; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
 .np-title { font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-artist { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-row { position: absolute; right: 18px; top: 16px; display: flex; gap: 4px; }
+.np-row { position: absolute; right: 14px; top: 16px; display: flex; gap: 2px; }
+.np-artist.singing { color: inherit; font-weight: 600; }
+#island .np-lyr.on { color: var(--teal); }
 .np-btn { width: 32px; height: 32px; }
 .np-btn:disabled { opacity: 0.35; pointer-events: none; }
 

@@ -227,13 +227,7 @@ export class Island {
     this.views.set("media", buildMedia({
       blip: () => Sound.play("blip"),
       control: (action) => mediaControl(action),
-      toggleLyrics: () => {
-        State.settings.lyrics = !State.settings.lyrics;
-        State.saveSettings();
-        if (State.lyricsFor.endsWith("|offline")) State.lyricsFor = "";
-        this.fetchLyrics();
-        State.notify();
-      },
+      toggleLyrics: () => this.toggleLyrics(),
     }));
     this.views.set("recipients", buildRecipients({
       blip: () => Sound.play("blip"),
@@ -263,10 +257,15 @@ export class Island {
     this.views.set("nowplaying", buildNowPlaying({
       blip: () => Sound.play("blip"),
       control: mediaControl,
-      toggleLyrics: () => {},
+      toggleLyrics: () => this.toggleLyrics(),
       open: () => {
         State.isPinned = true;
         this.setView("media");
+      },
+      close: () => {
+        // Hidden until the next song.
+        this.npHiddenFor = this.songKey();
+        this.closeBar();
       },
     }));
     this.notesView = buildNotes({
@@ -756,6 +755,12 @@ export class Island {
     if (q === this.quiet) return;
     this.quiet = q;
     if (q) {
+      // The song strip never sits over a game or film; it comes back afterwards.
+      if (State.view === "nowplaying" && State.mode === "expanded") {
+        this.closeBar();
+        State.notify();
+        return;
+      }
       // A bar the person opened on purpose (pinned) wins over a full-screen app: leave it up.
       if (State.isPinned) {
         State.notify();
@@ -764,7 +769,11 @@ export class Island {
       State.fileDragOver = false;
       this.hintActive = false;
       this.fsm.forceHidden();
-    } else if (this.focusDonePending) {
+    } else {
+      // The game or film closed: the song strip can come back.
+      window.setTimeout(() => this.popNowPlaying(), 800);
+    }
+    if (!q && this.focusDonePending) {
       // The focus ended during a game or a film: say so now.
       this.focusDonePending = false;
       window.setTimeout(() => this.focusDone(), 800);
@@ -950,7 +959,9 @@ export class Island {
     // A song started (a new one, or the same one again after a pause of a minute or more).
     const started = !!m?.playing && (!before || before.title !== m.title || before.artist !== m.artist || (!before.playing && performance.now() - this.pausedAt > 60_000));
     if (before?.playing && !m?.playing) this.pausedAt = performance.now();
+    if (started && this.npHiddenFor !== this.songKey()) this.npHiddenFor = "";
     if (started) this.popNowPlaying();
+    if (!m && State.view === "nowplaying") this.closeBar();
     this.fetchLyrics();
     State.notify();
     this.mediaTick();
@@ -958,25 +969,49 @@ export class Island {
 
   private pausedAt = 0;
   private npTimer: number | null = null;
+  /** The song the person hid the strip for ("title|artist"); it comes back with the next. */
+  private npHiddenFor = "";
 
-  /** The slim song strip, for a few seconds, if nobody is busy with the bar. */
+  private songKey(): string {
+    return State.media ? `${State.media.title}|${State.media.artist}` : "";
+  }
+
+  private toggleLyrics() {
+    State.settings.lyrics = !State.settings.lyrics;
+    State.saveSettings();
+    if (State.lyricsFor.endsWith("|offline")) State.lyricsFor = "";
+    this.fetchLyrics();
+    State.notify();
+    this.mediaTick();
+  }
+
+  /** The strip belongs on screen: music is on (or paused under a minute), it wasn't hidden
+   *  for this song, and nothing full-screen or a focus wants the bar out of the way. */
+  private wantsStrip(): boolean {
+    const m = State.media;
+    if (!m || !State.settings.mediaPopup || this.quiet || State.focus) return false;
+    if (this.npHiddenFor === this.songKey()) return false;
+    return m.playing || performance.now() - this.pausedAt < 60_000;
+  }
+
+  /** The slim song strip. It stays while the music plays; × hides it until the next song. */
   private popNowPlaying() {
-    if (!State.settings.mediaPopup || this.quiet || State.focus) return;
+    if (!this.wantsStrip()) return;
     if (State.mode === "expanded" && State.view !== "nowplaying") return;
+    State.isPinned = true;
     this.autoly(() => this.alert("nowplaying"));
     this.applyTint();
-    if (this.npTimer != null) window.clearTimeout(this.npTimer);
-    const done = () => {
-      this.npTimer = null;
-      if (State.view !== "nowplaying") return;
-      // Being looked at: a little longer.
-      if (this.wasInIsland) {
-        this.npTimer = window.setTimeout(done, 1500);
+    this.mediaTick();
+    // Paused for a minute, or the music stopped: the strip goes.
+    if (this.npTimer != null) window.clearInterval(this.npTimer);
+    this.npTimer = window.setInterval(() => {
+      if (State.view !== "nowplaying" || State.mode !== "expanded") {
+        if (this.npTimer != null) window.clearInterval(this.npTimer);
+        this.npTimer = null;
         return;
       }
-      this.closeBar();
-    };
-    this.npTimer = window.setTimeout(done, 4500);
+      if (!this.wantsStrip() && !this.wasInIsland) this.closeBar();
+    }, 2000);
   }
 
   private tint = "";
@@ -997,8 +1032,9 @@ export class Island {
     if (this.mediaTimer != null) return;
     const tick = () => {
       this.mediaTimer = null;
-      if (State.view !== "media" || State.mode !== "expanded" || !State.media?.playing) return;
-      this.views.get("media")?.sync();
+      const v = State.view;
+      if ((v !== "media" && v !== "nowplaying") || State.mode !== "expanded" || !State.media?.playing) return;
+      this.views.get(v)?.sync();
       this.mediaTimer = window.setTimeout(tick, 250);
     };
     this.mediaTimer = window.setTimeout(tick, 250);
@@ -1035,7 +1071,7 @@ export class Island {
     this.quiet = false;
     if (what === "bar") {
       // The control bar: opens, or closes again if it is already up.
-      if (this.fsm.state === "home" && State.mode === "expanded") this.closeBar();
+      if (this.fsm.state === "home" && State.mode === "expanded" && State.view !== "nowplaying") this.closeBar();
       else {
         // The person asked for the bar on purpose: pin it so it stays until they close it,
         // even over a maximised or full-screen app (which otherwise reports "quiet" and the
@@ -1060,6 +1096,9 @@ export class Island {
 
   private closeBar() {
     this.notesView?.stopWriting();
+    // Something else had the bar (a card, a note, the control bar): the song strip returns.
+    const strip = State.view !== "nowplaying" && this.wantsStrip();
+    if (strip) window.setTimeout(() => { if (State.mode !== "expanded") this.popNowPlaying(); }, 900);
     window.setTimeout(() => this.applyTint(), 0);
     State.isPinned = false;
     this.fsm.pinned = false;

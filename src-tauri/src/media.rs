@@ -71,16 +71,60 @@ fn lyrics(title: &str, artist: &str, album: &str, duration_ms: u64) -> Result<Op
     if title.trim().is_empty() {
         return Ok(None);
     }
-    let timed = lrclib(title, artist, album, duration_ms);
-    if let Ok(Some(l)) = timed {
-        return Ok(Some(l));
+    // Players name songs "Song - Remastered 2011" or "Song (feat. X)" and list several
+    // artists as "A, B"; the libraries know them as "Song" by "A". Try as given, then plain.
+    let (t2, a2) = (plain_title(title), first_artist(artist));
+    let mut tries = vec![(title.to_string(), artist.to_string())];
+    if (t2.as_str(), a2.as_str()) != (title, artist) {
+        tries.push((t2, a2));
     }
-    match lyrics_ovh(title, artist) {
-        Ok(Some(l)) => Ok(Some(l)),
-        // Neither had it; report lrclib's problem if it had one.
-        Ok(None) => timed.map(|_| None),
-        Err(e) => timed.and(Err(e)),
+    let mut reached = false;
+    let mut last_err = None;
+    for (t, a) in &tries {
+        match lrclib(t, a, album, duration_ms) {
+            Ok(Some(l)) => return Ok(Some(l)),
+            Ok(None) => reached = true,
+            Err(e) => last_err = Some(e),
+        }
     }
+    for (t, a) in &tries {
+        match lyrics_ovh(t, a) {
+            Ok(Some(l)) => return Ok(Some(l)),
+            Ok(None) => reached = true,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    // "Not found" if any library answered; "can't reach" only if none did.
+    match last_err {
+        Some(e) if !reached => Err(e),
+        _ => Ok(None),
+    }
+}
+
+/// "Song - Remastered 2011", "Song (feat. X)", "Song [Live]" → "Song".
+fn plain_title(t: &str) -> String {
+    let mut s = t.to_string();
+    for cut in [" - ", " (", " [", " feat.", " ft."] {
+        if let Some(i) = s.find(cut) {
+            if i > 0 {
+                s.truncate(i);
+            }
+        }
+    }
+    s.trim().to_string()
+}
+
+/// "A, B & C" or "A feat. B" → "A".
+fn first_artist(a: &str) -> String {
+    let mut s = a.to_string();
+    for cut in [",", " & ", " feat.", " ft.", " x ", ";", "/"] {
+        if let Some(i) = s.find(cut) {
+            if i > 0 {
+                s.truncate(i);
+            }
+        }
+    }
+    s.trim().to_string()
 }
 
 fn agent() -> ureq::Agent {
@@ -291,3 +335,4 @@ mod sys {
         op.and_then(|o| o.get()).map(|_| ()).map_err(|e| e.to_string())
     }
 }
+
