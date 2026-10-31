@@ -207,7 +207,7 @@ export function buildHome(a: ViewActions): ViewHost {
         const pct = r.state === "done" ? 100 : r.total ? Math.min(100, (r.bytes / r.total) * 100) : 0;
         (row.querySelector(".x-bar > i") as HTMLElement).style.width = `${pct}%`;
         (row.querySelector(".x-state") as HTMLElement).textContent =
-          r.state === "done" ? (r.direction === "out" ? "sent" : "received") : r.state === "error" ? "failed" : `${fmtBytes(r.bytes)} / ${fmtBytes(r.total)}`;
+          r.state === "done" ? (r.direction === "out" ? "sent" : "received") : r.state === "error" ? "failed" : r.state === "paused" ? `paused · ${fmtBytes(r.bytes)} / ${fmtBytes(r.total)}` : `${fmtBytes(r.bytes)} / ${fmtBytes(r.total)}`;
       }
     },
   };
@@ -583,6 +583,15 @@ export function parseLrc(text: string): LyricLine[] {
   return out.sort((x, y) => x.ms - y.ms);
 }
 
+/** Lyrics without timing, spread evenly over the song (from 6% to 94% of it) so they
+ *  still follow along roughly. Blank lines and "♪" markers are dropped. */
+export function spreadLyrics(text: string, durationMs: number): LyricLine[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && l !== "♪");
+  if (!lines.length || durationMs <= 0) return [];
+  const from = durationMs * 0.06, span = durationMs * 0.88;
+  return lines.map((t, i) => ({ ms: Math.round(from + (span * i) / lines.length), text: t }));
+}
+
 /** The lyric line being sung now, and the one after it. */
 export function lyricAt(ms: number): { now: string; next: string } {
   const l = State.lyrics;
@@ -672,6 +681,60 @@ export function buildMedia(a: MediaActions): ViewHost {
       }
     },
   };
+}
+
+/** The slim strip that pops up when a song starts: the song, play/pause and next. */
+export function buildNowPlaying(a: MediaActions & { open(): void }): ViewHost {
+  const title = h("div", { class: "np-title" });
+  const artist = h("div", { class: "np-artist" });
+  const icon = (d: string) => svg(d, 16, { fill: "currentColor" });
+  const play = h("button", { class: "icon-btn np-btn", title: "Play / pause", "aria-label": "Play / pause", onclick: () => { a.blip(); a.control("play_pause"); } });
+  const next = h("button", { class: "icon-btn np-btn", title: "Next", "aria-label": "Next", onclick: () => { a.blip(); a.control("next"); } }, icon(MEDIA_ICON.next));
+  const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, artist);
+  const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, play, next));
+  let shown: boolean | null = null;
+  return {
+    el,
+    sync() {
+      const m = State.media;
+      if (!m) return;
+      title.textContent = m.title;
+      artist.textContent = m.artist;
+      next.disabled = !m.can_next;
+      if (shown !== m.playing) {
+        shown = m.playing;
+        play.replaceChildren(icon(m.playing ? MEDIA_ICON.pause : MEDIA_ICON.play));
+      }
+    },
+  };
+}
+
+/** A lively colour from a picture (the album art): the average of its brighter, more
+ *  colourful pixels, lifted so it reads as a tint. "" when there is nothing to go on. */
+export async function pictureColor(url: string): Promise<string> {
+  if (!url) return "";
+  const img = new Image();
+  img.src = url;
+  try { await img.decode(); } catch { return ""; }
+  const c = document.createElement("canvas");
+  c.width = c.height = 24;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  if (!x) return "";
+  x.drawImage(img, 0, 0, 24, 24);
+  const px = x.getImageData(0, 0, 24, 24).data;
+  let r = 0, g = 0, b = 0, w = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const R = px[i], G = px[i + 1], B = px[i + 2];
+    const max = Math.max(R, G, B), min = Math.min(R, G, B);
+    // Favour saturated, not-too-dark pixels; greys count a little.
+    const weight = (max - min) / 255 * (max / 255) + 0.02;
+    r += R * weight; g += G * weight; b += B * weight; w += weight;
+  }
+  if (!w) return "";
+  [r, g, b] = [r / w, g / w, b / w];
+  const top = Math.max(r, g, b, 1);
+  const lift = Math.min(1.6, 200 / top);
+  return `rgb(${Math.round(Math.min(255, r * lift))}, ${Math.round(Math.min(255, g * lift))}, ${Math.round(Math.min(255, b * lift))})`;
 }
 
 // ------------------------------------------------------------------ notes & reminders

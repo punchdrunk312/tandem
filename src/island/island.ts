@@ -16,7 +16,7 @@ import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNowPlaying, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -144,6 +144,7 @@ export class Island {
     }, 60_000);
     this.greeting.onComplete = () => this.fsm.greetComplete();
     State.subscribe(() => {
+      this.applyTint();
       this.dirty = true;
       this.ensureRunning();
     });
@@ -214,23 +215,33 @@ export class Island {
         }
       },
     }));
+    const mediaControl = (action: "play_pause" | "next" | "prev") => {
+      // Show the change at once; Windows confirms it within a second.
+      if (action === "play_pause" && State.media) {
+        State.media = { ...State.media, position_ms: mediaPosition(), playing: !State.media.playing };
+        State.mediaAt = performance.now();
+        State.notify();
+      }
+      void call("media_control", { action }).catch((e) => this.showNote(String(e)));
+    };
     this.views.set("media", buildMedia({
       blip: () => Sound.play("blip"),
-      control: (action) => {
-        // Show the change at once; Windows confirms it within a second.
-        if (action === "play_pause" && State.media) {
-          State.media = { ...State.media, position_ms: mediaPosition(), playing: !State.media.playing };
-          State.mediaAt = performance.now();
-          State.notify();
-        }
-        void call("media_control", { action }).catch((e) => this.showNote(String(e)));
-      },
+      control: (action) => mediaControl(action),
       toggleLyrics: () => {
         State.settings.lyrics = !State.settings.lyrics;
         State.saveSettings();
         if (State.lyricsFor.endsWith("|offline")) State.lyricsFor = "";
         this.fetchLyrics();
         State.notify();
+      },
+    }));
+    this.views.set("nowplaying", buildNowPlaying({
+      blip: () => Sound.play("blip"),
+      control: mediaControl,
+      toggleLyrics: () => {},
+      open: () => {
+        State.isPinned = true;
+        this.setView("media");
       },
     }));
     this.notesView = buildNotes({
@@ -283,7 +294,7 @@ export class Island {
     this.bdEl = h("canvas", { id: "bd" }) as HTMLCanvasElement;
     this.bdEdgeImg = h("canvas", { id: "bd-edge-img" }) as HTMLCanvasElement;
     const glass = h("div", { id: "glass" }, this.bdEl, h("div", { id: "bd-edge" }, this.bdEdgeImg));
-    const clip = h("div", { id: "island-clip" }, glass, this.ambientCanvas, this.greetingCanvas, this.contentEl);
+    const clip = h("div", { id: "island-clip" }, glass, h("div", { id: "bar-tint" }), this.ambientCanvas, this.greetingCanvas, this.contentEl);
     this.islandEl = h("div", { id: "island" }, clip, this.botGlow, this.botCanvas, this.compactLabel);
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -568,6 +579,7 @@ export class Island {
     const accent = State.settings.accent;
     if (accent) document.documentElement.style.setProperty("--teal", accent);
     else document.documentElement.style.removeProperty("--teal");
+    this.applyTint();
     if (!glass) {
       delete document.documentElement.dataset.liquid;
       this.bd = null;
@@ -694,6 +706,7 @@ export class Island {
     State.lastActivity = performance.now();
     this.animateGeometry(false);
     State.notify();
+    this.applyTint();
     if (view === "media") this.mediaTick();
   }
 
@@ -898,11 +911,59 @@ export class Island {
 
   /** Windows says what is playing (about once a second when something changes). */
   onMedia(m: NowPlaying | null) {
+    const before = State.media;
     State.media = m;
     State.mediaAt = performance.now();
+    if (m?.art !== before?.art) {
+      const art = m?.art ?? "";
+      void pictureColor(art).then((c) => {
+        if ((State.media?.art ?? "") !== art) return;
+        State.mediaColor = c;
+        this.applyTint();
+      });
+    }
+    // A song started (a new one, or the same one again after a pause of a minute or more).
+    const started = !!m?.playing && (!before || before.title !== m.title || before.artist !== m.artist || (!before.playing && performance.now() - this.pausedAt > 60_000));
+    if (before?.playing && !m?.playing) this.pausedAt = performance.now();
+    if (started) this.popNowPlaying();
     this.fetchLyrics();
     State.notify();
     this.mediaTick();
+  }
+
+  private pausedAt = 0;
+  private npTimer: number | null = null;
+
+  /** The slim song strip, for a few seconds, if nobody is busy with the bar. */
+  private popNowPlaying() {
+    if (!State.settings.mediaPopup || this.quiet || State.focus) return;
+    if (State.mode === "expanded" && State.view !== "nowplaying") return;
+    this.autoly(() => this.alert("nowplaying"));
+    this.applyTint();
+    if (this.npTimer != null) window.clearTimeout(this.npTimer);
+    const done = () => {
+      this.npTimer = null;
+      if (State.view !== "nowplaying") return;
+      // Being looked at: a little longer.
+      if (this.wasInIsland) {
+        this.npTimer = window.setTimeout(done, 1500);
+        return;
+      }
+      this.closeBar();
+    };
+    this.npTimer = window.setTimeout(done, 4500);
+  }
+
+  private tint = "";
+  /** The bar's colour: the album art while a song is on show, else the accent colour. */
+  private applyTint() {
+    const songShows = State.view === "media" || State.view === "nowplaying";
+    const c = songShows && State.mediaColor ? State.mediaColor : State.settings.accent;
+    if (c === this.tint) return;
+    this.tint = c;
+    const root = document.documentElement.style;
+    if (c) root.setProperty("--bar-tint", c);
+    else root.removeProperty("--bar-tint");
   }
 
   private mediaTimer: number | null = null;
@@ -928,7 +989,7 @@ export class Island {
     void call<{ synced: boolean; text: string } | null>("media_lyrics", { title: m.title, artist: m.artist, album: m.album, durationMs: m.duration_ms })
       .then((l) => {
         if (State.lyricsFor !== key) return;
-        State.lyrics = !l ? null : l.synced ? parseLrc(l.text) : l.text;
+        State.lyrics = !l ? null : l.synced ? parseLrc(l.text) : m.duration_ms ? spreadLyrics(l.text, m.duration_ms) : l.text;
         State.notify();
       })
       .catch(() => {
@@ -974,6 +1035,7 @@ export class Island {
 
   private closeBar() {
     this.notesView?.stopWriting();
+    window.setTimeout(() => this.applyTint(), 0);
     State.isPinned = false;
     this.fsm.pinned = false;
     this.fsm.forceIdle();
@@ -1640,7 +1702,7 @@ export class Island {
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
 
     this.header.sync();
-    this.header.el.style.display = State.view === "moment" ? "none" : "";
+    this.header.el.style.display = State.view === "moment" || State.view === "nowplaying" ? "none" : "";
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);

@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying";
 
 export type BotStateName =
   | "idle"
@@ -23,6 +23,8 @@ export interface ViewLayout {
   botX: number;
   botY: number;
   botDiameter: number;
+  /** Narrower than the usual expanded bar (the song strip). */
+  width?: number;
 }
 
 // The window is a fixed 720×320; the island is drawn inside it, glued to the top
@@ -51,6 +53,8 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   focus: { height: 162, botX: 68, botY: 98, botDiameter: 58 },
   // Now playing: Bob listens on the left, the song, its progress, buttons and a lyric line.
   media: { height: 176, botX: 68, botY: 100, botDiameter: 58 },
+  // A song just started: a slim strip with Bob, the song and two buttons (no header).
+  nowplaying: { height: 70, botX: 40, botY: 35, botDiameter: 36, width: 420 },
   // Notes: a reminder that is due, or the next note and a couple more, or writing one.
   notes: { height: 196, botX: 68, botY: 104, botDiameter: 58 },
   // A new version: Bob holds up the news, the words and two buttons beside him.
@@ -70,7 +74,7 @@ export function islandSize(mode: IslandMode, view: IslandViewName, transferRows 
       return { w: COMPACT_W, h: NOTCH_H };
     case "expanded": {
       const extra = view === "home" ? Math.min(MAX_TRANSFER_ROWS, transferRows) * TRANSFER_ROW : 0;
-      return { w: EXPANDED_W, h: VIEW_LAYOUTS[view].height + extra };
+      return { w: VIEW_LAYOUTS[view].width ?? EXPANDED_W, h: VIEW_LAYOUTS[view].height + extra };
     }
   }
 }

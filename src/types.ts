@@ -21,7 +21,7 @@ export interface Snapshot {
     direction: "in" | "out";
     bytes: number;
     total: number;
-    state: "active" | "done" | "error";
+    state: "active" | "paused" | "done" | "error";
     message: string;
     path: string | null;
     /** The other computer's name. */

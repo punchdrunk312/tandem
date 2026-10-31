@@ -32,6 +32,8 @@ export interface IslandSettings {
   accCards: boolean;
   /** Lyrics under the song in the media view (asks lrclib.net; off until turned on). */
   lyrics: boolean;
+  /** A slim strip with the song pops up when music starts playing. */
+  mediaPopup: boolean;
 }
 
 /** What Windows says is playing (see src-tauri/src/media.rs). */
@@ -45,6 +47,8 @@ export interface NowPlaying {
   duration_ms: number;
   can_next: boolean;
   can_prev: boolean;
+  /** The album art as a data: URL, or "". */
+  art: string;
 }
 
 /** One time-stamped lyric line. */
@@ -89,6 +93,7 @@ const DEFAULTS: IslandSettings = {
   focusMinutes: 25,
   accCards: true,
   lyrics: false,
+  mediaPopup: true,
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;
@@ -131,6 +136,8 @@ class IslandState {
   /** The song playing, and when it arrived (performance.now), to move the position on. */
   media: NowPlaying | null = null;
   mediaAt = 0;
+  /** The album art's colour ("rgb(r, g, b)"), for tinting the bar while the song shows. */
+  mediaColor = "";
   /** Lyrics for `lyricsFor` ("title|artist"): time-stamped lines, or plain text, or none. */
   lyricsFor = "";
   lyrics: LyricLine[] | string | null = null;

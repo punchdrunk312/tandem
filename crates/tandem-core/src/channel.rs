@@ -598,4 +598,73 @@ mod tests {
         .await;
         assert!(matches!(r, Err(Error::Auth(_))));
     }
+
+    /// A known (already paired) file connection over an in-memory pipe.
+    async fn file_pipe() -> (Secure<tokio::io::DuplexStream>, Secure<tokio::io::DuplexStream>) {
+        let (a, b) = tokio::io::duplex(1 << 16);
+        let pol = policy(None);
+        pol.keys.lock().unwrap().push(("cli".into(), [7; 32]));
+        let srv = tokio::spawn(async move { server_handshake(b, &ident("srv"), &pol).await.unwrap().1 });
+        let (_, cli) = client_handshake(a, &ident("cli"), Purpose::Files, ClientAuth::Known { link_key: [7; 32] })
+            .await
+            .unwrap();
+        (cli, srv.await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_send_cut_off_halfway_carries_on_where_it_stopped() {
+        use crate::files::{self, ResumePoint};
+        use std::sync::Arc;
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::create_dir(src.path().join("album")).unwrap();
+        std::fs::write(src.path().join("album/small.txt"), b"hello").unwrap();
+        let body: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        std::fs::write(src.path().join("album/big.bin"), &body).unwrap();
+        let offer = Arc::new(files::build_manifest(&[src.path().join("album")]).unwrap());
+        let items = offer.items.clone();
+        let plan = files::plan_receive(&items, dst.path()).await.unwrap();
+        let point = Arc::new(Mutex::new(ResumePoint::default()));
+
+        // First try: the connection is cut once about a third has arrived.
+        let ((mut cr, mut cw), (mut sr, mut sw)) = file_pipe().await;
+        let o = offer.clone();
+        let server = tokio::spawn(async move {
+            files::serve(&mut sr, &mut sw, move |_| Some(o.clone()), &|_, _| {}, &|_| false).await
+        });
+        let (p2, items2, plan2, dest) = (point.clone(), items.clone(), plan.clone(), dst.path().to_path_buf());
+        let got = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let g2 = got.clone();
+        let client = tokio::spawn(async move {
+            let prog = move |n: u64| g2.store(n, Ordering::SeqCst);
+            let mark = move |at: ResumePoint| *p2.lock().unwrap() = at;
+            files::receive_planned(&mut cr, &mut cw, 1, &items2, &dest, &plan2, None, &prog, &mark).await
+        });
+        while got.load(Ordering::SeqCst) < 1_000_000 {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        client.abort();
+        let _ = client.await;
+        let _ = server.await;
+        let at = *point.lock().unwrap();
+        assert!(at.offset > 0 && at.offset < body.len() as u64, "cut off mid-file: {at:?}");
+
+        // Second try, on a new connection: it carries on from there and the file is whole.
+        let ((mut cr, mut cw), (mut sr, mut sw)) = file_pipe().await;
+        let o = offer.clone();
+        let server = tokio::spawn(async move {
+            files::serve(&mut sr, &mut sw, move |_| Some(o.clone()), &|_, _| {}, &|_| false).await
+        });
+        let first = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+        let f2 = first.clone();
+        let prog = move |n: u64| { let _ = f2.compare_exchange(u64::MAX, n, Ordering::SeqCst, Ordering::SeqCst); };
+        let tops = files::receive_planned(&mut cr, &mut cw, 1, &items, dst.path(), &plan, Some(at), &prog, &|_| {})
+            .await
+            .unwrap();
+        assert!(server.await.unwrap().1.is_ok());
+        assert!(first.load(Ordering::SeqCst) >= at.offset, "did not start over");
+        assert_eq!(tops, vec![dst.path().join("album")]);
+        assert_eq!(std::fs::read(dst.path().join("album/big.bin")).unwrap(), body);
+        assert_eq!(std::fs::read(dst.path().join("album/small.txt")).unwrap(), b"hello");
+    }
 }

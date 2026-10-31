@@ -445,7 +445,7 @@ function renderFiles(s: Snapshot) {
         const pct = t.total ? Math.min(100, (t.bytes / t.total) * 100) : t.state === "done" ? 100 : 0;
         list.append(h("div", { class: `xfer ${t.state}`, "data-id": `${t.direction}-${t.id}` },
           h("div", { class: "top" }, h("span", {}, t.direction === "out" ? "↑" : "↓"), h("span", { class: "n" }, many ? `${t.name} · ${t.peer}` : t.name),
-            h("span", { class: "s" }, t.state === "done" ? fmtBytes(t.total) : t.state === "error" ? "failed" : `${fmtBytes(t.bytes)} / ${fmtBytes(t.total)}`)),
+            h("span", { class: "s" }, t.state === "done" ? fmtBytes(t.total) : t.state === "error" ? "failed" : t.state === "paused" ? `paused · ${fmtBytes(t.bytes)} / ${fmtBytes(t.total)}` : `${fmtBytes(t.bytes)} / ${fmtBytes(t.total)}`)),
           h("div", { class: "bar" }, h("i", { style: `width:${pct}%` })),
           t.message && h("div", { class: "msg" }, t.message)));
       }

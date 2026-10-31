@@ -570,6 +570,23 @@ html.dev body { background: #2b2f38; }
 .m-empty { position: absolute; left: 132px; right: 30px; top: 18px; font-size: 13.5px; color: var(--dim); }
 :root[data-theme="glass"][data-tone="light"] .m-bar { background: rgba(10, 16, 32, 0.12); }
 
+/* The bar's colour: the accent colour, or the album art's while a song shows. */
+#bar-tint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, color-mix(in srgb, var(--bar-tint, transparent) 46%, transparent), color-mix(in srgb, var(--bar-tint, transparent) 22%, transparent));
+  transition: background 0.6s ease;
+}
+
+/* ── the song strip ───────────────────────────────────────────────────────── */
+.np-text { position: absolute; left: 76px; right: 104px; top: 13px; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
+.np-title { font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-artist { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-row { position: absolute; right: 18px; top: 16px; display: flex; gap: 4px; }
+.np-btn { width: 32px; height: 32px; }
+.np-btn:disabled { opacity: 0.35; pointer-events: none; }
+
 /* ── notes & reminders ──────────────────────────────────────────────────── */
 .nt-text { position: absolute; left: 132px; right: 30px; top: 0; }
 .nt-big { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; max-height: 46px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

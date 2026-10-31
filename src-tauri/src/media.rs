@@ -3,7 +3,8 @@
 //! sent to the island as "media"; nothing is sent while nothing changes.
 //!
 //! Lyrics are optional (off unless the person turns them on in the bar): the song's title,
-//! artist, album and length go to lrclib.net, a free lyrics library, and nothing else does.
+//! artist, album and length go to lrclib.net (timed lyrics), or, when it has none or can't
+//! be reached, the title and artist to lyrics.ovh (plain lyrics). Nothing else is sent.
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -23,6 +24,8 @@ pub struct NowPlaying {
     pub duration_ms: u64,
     pub can_next: bool,
     pub can_prev: bool,
+    /// The album art as a `data:` URL (the bar takes its colour from it), or "".
+    pub art: String,
 }
 
 /// Starts the poll (Windows only; elsewhere the island simply never hears "media").
@@ -68,6 +71,60 @@ fn lyrics(title: &str, artist: &str, album: &str, duration_ms: u64) -> Result<Op
     if title.trim().is_empty() {
         return Ok(None);
     }
+    let timed = lrclib(title, artist, album, duration_ms);
+    if let Ok(Some(l)) = timed {
+        return Ok(Some(l));
+    }
+    match lyrics_ovh(title, artist) {
+        Ok(Some(l)) => Ok(Some(l)),
+        // Neither had it; report lrclib's problem if it had one.
+        Ok(None) => timed.map(|_| None),
+        Err(e) => timed.and(Err(e)),
+    }
+}
+
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent(concat!("CubeCursor/", env!("CARGO_PKG_VERSION"), " (https://cubecursor.shop)"))
+        .build()
+}
+
+/// Plain lyrics from lyrics.ovh (no timing).
+fn lyrics_ovh(title: &str, artist: &str) -> Result<Option<Lyrics>, String> {
+    if artist.trim().is_empty() {
+        return Ok(None);
+    }
+    let enc = |s: &str| s.trim().replace('/', " ").replace('?', " ");
+    let url = format!(
+        "https://api.lyrics.ovh/v1/{}/{}",
+        urlencode(&enc(artist)),
+        urlencode(&enc(title))
+    );
+    let body: serde_json::Value = match agent().get(&url).call() {
+        Ok(r) => r.into_json().map_err(|e| e.to_string())?,
+        Err(ureq::Error::Status(404, _)) => return Ok(None),
+        Err(e) => return Err(format!("Could not reach the lyrics library: {e}")),
+    };
+    Ok(body
+        .get("lyrics")
+        .and_then(|v| v.as_str())
+        .map(|t| t.replace("\r\n", "\n").trim().to_string())
+        .filter(|t| !t.is_empty())
+        .map(|text| Lyrics { synced: false, text }))
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Timed lyrics from lrclib.net.
+fn lrclib(title: &str, artist: &str, album: &str, duration_ms: u64) -> Result<Option<Lyrics>, String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(8))
         .user_agent(concat!("CubeCursor/", env!("CARGO_PKG_VERSION"), " (https://cubecursor.shop)"))
@@ -112,7 +169,28 @@ mod sys {
         (ticks.max(0) / 10_000) as u64
     }
 
-    fn read(s: &Session) -> Option<NowPlaying> {
+    /// The cover picture of what is playing, as a data: URL (at most 2 MB), or "".
+    fn art(props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties) -> String {
+        use base64::Engine as _;
+        use windows::Storage::Streams::DataReader;
+        let read = || -> Option<String> {
+            let stream = props.Thumbnail().ok()?.OpenReadAsync().ok()?.get().ok()?;
+            let size = stream.Size().ok()?;
+            if size == 0 || size > 2_000_000 {
+                return None;
+            }
+            let reader = DataReader::CreateDataReader(&stream.GetInputStreamAt(0).ok()?).ok()?;
+            reader.LoadAsync(size as u32).ok()?.get().ok()?;
+            let mut buf = vec![0u8; size as usize];
+            reader.ReadBytes(&mut buf).ok()?;
+            let kind = stream.ContentType().map(|h| h.to_string()).unwrap_or_default();
+            let kind = if kind.starts_with("image/") { kind } else { "image/png".into() };
+            Some(format!("data:{kind};base64,{}", base64::engine::general_purpose::STANDARD.encode(&buf)))
+        };
+        read().unwrap_or_default()
+    }
+
+    fn read(s: &Session, last: Option<&NowPlaying>) -> Option<NowPlaying> {
         let props = s.TryGetMediaPropertiesAsync().ok()?.get().ok()?;
         let info = s.GetPlaybackInfo().ok()?;
         let controls = info.Controls().ok()?;
@@ -133,10 +211,18 @@ mod sys {
         if duration > 0 {
             position = position.min(duration);
         }
+        let title = props.Title().map(|h| h.to_string()).unwrap_or_default();
+        let artist = props.Artist().map(|h| h.to_string()).unwrap_or_default();
+        // The picture only changes with the song: read it once per song.
+        let art = match last {
+            Some(l) if l.title == title && l.artist == artist && !l.art.is_empty() => l.art.clone(),
+            _ => art(&props),
+        };
         Some(NowPlaying {
             app: s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default(),
-            title: props.Title().map(|h| h.to_string()).unwrap_or_default(),
-            artist: props.Artist().map(|h| h.to_string()).unwrap_or_default(),
+            title,
+            artist,
+            art,
             album: props.AlbumTitle().map(|h| h.to_string()).unwrap_or_default(),
             playing,
             position_ms: position,
@@ -169,7 +255,7 @@ mod sys {
             let now = mgr
                 .as_ref()
                 .and_then(|m| m.GetCurrentSession().ok())
-                .and_then(|s| read(&s))
+                .and_then(|s| read(&s, last.as_ref()))
                 .filter(|n| !n.title.is_empty());
             // The position moves every second: send when anything else changes, and the
             // position only every few seconds (the island moves it on by itself).

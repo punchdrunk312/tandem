@@ -21,6 +21,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 tokio = { version = "1", features = ["time", "sync"] }
 log = "0.4"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
@@ -31,6 +32,7 @@ keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.61", features = [
   "Foundation",
   "Media_Control",
+  "Storage_Streams",
   "Win32_Foundation",
   "Win32_System_Com",
   "Win32_Media_Audio",

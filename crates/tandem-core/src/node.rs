@@ -284,10 +284,25 @@ struct Shared {
     transfers: Mutex<Vec<TransferView>>,
     /// Ids of sends the person asked to cancel; the serve loop checks this each chunk.
     cancels: Mutex<HashSet<u64>>,
+    /// Incoming sends that can carry on after a dropped connection (by offer id).
+    partials: Mutex<HashMap<u64, Partial>>,
     status: Mutex<Status>,
     devices: Mutex<Devices>,
     next_sid: AtomicU64,
     snap_tx: watch::Sender<Snapshot>,
+}
+
+/// An incoming send that was cut off (or is running and may be): where its files go and
+/// how far it got, so it can carry on when that computer is back.
+struct Partial {
+    peer: String,
+    peer_name: String,
+    items: Vec<FileItem>,
+    dest: PathBuf,
+    plan: files::ReceivePlan,
+    point: Arc<Mutex<files::ResumePoint>>,
+    /// A fetch is running for it right now.
+    running: bool,
 }
 
 fn new_code() -> String {
@@ -498,6 +513,17 @@ impl Shared {
         self.publish();
     }
 
+    /// The connection dropped mid-send: the row waits, and the send carries on later.
+    fn transfer_pause(&self, id: u64, peer_name: &str) {
+        let mut v = self.transfers.lock().unwrap();
+        if let Some(x) = v.iter_mut().find(|x| x.id == id && x.direction == "in") {
+            x.state = "paused".into();
+            x.message = format!("Paused. It carries on when {peer_name} is back.");
+        }
+        drop(v);
+        self.publish();
+    }
+
     fn transfer_finish(
         &self,
         id: u64,
@@ -640,6 +666,7 @@ impl Node {
             offers: Mutex::new(VecDeque::new()),
             transfers: Mutex::new(vec![]),
             cancels: Mutex::new(HashSet::new()),
+            partials: Mutex::new(HashMap::new()),
             status: Mutex::new(Status {
                 control: "local",
                 licensed: no_licence_needed,
@@ -1917,11 +1944,61 @@ impl Actor {
         );
         let me = self.sh.devices.lock().unwrap().me.clone();
         self.send_to(&pid, Msg::Status(me));
+        self.resume_partials(&pid);
         self.sh.status.lock().unwrap().error = None;
         self.sh.discovered.lock().unwrap().remove(&pid);
         self.refresh_connected();
         if dialer {
             self.send_to(&pid, Msg::Layout { peer_side: side });
+        }
+    }
+
+    /// That computer is connected again: carry on the sends from it that were cut off.
+    fn resume_partials(&mut self, pid: &str) {
+        let Some(sess) = self.sessions.get(pid) else {
+            return;
+        };
+        let addr = SocketAddr::new(sess.addr, sess.peer.listen_port);
+        let Some(key) = unhex32(
+            &self.sh.persisted.lock().unwrap().peers
+                .iter()
+                .find(|p| p.id == pid)
+                .map(|p| p.link_key.clone())
+                .unwrap_or_default(),
+        ) else {
+            return;
+        };
+        let ids: Vec<u64> = {
+            let mut parts = self.sh.partials.lock().unwrap();
+            parts
+                .iter_mut()
+                .filter(|(_, p)| p.peer == pid && !p.running)
+                .map(|(id, p)| {
+                    p.running = true;
+                    *id
+                })
+                .collect()
+        };
+        for id in ids {
+            let (items, dest, peer_name) = {
+                let parts = self.sh.partials.lock().unwrap();
+                let Some(p) = parts.get(&id) else { continue };
+                (p.items.clone(), p.dest.clone(), p.peer_name.clone())
+            };
+            {
+                let mut v = self.sh.transfers.lock().unwrap();
+                if let Some(x) = v.iter_mut().find(|x| x.id == id && x.direction == "in") {
+                    x.state = "active".into();
+                    x.message.clear();
+                }
+            }
+            self.sh.publish();
+            log::info!("resuming incoming send {id} from {peer_name}");
+            let (sh, ev_tx, from_id) = (self.sh.clone(), self.ev_tx.clone(), pid.to_string());
+            tokio::spawn(async move {
+                let res = fetch_send(&sh, addr, key, id, &from_id, &peer_name, &items, &dest, true).await;
+                finish_send(&sh, &ev_tx, id, &from_id, &peer_name, &dest, res);
+            });
         }
     }
 
@@ -3844,7 +3921,12 @@ impl Actor {
         if kind == OfferKind::Carry {
             self.carry_from.insert(id, from_id.clone());
         }
+        let resumable_name = peer_name.clone();
         let task = tokio::spawn(async move {
+            if kind == OfferKind::Send {
+                let res = fetch_send(&sh, addr, key, id, &from_id, &resumable_name, &items, &dest, false).await;
+                return finish_send(&sh, &ev_tx, id, &from_id, &resumable_name, &dest, res);
+            }
             let res = fetch_files(&sh, addr, key, id, &items, &dest).await;
             match res {
                 Ok(paths) => {
@@ -4058,6 +4140,115 @@ fn discard_staged(paths: &[PathBuf]) {
     if let Some(d) = parent {
         let _ = std::fs::remove_dir(d);
     }
+}
+
+/// Fetches an explicit send, remembering how far it got so a dropped connection can be
+/// picked up again (`resume`: carry on from the remembered place).
+#[allow(clippy::too_many_arguments)]
+async fn fetch_send(
+    sh: &Arc<Shared>,
+    addr: SocketAddr,
+    key: [u8; 32],
+    id: u64,
+    peer: &str,
+    peer_name: &str,
+    items: &[FileItem],
+    dest: &std::path::Path,
+    resume: bool,
+) -> Result<Vec<PathBuf>> {
+    let (plan, point) = if resume {
+        let parts = sh.partials.lock().unwrap();
+        let p = parts
+            .get(&id)
+            .ok_or_else(|| Error::Proto("nothing to resume".into()))?;
+        (p.plan.clone(), p.point.clone())
+    } else {
+        let plan = files::plan_receive(items, dest).await?;
+        let point = Arc::new(Mutex::new(files::ResumePoint::default()));
+        sh.partials.lock().unwrap().insert(
+            id,
+            Partial {
+                peer: peer.to_string(),
+                peer_name: peer_name.to_string(),
+                items: items.to_vec(),
+                dest: dest.to_path_buf(),
+                plan: plan.clone(),
+                point: point.clone(),
+                running: true,
+            },
+        );
+        (plan, point)
+    };
+    let from = resume.then(|| *point.lock().unwrap());
+    let (mut r, mut w) = file_connection(sh, addr, key).await?;
+    let sh2 = sh.clone();
+    let prog = move |n: u64| sh2.transfer_progress(id, "in", n);
+    let mark = move |at: files::ResumePoint| *point.lock().unwrap() = at;
+    files::receive_planned(&mut r, &mut w, id, items, dest, &plan, from, &prog, &mark).await
+}
+
+/// The end of an explicit send's fetch: done, paused (the connection dropped: it carries on
+/// when that computer is back), or failed.
+fn finish_send(
+    sh: &Arc<Shared>,
+    ev_tx: &UnboundedSender<Ev>,
+    id: u64,
+    from: &str,
+    peer_name: &str,
+    dest: &std::path::Path,
+    res: Result<Vec<PathBuf>>,
+) {
+    match res {
+        Ok(paths) => {
+            sh.partials.lock().unwrap().remove(&id);
+            let _ = ev_tx.send(Ev::Received {
+                id,
+                from: from.to_string(),
+                paths,
+            });
+            sh.transfer_finish(id, "in", Ok(Some(dest.to_string_lossy().into_owned())));
+        }
+        Err(e) if files::is_interruption(&e) => {
+            if let Some(p) = sh.partials.lock().unwrap().get_mut(&id) {
+                p.running = false;
+            }
+            log::info!("incoming send {id} interrupted ({e}); it resumes when {peer_name} is back");
+            sh.transfer_pause(id, peer_name);
+        }
+        Err(e) => {
+            sh.partials.lock().unwrap().remove(&id);
+            sh.transfer_finish(id, "in", Err(e.to_string()));
+        }
+    }
+}
+
+/// Opens an authenticated file connection to a paired computer.
+async fn file_connection(
+    sh: &Arc<Shared>,
+    addr: SocketAddr,
+    key: [u8; 32],
+) -> Result<Secure<TcpStream>> {
+    let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        .await
+        .map_err(|_| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "connection timed out",
+            ))
+        })??;
+    stream.set_nodelay(true)?;
+    let (_, halves) = tokio::time::timeout(
+        Duration::from_secs(10),
+        client_handshake(
+            stream,
+            &sh.me,
+            Purpose::Files,
+            ClientAuth::Known { link_key: key },
+        ),
+    )
+    .await
+    .map_err(|_| Error::Auth("handshake timed out".into()))??;
+    Ok(halves)
 }
 
 async fn fetch_files(
