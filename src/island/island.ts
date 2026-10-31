@@ -669,6 +669,11 @@ export class Island {
     if (q === this.quiet) return;
     this.quiet = q;
     if (q) {
+      // A bar the person opened on purpose (pinned) wins over a full-screen app: leave it up.
+      if (State.isPinned) {
+        State.notify();
+        return;
+      }
       State.fileDragOver = false;
       this.hintActive = false;
       this.fsm.forceHidden();
@@ -820,7 +825,13 @@ export class Island {
     if (what === "bar") {
       // The control bar: opens, or closes again if it is already up.
       if (this.fsm.state === "home" && State.mode === "expanded") this.closeBar();
-      else this.alert("home");
+      else {
+        // The person asked for the bar on purpose: pin it so it stays until they close it,
+        // even over a maximised or full-screen app (which otherwise reports "quiet" and the
+        // bar would collapse the instant it opened).
+        State.isPinned = true;
+        this.alert("home");
+      }
       return;
     }
     // The transfer bar: a toggle, independent of whether a transfer is running.
