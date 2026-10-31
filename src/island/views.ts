@@ -5,7 +5,8 @@ import { fire } from "../bridge";
 import type { Snapshot } from "../types";
 import { h, svg } from "./dom";
 import { fmtMins, momentText } from "./moments";
-import { State } from "./state";
+import { State, type LyricLine } from "./state";
+import { nextReminder, reminderPresets, whenText } from "../core/notes";
 
 export interface ViewHost {
   el: HTMLElement;
@@ -20,6 +21,10 @@ export interface ViewActions {
   toggleDevices(): void;
   /** The header's timer button: the focus timer, or back. */
   toggleFocus(): void;
+  /** The header's music button: what is playing, or back. */
+  toggleMedia(): void;
+  /** The header's notes button: notes and reminders, or back. */
+  toggleNotes(): void;
   /** Shift-drop menu: prepare the files this way, then send. */
   dropAction(a: "asis" | "zip" | "png" | "jpg"): void;
   /** Shift-drop menu: back out without sending. */
@@ -33,6 +38,8 @@ const ICON = {
   speakerOff: "M11 5L6 9H3v6h3l5 4V5zM16 9l5 6M21 9l-5 6",
   devices: "M3 5h12v9H3zM7 18h4M9 14v4M17 8h4v11h-4z",
   timer: "M12 9v4l2.5 1.5M9.5 2.5h5M12 21a8 8 0 100-16 8 8 0 000 16z",
+  notes: "M6 3h9l5 5v13H6zM14 3v6h6M9 13h7M9 17h5",
+  music: "M9 18V5l12-2v13M9 18a3 3 0 11-6 0 3 3 0 016 0zM21 16a3 3 0 11-6 0 3 3 0 016 0z",
 };
 
 const fmtBytes = (n: number) => {
@@ -65,7 +72,9 @@ export function buildHeader(a: ViewActions): ViewHost {
   const settings = h("button", { class: "icon-btn", title: "Pair & settings", "aria-label": "Open settings", onclick: () => { a.blip(); fire("open_main_window"); } }, svg(ICON.sliders, 15, { stroke: 1.8 }));
   const close = h("button", { class: "icon-btn", title: "Close", "aria-label": "Close", onclick: () => a.collapse() }, svg(ICON.close, 15, { stroke: 1.8 }));
   const timer = h("button", { class: "icon-btn", title: "Focus timer", "aria-label": "Focus timer", onclick: () => { a.blip(); a.toggleFocus(); } }, svg(ICON.timer, 15, { stroke: 1.8 }));
-  const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }), timer, devices, sound, settings, close);
+  const music = h("button", { class: "icon-btn", title: "Now playing", "aria-label": "Now playing", onclick: () => { a.blip(); a.toggleMedia(); } }, svg(ICON.music, 15, { stroke: 1.8 }));
+  const notes = h("button", { class: "icon-btn", title: "Notes", "aria-label": "Notes and reminders", onclick: () => { a.blip(); a.toggleNotes(); } }, svg(ICON.notes, 15, { stroke: 1.8 }));
+  const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }), notes, music, timer, devices, sound, settings, close);
   return {
     el,
     sync() {
@@ -73,7 +82,9 @@ export function buildHeader(a: ViewActions): ViewHost {
       dot.className = `hd-dot${live ? " on" : ""}`;
       devices.classList.toggle("on", State.view === "devices");
       timer.classList.toggle("on", State.view === "focus" || !!State.focus);
-      title.textContent = State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.greeting ?? "CubeCursor";
+      music.classList.toggle("on", State.view === "media" || !!State.media?.playing);
+      notes.classList.toggle("on", State.view === "notes" || !!State.dueNote);
+      title.textContent = State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.greeting ?? "CubeCursor";
       sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
     },
   };
@@ -527,14 +538,245 @@ export function buildFocus(a: FocusActions): ViewHost {
         const key = `pick${m}`;
         if (shown !== key) {
           shown = key;
-          const chip = (n: number) => btn(`${n} min`, () => { State.settings.focusMinutes = n; State.saveSettings(); }, n === m ? "on" : "");
-          row.replaceChildren(chip(15), chip(25), chip(50), btn("Start", () => a.start(State.settings.focusMinutes), "primary"));
+          // Any length from 5 minutes to 4 hours: the bar can't be typed into, so − and +.
+          const set = (n: number) => { State.settings.focusMinutes = Math.min(240, Math.max(5, n)); State.saveSettings(); State.notify(); };
+          const step = m >= 60 ? 15 : 5;
+          const chip = (n: number) => btn(`${n} min`, () => set(n), n === m ? "on" : "");
+          row.replaceChildren(
+            btn("−", () => set(m - (m > 60 ? 15 : 5)), "f-step"),
+            btn(m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60}` : ""}` : `${m} min`, () => {}, "on f-len"),
+            btn("+", () => set(m + step), "f-step"),
+            ...[25, 50].filter((n) => n !== m).map(chip),
+            btn("Start", () => a.start(State.settings.focusMinutes), "primary"));
         }
       }
     },
   };
 }
 
+
+// ------------------------------------------------------------------ now playing
+
+export interface MediaActions {
+  blip(): void;
+  control(action: "play_pause" | "next" | "prev"): void;
+  toggleLyrics(): void;
+}
+
+/** Where the song is now: the last position Windows gave, moved on while it plays. */
+export function mediaPosition(): number {
+  const m = State.media;
+  if (!m) return 0;
+  const p = m.position_ms + (m.playing ? performance.now() - State.mediaAt : 0);
+  return m.duration_ms ? Math.min(p, m.duration_ms) : p;
+}
+
+/** "[01:02.34] words" lines → time-stamped lines, in order (a line may carry several stamps). */
+export function parseLrc(text: string): LyricLine[] {
+  const out: LyricLine[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const stamps = [...raw.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    if (!stamps.length) continue;
+    const words = raw.replace(/\[[^\]]*\]/g, "").trim();
+    for (const st of stamps) out.push({ ms: Math.round((Number(st[1]) * 60 + Number(st[2])) * 1000), text: words });
+  }
+  return out.sort((x, y) => x.ms - y.ms);
+}
+
+/** The lyric line being sung now, and the one after it. */
+export function lyricAt(ms: number): { now: string; next: string } {
+  const l = State.lyrics;
+  if (!Array.isArray(l) || !l.length) return { now: "", next: "" };
+  let i = -1;
+  for (let k = 0; k < l.length && l[k].ms <= ms; k++) i = k;
+  return { now: i >= 0 ? l[i].text : "", next: l[i + 1]?.text ?? "" };
+}
+
+/** "Spotify" from "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" or "Spotify.exe". */
+function appName(id: string): string {
+  const last = id.split("!").pop() ?? id;
+  const base = last.replace(/\.exe$/i, "").split(".").pop() ?? last;
+  if (/^msedge$/i.test(base)) return "Edge";
+  return base ? base[0].toUpperCase() + base.slice(1) : "";
+}
+
+const MEDIA_ICON = {
+  prev: "M6 5v14M19 5L9 12l10 7z",
+  next: "M18 5v14M5 5l10 7-10 7z",
+  play: "M7 4l13 8-13 8z",
+  pause: "M7 4h4v16H7zM14 4h4v16h-4z",
+};
+
+/** The song, how far along it is, play/pause/skip, and (if wanted) the lyric being sung. */
+export function buildMedia(a: MediaActions): ViewHost {
+  const app = h("div", { class: "m-app" });
+  const title = h("div", { class: "m-title" });
+  const artist = h("div", { class: "m-artist" });
+  const fill = h("i");
+  const bar = h("div", { class: "m-bar" }, fill);
+  const tNow = h("span"), tEnd = h("span");
+  const times = h("div", { class: "m-times" }, tNow, tEnd);
+  const icon = (d: string, filled = true) => svg(d, 18, filled ? { fill: "currentColor", stroke: 0 } : { stroke: 2 });
+  const btn = (label: string, d: string, act: "play_pause" | "next" | "prev") =>
+    h("button", { class: "icon-btn m-btn", title: label, "aria-label": label, onclick: () => { a.blip(); a.control(act); } }, icon(d));
+  const prev = btn("Previous", MEDIA_ICON.prev, "prev");
+  const play = btn("Play / pause", MEDIA_ICON.play, "play_pause");
+  const next = btn("Next", MEDIA_ICON.next, "next");
+  const lyr = h("button", { class: "btn m-lyr", text: "Lyrics", title: "Show lyrics (looks the song up on lrclib.net)", onclick: () => { a.blip(); a.toggleLyrics(); } });
+  const line = h("div", { class: "m-line" });
+  const lineNext = h("div", { class: "m-line next" });
+  const empty = h("div", { class: "m-empty", text: "Nothing is playing. Start a song in Spotify, a browser or any player, and it shows up here." });
+  const body = h("div", { class: "m-text" }, app, title, artist, h("div", { class: "m-row" }, prev, play, next, lyr), bar, times, line, lineNext);
+  const el = h("div", { class: "view media" }, body, empty);
+  const mmss = (ms: number) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  let shownPlaying: boolean | null = null;
+  return {
+    el,
+    sync() {
+      const m = State.media;
+      body.hidden = !m;
+      empty.hidden = !!m;
+      if (!m) return;
+      app.textContent = appName(m.app);
+      title.textContent = m.title;
+      artist.textContent = [m.artist, m.album].filter(Boolean).join(" · ");
+      prev.disabled = !m.can_prev;
+      next.disabled = !m.can_next;
+      if (shownPlaying !== m.playing) {
+        shownPlaying = m.playing;
+        play.replaceChildren(icon(m.playing ? MEDIA_ICON.pause : MEDIA_ICON.play));
+      }
+      const pos = mediaPosition();
+      fill.style.width = m.duration_ms ? `${(100 * pos) / m.duration_ms}%` : "0%";
+      tNow.textContent = mmss(pos);
+      tEnd.textContent = m.duration_ms ? mmss(m.duration_ms) : "";
+      lyr.classList.toggle("on", State.settings.lyrics);
+      if (!State.settings.lyrics) {
+        line.textContent = "";
+        lineNext.textContent = "";
+      } else if (typeof State.lyrics === "string") {
+        line.textContent = State.lyrics.split("\n").find((s) => s.trim()) ?? "";
+        lineNext.textContent = "No timing for this song, so the lyrics don't follow along.";
+      } else if (Array.isArray(State.lyrics)) {
+        const { now, next: n } = lyricAt(pos);
+        line.textContent = now || "♪";
+        lineNext.textContent = n;
+      } else {
+        const key = `${m.title}|${m.artist}`;
+        line.textContent = State.lyricsFor === key ? "No lyrics found for this song."
+          : State.lyricsFor === `${key}|offline` ? "Couldn't reach the lyrics library. Try again later." : "Looking up the lyrics…";
+        lineNext.textContent = "";
+      }
+    },
+  };
+}
+
+// ------------------------------------------------------------------ notes & reminders
+
+export interface NotesActions {
+  blip(): void;
+  /** Writing: the bar takes the keyboard (on) or gives it back (off). */
+  typing(on: boolean): void;
+  add(text: string, remindAt: number | null): void;
+  done(id: string): void;
+  snooze(id: string, minutes: number): void;
+}
+
+/** A reminder that is due, or the notes to do with a way to write a new one, all in the bar. */
+export function buildNotes(a: NotesActions): ViewHost & { stopWriting(): void } {
+  const big = h("div", { class: "nt-big" });
+  const sub = h("div", { class: "nt-sub" });
+  const list = h("div", { class: "nt-list" });
+  const row = h("div", { class: "nt-row" });
+  const input = h("input", { class: "nt-input", type: "text", maxlength: 300, placeholder: "Write a note…", spellcheck: true }) as HTMLInputElement;
+  const when = h("div", { class: "nt-when" });
+  const write = h("div", { class: "nt-write" }, input, when);
+  const el = h("div", { class: "view notes" }, h("div", { class: "nt-text" }, big, sub, list, write, row));
+  const btn = (label: string, onclick: () => void, cls = "") => h("button", { class: `btn ${cls}`.trim(), text: label, onclick: () => { a.blip(); onclick(); } });
+  let writing = false;
+  let remindAt: number | null = null;
+  const stop = () => {
+    if (!writing) return;
+    writing = false;
+    input.value = "";
+    remindAt = null;
+    a.typing(false);
+    el.dataset.key = "";
+  };
+  const submit = () => {
+    if (input.value.trim()) a.add(input.value, remindAt);
+    stop();
+    State.notify();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") submit();
+    if (e.key === "Escape") { stop(); State.notify(); }
+  });
+  const chips = () => {
+    const opts: { label: string; at: number | null }[] = [{ label: "No reminder", at: null }, ...reminderPresets()];
+    when.replaceChildren(...opts.map((o) => {
+      const on = o.at === null ? remindAt === null : remindAt !== null && Math.abs(remindAt - o.at) < 60_000;
+      return btn(o.label, () => { remindAt = o.at; chips(); input.focus({ preventScroll: true }); }, `chip${on ? " on" : ""}`);
+    }));
+  };
+  return {
+    el,
+    stopWriting: stop,
+    sync() {
+      write.hidden = !writing;
+      if (writing) {
+        big.textContent = "";
+        sub.textContent = remindAt != null ? `⏰ Bob reminds you ${whenText(remindAt).toLowerCase()}` : "Enter to keep it · Esc to cancel";
+        list.replaceChildren();
+        if (el.dataset.key !== "write") {
+          el.dataset.key = "write";
+          chips();
+          row.replaceChildren(btn("Keep note", submit, "primary"), btn("Cancel", () => { stop(); State.notify(); }));
+        }
+        return;
+      }
+      const notes = State.notes.filter((n) => !n.done);
+      const due = State.notes.find((n) => n.id === State.dueNote && !n.done);
+      const next = nextReminder(notes);
+      const key = JSON.stringify([due?.id, due?.text, notes.map((n) => [n.id, n.text, n.remindAt]), Math.floor(Date.now() / 60_000)]);
+      if (el.dataset.key === key) return;
+      el.dataset.key = key;
+      const startWriting = () => {
+        writing = true;
+        a.typing(true);
+        State.notify();
+        // The window takes the keyboard a moment after asking.
+        window.setTimeout(() => input.focus({ preventScroll: true }), 60);
+      };
+      if (due) {
+        big.textContent = due.text;
+        sub.textContent = "⏰ Reminder";
+        list.replaceChildren();
+        row.replaceChildren(btn("Done", () => a.done(due.id), "primary"), btn("In 10 min", () => a.snooze(due.id, 10)), btn("In 1 hour", () => a.snooze(due.id, 60)));
+        return;
+      }
+      if (!notes.length) {
+        big.textContent = "Nothing to remember";
+        sub.textContent = "Write a note here, and Bob reminds you when it's time.";
+        list.replaceChildren();
+        row.replaceChildren(btn("Write a note", startWriting, "primary"));
+        return;
+      }
+      const top = next ?? notes[0];
+      big.textContent = top.text;
+      sub.textContent = top.remindAt != null ? `⏰ ${whenText(top.remindAt)}` : `${notes.length} note${notes.length === 1 ? "" : "s"} to do`;
+      const others = notes.filter((n) => n.id !== top.id).slice(0, 2);
+      list.replaceChildren(...others.map((n) => h("div", { class: "nt-item" },
+        h("button", { class: "nt-tick", title: "Done", "aria-label": "Done", onclick: () => { a.blip(); a.done(n.id); } }),
+        h("span", { text: `${n.text}${n.remindAt != null ? `  ·  ${whenText(n.remindAt)}` : ""}` }))));
+      row.replaceChildren(btn("Done", () => a.done(top.id)), btn("Write a note", startWriting, "primary"));
+    },
+  };
+}
 
 // ------------------------------------------------------------------ a new version
 

@@ -553,6 +553,41 @@ html.dev body { background: #2b2f38; }
 .n-act { position: absolute; left: 100px; top: 66px; display: flex; gap: 8px; }
 .n-act:empty { display: none; }
 
+/* ── now playing ──────────────────────────────────────────────────────────── */
+.m-text { position: absolute; left: 132px; right: 30px; top: 0; }
+.m-app { font-size: 11px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.m-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; padding-right: 210px; }
+.m-artist { font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 210px; }
+.m-row { position: absolute; right: 0; top: 10px; display: flex; gap: 4px; align-items: center; }
+.m-btn { width: 34px; height: 34px; }
+.m-btn:disabled { opacity: 0.35; pointer-events: none; }
+.m-lyr { margin-left: 6px; }
+.m-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); margin-top: 10px; overflow: hidden; }
+.m-bar i { display: block; height: 100%; background: var(--teal); border-radius: 2px; }
+.m-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.m-line { font-size: 14.5px; font-weight: 650; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-line.next { font-size: 12.5px; font-weight: 500; color: var(--dim); margin-top: 1px; }
+.m-empty { position: absolute; left: 132px; right: 30px; top: 18px; font-size: 13.5px; color: var(--dim); }
+:root[data-theme="glass"][data-tone="light"] .m-bar { background: rgba(10, 16, 32, 0.12); }
+
+/* ── notes & reminders ──────────────────────────────────────────────────── */
+.nt-text { position: absolute; left: 132px; right: 30px; top: 0; }
+.nt-big { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; max-height: 46px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.nt-sub { font-size: 12.5px; color: var(--teal); font-weight: 650; margin-top: 3px; }
+.nt-list { margin-top: 4px; }
+.nt-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.nt-tick { flex: none; width: 13px; height: 13px; padding: 0; border-radius: 50%; border: 1.5px solid currentColor; background: none; cursor: pointer; }
+.nt-tick:hover { border-color: var(--teal); background: rgba(45, 212, 191, 0.25); }
+.nt-write { margin-top: 2px; }
+.nt-input { width: 100%; box-sizing: border-box; height: 36px; padding: 0 12px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.08); color: inherit; font: inherit; font-size: 14px; }
+.nt-input:focus { outline: 2px solid var(--teal); outline-offset: 0; }
+:root[data-tone="light"] .nt-input { border-color: rgba(10, 16, 32, 0.15); background: rgba(255, 255, 255, 0.6); }
+.nt-when { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.btn.chip { height: 26px; padding: 0 10px; font-size: 12px; }
+.nt-row { display: flex; gap: 8px; margin-top: 10px; }
+.f-step { min-width: 34px; padding-left: 0; padding-right: 0; font-weight: 700; }
+.f-len { pointer-events: none; }
+
 /* ── a new version ────────────────────────────────────────────────────────── */
 .u-text { position: absolute; left: 112px; right: 30px; top: 6px; }
 .u-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }

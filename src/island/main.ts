@@ -6,6 +6,7 @@ import { Sound } from "../core/sound";
 import type { Snapshot } from "../types";
 import { Island, bootSnapshot } from "./island";
 import { SETTINGS_KEY, State } from "./state";
+import { NOTES_KEY } from "../core/notes";
 
 async function main() {
   const root = document.getElementById("root");
@@ -29,6 +30,7 @@ async function main() {
   await safe("snapshot listener", () => onSnapshot((s: Snapshot) => island.applySnapshot(s)));
   await safe("cursor listener", () => onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y)));
   await safe("hotkey listener", () => onEvent<"bar" | "pill">("hotkey", (what) => island.hotkey(what)));
+  await safe("media listener", () => onEvent<import("./state").NowPlaying | null>("media", (m) => island.onMedia(m)));
   await safe("note listener", () => onEvent<string>("note", (msg) => island.note(msg)));
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
@@ -64,6 +66,7 @@ async function main() {
     .catch(() => {});
   // The pairing/settings window edits the same settings entry.
   window.addEventListener("storage", (e) => {
+    if (e.key === NOTES_KEY) island.reloadNotes();
     if (e.key === SETTINGS_KEY) {
       State.reloadSettings();
       island.applySettings();

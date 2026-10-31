@@ -2,6 +2,7 @@
 
 import type { BotStateName, IslandMode, IslandViewName } from "../core/layout";
 import type { Snapshot } from "../types";
+import { loadNotes, type Note } from "../core/notes";
 
 export interface IslandSettings {
   soundEnabled: boolean;
@@ -29,6 +30,27 @@ export interface IslandSettings {
   focusMinutes: number;
   /** A card with the battery when earbuds (or a headset, a mouse) connect. */
   accCards: boolean;
+  /** Lyrics under the song in the media view (asks lrclib.net; off until turned on). */
+  lyrics: boolean;
+}
+
+/** What Windows says is playing (see src-tauri/src/media.rs). */
+export interface NowPlaying {
+  app: string;
+  title: string;
+  artist: string;
+  album: string;
+  playing: boolean;
+  position_ms: number;
+  duration_ms: number;
+  can_next: boolean;
+  can_prev: boolean;
+}
+
+/** One time-stamped lyric line. */
+export interface LyricLine {
+  ms: number;
+  text: string;
 }
 
 /** A focus timer that is running: when it ends and how long it was (ms). */
@@ -66,6 +88,7 @@ const DEFAULTS: IslandSettings = {
   tips: true,
   focusMinutes: 25,
   accCards: true,
+  lyrics: false,
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;
@@ -105,6 +128,15 @@ class IslandState {
   /** Brief reaction to a finished / failed transfer. */
   flash: BotStateName | null = null;
   notice = "";
+  /** The song playing, and when it arrived (performance.now), to move the position on. */
+  media: NowPlaying | null = null;
+  mediaAt = 0;
+  /** Lyrics for `lyricsFor` ("title|artist"): time-stamped lines, or plain text, or none. */
+  lyricsFor = "";
+  lyrics: LyricLine[] | string | null = null;
+  /** Bob's notepad (written in the settings window), and the reminder on show. */
+  notes: Note[] = loadNotes();
+  dueNote: string | null = null;
   /** The focus timer, while it runs (it survives a restart). */
   focus: Focus | null = loadFocus();
   /** The moment on show (see moments.ts). */

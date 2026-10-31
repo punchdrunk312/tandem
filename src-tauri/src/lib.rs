@@ -20,6 +20,7 @@ mod elevate;
 mod ghost;
 mod island;
 mod license_client;
+mod media;
 mod reports;
 mod shellmenu;
 #[cfg(windows)]
@@ -1260,6 +1261,7 @@ pub fn run() {
             // global hotkey is fine, with a short retry if a leftover copy still holds them.
             #[cfg(windows)]
             spawn_hotkey_poll(app.handle().clone());
+            media::start(app.handle().clone());
             #[cfg(not(windows))]
             {
                 register_hotkeys(app.handle(), /* first_try */ true);
@@ -1419,6 +1421,9 @@ pub fn run() {
             reposition,
             open_main_window,
             quit_app,
+            island::island_typing,
+            media::media_control,
+            media::media_lyrics,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CubeCursor")

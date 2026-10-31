@@ -16,8 +16,9 @@ import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMoment, buildNote, buildUpdate, homeText, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
-import { saveFocus } from "./state";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { saveFocus, type NowPlaying } from "./state";
+import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
 import { MomentWatcher, panFor, type Moment } from "./moments";
 import { pending } from "../whatsnew";
@@ -129,6 +130,7 @@ export class Island {
     this.refreshLook();
     // A focus that was running when CubeCursor closed carries on.
     this.focusTick();
+    this.reminderLoop();
     // Bob's tip of the day, when nothing else is going on.
     window.setInterval(() => this.maybeTip(), 60_000);
     // The look changes with the day; the year turning gets confetti on the minute.
@@ -155,6 +157,8 @@ export class Island {
       blip: () => Sound.play("blip"),
       toggleDevices: () => this.setView(State.view === "devices" ? "home" : "devices"),
       toggleFocus: () => this.setView(State.view === "focus" ? "home" : "focus"),
+      toggleMedia: () => this.setView(State.view === "media" ? "home" : "media"),
+      toggleNotes: () => this.setView(State.view === "notes" ? "home" : "notes"),
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
@@ -210,6 +214,49 @@ export class Island {
         }
       },
     }));
+    this.views.set("media", buildMedia({
+      blip: () => Sound.play("blip"),
+      control: (action) => {
+        // Show the change at once; Windows confirms it within a second.
+        if (action === "play_pause" && State.media) {
+          State.media = { ...State.media, position_ms: mediaPosition(), playing: !State.media.playing };
+          State.mediaAt = performance.now();
+          State.notify();
+        }
+        void call("media_control", { action }).catch((e) => this.showNote(String(e)));
+      },
+      toggleLyrics: () => {
+        State.settings.lyrics = !State.settings.lyrics;
+        State.saveSettings();
+        if (State.lyricsFor.endsWith("|offline")) State.lyricsFor = "";
+        this.fetchLyrics();
+        State.notify();
+      },
+    }));
+    this.notesView = buildNotes({
+      blip: () => Sound.play("blip"),
+      typing: (on) => {
+        // Writing keeps the bar open; it goes back to normal when the note is kept or dropped.
+        if (on) State.isPinned = true;
+        fire("island_typing", { on });
+      },
+      add: (text, at) => {
+        State.notes = addNote(text, at);
+        Sound.play("approve");
+      },
+      done: (id) => {
+        State.notes = updateNote(id, { done: true, remindAt: null });
+        if (State.dueNote === id) State.dueNote = null;
+        Sound.play("approve");
+        State.notify();
+      },
+      snooze: (id, min) => {
+        State.notes = updateNote(id, { remindAt: Date.now() + min * 60_000 });
+        if (State.dueNote === id) State.dueNote = null;
+        this.closeBar();
+      },
+    });
+    this.views.set("notes", this.notesView);
     this.updateView = buildUpdate({
       blip: () => Sound.play("blip"),
       install: () => {
@@ -642,10 +689,12 @@ export class Island {
       State.notify();
       return;
     }
+    if (view !== "notes") this.notesView?.stopWriting();
     State.view = view;
     State.lastActivity = performance.now();
     this.animateGeometry(false);
     State.notify();
+    if (view === "media") this.mediaTick();
   }
 
   collapse() {
@@ -820,6 +869,76 @@ export class Island {
   }
 
   /** Ctrl+Alt+Z / Ctrl+Alt+U (and the tray entries). */
+  private notesView: ReturnType<typeof buildNotes> | null = null;
+
+  /** The notes changed in another window (or another copy of the bar). */
+  reloadNotes() {
+    State.notes = loadNotes();
+    if (State.dueNote && !State.notes.some((n) => n.id === State.dueNote && !n.done)) State.dueNote = null;
+    State.notify();
+  }
+
+  /** Every 15 s: a reminder whose time has come pops up (once; snooze or done answers it). */
+  private reminderLoop() {
+    const check = () => {
+      const due = nextReminder(State.notes.filter((n) => n.remindAt! <= Date.now()));
+      if (due && State.dueNote !== due.id && !this.quiet) {
+        State.dueNote = due.id;
+        // Shown once: clear the time so it doesn't come back after a restart.
+        State.notes = updateNote(due.id, { remindAt: null });
+        Sound.play("approve");
+        State.isPinned = true;
+        this.autoly(() => this.alert("notes"));
+        State.notify();
+      }
+    };
+    check();
+    window.setInterval(check, 15_000);
+  }
+
+  /** Windows says what is playing (about once a second when something changes). */
+  onMedia(m: NowPlaying | null) {
+    State.media = m;
+    State.mediaAt = performance.now();
+    this.fetchLyrics();
+    State.notify();
+    this.mediaTick();
+  }
+
+  private mediaTimer: number | null = null;
+  /** While the media view is open and a song plays, move the progress and lyric along. */
+  private mediaTick() {
+    if (this.mediaTimer != null) return;
+    const tick = () => {
+      this.mediaTimer = null;
+      if (State.view !== "media" || State.mode !== "expanded" || !State.media?.playing) return;
+      this.views.get("media")?.sync();
+      this.mediaTimer = window.setTimeout(tick, 250);
+    };
+    this.mediaTimer = window.setTimeout(tick, 250);
+  }
+
+  private fetchLyrics() {
+    const m = State.media;
+    if (!m || !State.settings.lyrics) return;
+    const key = `${m.title}|${m.artist}`;
+    if (key === State.lyricsFor || `${key}|offline` === State.lyricsFor) return;
+    State.lyricsFor = key;
+    State.lyrics = null;
+    void call<{ synced: boolean; text: string } | null>("media_lyrics", { title: m.title, artist: m.artist, album: m.album, durationMs: m.duration_ms })
+      .then((l) => {
+        if (State.lyricsFor !== key) return;
+        State.lyrics = !l ? null : l.synced ? parseLrc(l.text) : l.text;
+        State.notify();
+      })
+      .catch(() => {
+        // Offline or the library is down: say so; turning lyrics off and on tries again.
+        if (State.lyricsFor !== key) return;
+        State.lyricsFor = `${key}|offline`;
+        State.notify();
+      });
+  }
+
   private lastHotkey = { what: "", at: -Infinity };
   hotkey(what: "bar" | "pill") {
     // The same press can arrive twice (sent to the island and to the settings window, and
@@ -854,6 +973,7 @@ export class Island {
   }
 
   private closeBar() {
+    this.notesView?.stopWriting();
     State.isPinned = false;
     this.fsm.pinned = false;
     this.fsm.forceIdle();

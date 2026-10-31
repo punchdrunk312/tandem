@@ -215,6 +215,23 @@ mod sys {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
         }
     }
+
+    /// While a note is being written the island takes the keyboard like a normal window;
+    /// afterwards it goes back to never stealing focus.
+    pub fn allow_typing(win: &WebviewWindow, on: bool) {
+        use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+        let Some(hwnd) = hwnd_of(win) else { return };
+        if on {
+            unsafe {
+                let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & !(WS_EX_NOACTIVATE.0 as isize));
+                let _ = SetForegroundWindow(hwnd);
+            }
+            let _ = win.set_focus();
+        } else {
+            make_non_activating(win);
+        }
+    }
 }
 
 /// Non-Windows stand-ins so the crate still type-checks for UI development.
@@ -235,6 +252,11 @@ mod sys {
     }
     pub fn foreground_class() -> String {
         String::new()
+    }
+    pub fn allow_typing(win: &WebviewWindow, on: bool) {
+        if on {
+            let _ = win.set_focus();
+        }
     }
     pub fn show_no_activate(win: &WebviewWindow) {
         let _ = win.show();
@@ -732,4 +754,12 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
             }
         }
     });
+}
+
+/// The island's notepad: take the keyboard while writing (`on`), give it back after.
+#[tauri::command]
+pub fn island_typing(app: AppHandle, on: bool) {
+    if let Some(win) = window(&app) {
+        sys::allow_typing(&win, on);
+    }
 }

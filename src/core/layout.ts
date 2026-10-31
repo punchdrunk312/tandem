@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes";
 
 export type BotStateName =
   | "idle"
@@ -48,7 +48,11 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   // The device cards fill the bar; Bob steps aside.
   devices: { height: 232, botX: 0, botY: 0, botDiameter: 0 },
   // The focus timer: Bob on the left keeping time, the clock in the middle.
-  focus: { height: 150, botX: 68, botY: 94, botDiameter: 58 },
+  focus: { height: 162, botX: 68, botY: 98, botDiameter: 58 },
+  // Now playing: Bob listens on the left, the song, its progress, buttons and a lyric line.
+  media: { height: 176, botX: 68, botY: 100, botDiameter: 58 },
+  // Notes: a reminder that is due, or the next note and a couple more, or writing one.
+  notes: { height: 196, botX: 68, botY: 104, botDiameter: 58 },
   // A new version: Bob holds up the news, the words and two buttons beside him.
   update: { height: 128, botX: 62, botY: 70, botDiameter: 52 },
 };
