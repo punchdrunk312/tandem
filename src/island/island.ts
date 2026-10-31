@@ -820,7 +820,13 @@ export class Island {
   }
 
   /** Ctrl+Alt+Z / Ctrl+Alt+U (and the tray entries). */
+  private lastHotkey = { what: "", at: -Infinity };
   hotkey(what: "bar" | "pill") {
+    // The same press can arrive twice (sent to the island and to the settings window, and
+    // a global listen() hears both): a second copy right after would close what just opened.
+    const t = performance.now();
+    if (this.lastHotkey.what === what && t - this.lastHotkey.at < 300) return;
+    this.lastHotkey = { what, at: t };
     this.quiet = false;
     if (what === "bar") {
       // The control bar: opens, or closes again if it is already up.
