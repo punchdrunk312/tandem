@@ -5,7 +5,7 @@
   "identifier": "shop.cubecursor.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420; frame-src https://www.youtube-nocookie.com",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
