@@ -204,6 +204,12 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       state.error = "Wrong code, or that computer isn't accepting new devices";
       push();
       return;
+    case "media_lyrics":
+      // A made-up song, timed like the libraries time them (one stamp per line).
+      return {
+        synced: true,
+        text: ["[00:02.00]City lights are calling out my name tonight", "[00:06.50]Every little window glowing gold", "[00:10.80]And I keep on running through the rain until the morning finds me standing in the road", "[00:17.00]Hold on", "[00:19.00]Hold on to the night"].join("\n"),
+      };
     default:
       return;
   }

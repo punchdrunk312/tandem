@@ -3,8 +3,9 @@
 //! sent to the island as "media"; nothing is sent while nothing changes.
 //!
 //! Lyrics are optional (off unless the person turns them on in the bar): the song's title,
-//! artist, album and length go to lrclib.net (timed lyrics), or, when it has none or can't
-//! be reached, the title and artist to lyrics.ovh (plain lyrics). Nothing else is sent.
+//! artist, album and length go to lrclib.net and NetEase Cloud Music (timed lyrics), or,
+//! when neither has them, the title and artist to lyrics.ovh (plain lyrics). Nothing else
+//! is sent.
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -24,6 +25,8 @@ pub struct NowPlaying {
     pub duration_ms: u64,
     pub can_next: bool,
     pub can_prev: bool,
+    /// The player lets us jump to a spot in the song.
+    pub can_seek: bool,
     /// The album art as a `data:` URL (the bar takes its colour from it), or "".
     pub art: String,
 }
@@ -40,7 +43,7 @@ pub fn start(app: AppHandle) {
     let _ = app;
 }
 
-/// "play_pause", "next" or "prev" for the app that is playing.
+/// "play_pause", "next", "prev", or "seek:<ms>" for the app that is playing.
 #[tauri::command]
 pub fn media_control(action: String) -> Result<(), String> {
     #[cfg(windows)]
@@ -82,6 +85,13 @@ fn lyrics(title: &str, artist: &str, album: &str, duration_ms: u64) -> Result<Op
     let mut last_err = None;
     for (t, a) in &tries {
         match lrclib(t, a, album, duration_ms) {
+            Ok(Some(l)) => return Ok(Some(l)),
+            Ok(None) => reached = true,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    for (t, a) in &tries {
+        match netease(t, a, duration_ms) {
             Ok(Some(l)) => return Ok(Some(l)),
             Ok(None) => reached = true,
             Err(e) => last_err = Some(e),
@@ -167,10 +177,92 @@ fn urlencode(s: &str) -> String {
         .collect()
 }
 
+/// Timed lyrics from NetEase Cloud Music: the closest match by name, artist and length.
+fn netease(title: &str, artist: &str, duration_ms: u64) -> Result<Option<Lyrics>, String> {
+    let fail = |e: ureq::Error| format!("Could not reach the lyrics library: {e}");
+    let found: serde_json::Value = agent()
+        .get("https://music.163.com/api/search/get")
+        .query("s", &format!("{title} {artist}"))
+        .query("type", "1")
+        .query("limit", "8")
+        .call()
+        .map_err(fail)?
+        .into_json()
+        .map_err(|e| e.to_string())?;
+    let want_t = squash(&plain_title(title));
+    let want_a = squash(&first_artist(artist));
+    let mut best: Option<(u64, u64)> = None; // (how far off in length, song id)
+    for s in found["result"]["songs"].as_array().into_iter().flatten() {
+        let name = squash(&plain_title(s["name"].as_str().unwrap_or("")));
+        if name.is_empty() || !(name.contains(&want_t) || want_t.contains(&name)) {
+            continue;
+        }
+        let artists: Vec<String> = s["artists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| a["name"].as_str().map(squash))
+            .collect();
+        if !want_a.is_empty() && !artists.iter().any(|a| a.contains(&want_a) || want_a.contains(a.as_str())) {
+            continue;
+        }
+        let off = if duration_ms > 0 {
+            s["duration"].as_u64().unwrap_or(0).abs_diff(duration_ms)
+        } else {
+            0
+        };
+        // Another version (live, a remix) runs to a different length: its lyrics won't fit.
+        if off > 4000 {
+            continue;
+        }
+        let Some(id) = s["id"].as_u64() else { continue };
+        if best.is_none_or(|(o, _)| off < o) {
+            best = Some((off, id));
+        }
+    }
+    let Some((_, id)) = best else { return Ok(None) };
+    let body: serde_json::Value = agent()
+        .get("https://music.163.com/api/song/lyric")
+        .query("id", &id.to_string())
+        .query("lv", "1")
+        .call()
+        .map_err(fail)?
+        .into_json()
+        .map_err(|e| e.to_string())?;
+    let text = clean_lrc(body["lrc"]["lyric"].as_str().unwrap_or(""));
+    let sung = text.lines().filter(|l| !l.rsplit(']').next().unwrap_or("").trim().is_empty()).count();
+    Ok((sung >= 3).then_some(Lyrics { synced: true, text }))
+}
+
+/// Lower case, letters and digits only: "Don't Stop Me Now" → "dontstopmenow".
+fn squash(s: &str) -> String {
+    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+}
+
+/// Drops the credit lines some libraries put first ("[00:00.00] 作词 : …", "Producer: …").
+fn clean_lrc(text: &str) -> String {
+    let credit = |words: &str| {
+        let Some(i) = words.find([':', '：']) else { return false };
+        let key = words[..i].trim();
+        let cjk = key.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let known = ["producer", "lyrics", "composer", "written by", "arranger", "mixed by"]
+            .iter()
+            .any(|k| key.eq_ignore_ascii_case(k));
+        key.chars().count() <= 12 && (cjk || known)
+    };
+    text.lines()
+        .filter(|l| {
+            let words = l.rsplit(']').next().unwrap_or("");
+            !credit(words) && !words.contains("纯音乐")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Timed lyrics from lrclib.net.
 fn lrclib(title: &str, artist: &str, album: &str, duration_ms: u64) -> Result<Option<Lyrics>, String> {
     let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(5))
         .user_agent(concat!("CubeCursor/", env!("CARGO_PKG_VERSION"), " (https://cubecursor.shop)"))
         .build();
     let mut req = agent
@@ -273,6 +365,7 @@ mod sys {
             duration_ms: duration,
             can_next: controls.IsNextEnabled().unwrap_or(false),
             can_prev: controls.IsPreviousEnabled().unwrap_or(false),
+            can_seek: controls.IsPlaybackPositionEnabled().unwrap_or(false),
         })
     }
 
@@ -292,6 +385,8 @@ mod sys {
         }
         let mut mgr = None;
         let mut last: Option<NowPlaying> = None;
+        // Where the island thinks the song is: the position sent, and when.
+        let mut sent = (0u64, std::time::Instant::now());
         loop {
             if mgr.is_none() {
                 mgr = manager();
@@ -301,24 +396,26 @@ mod sys {
                 .and_then(|m| m.GetCurrentSession().ok())
                 .and_then(|s| read(&s, last.as_ref()))
                 .filter(|n| !n.title.is_empty());
-            // The position moves every second: send when anything else changes, and the
-            // position only every few seconds (the island moves it on by itself).
+            // The island moves the position on by itself: send when anything else changes,
+            // or when its idea of the position has drifted (a jump, a stall, a late start),
+            // so the lyrics stay on the beat.
             let changed = match (&last, &now) {
                 (None, None) => false,
                 (Some(a), Some(b)) => {
                     let same = NowPlaying { position_ms: 0, ..a.clone() } == NowPlaying { position_ms: 0, ..b.clone() };
-                    !same || a.position_ms.abs_diff(b.position_ms) > 2500 || !b.playing && a.position_ms != b.position_ms
+                    let thinks = sent.0 + if b.playing { sent.1.elapsed().as_millis() as u64 } else { 0 };
+                    !same || thinks.abs_diff(b.position_ms) > 250
                 }
                 _ => true,
             };
             if changed {
                 let _ = app.emit_to(island::WINDOW_LABEL, "media", now.clone());
+                if let Some(n) = &now {
+                    sent = (n.position_ms, std::time::Instant::now());
+                }
                 last = now;
-            } else if let (Some(l), Some(n)) = (&mut last, &now) {
-                // Keep our idea of the position current without sending it.
-                l.position_ms = n.position_ms;
             }
-            std::thread::sleep(Duration::from_millis(1000));
+            std::thread::sleep(Duration::from_millis(400));
         }
     }
 
@@ -330,6 +427,15 @@ mod sys {
             "play_pause" => s.TryTogglePlayPauseAsync(),
             "next" => s.TrySkipNextAsync(),
             "prev" => s.TrySkipPreviousAsync(),
+            seek if seek.starts_with("seek:") => {
+                let ms: i64 = seek[5..].parse().map_err(|_| "bad seek")?;
+                let start = s.GetTimelineProperties().and_then(|t| t.StartTime()).map(|t| t.Duration).unwrap_or(0);
+                let ok = s
+                    .TryChangePlaybackPositionAsync(start + ms.max(0) * 10_000)
+                    .and_then(|o| o.get())
+                    .map_err(|e| e.to_string())?;
+                return if ok { Ok(()) } else { Err("This player doesn't let CubeCursor jump around in the song.".into()) };
+            }
             other => return Err(format!("unknown media action {other}")),
         };
         op.and_then(|o| o.get()).map(|_| ()).map_err(|e| e.to_string())

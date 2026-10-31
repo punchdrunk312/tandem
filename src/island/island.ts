@@ -215,6 +215,16 @@ export class Island {
         }
       },
     }));
+    const mediaSeek = (ms: number) => {
+      const m = State.media;
+      if (!m) return;
+      const to = Math.max(0, Math.min(ms, m.duration_ms || ms));
+      // Show the jump at once; Windows confirms it within a moment.
+      State.media = { ...m, position_ms: to };
+      State.mediaAt = performance.now();
+      State.notify();
+      void call("media_control", { action: `seek:${Math.round(to)}` }).catch((e) => this.showNote(String(e)));
+    };
     const mediaControl = (action: "play_pause" | "next" | "prev") => {
       // Show the change at once; Windows confirms it within a second.
       if (action === "play_pause" && State.media) {
@@ -227,6 +237,7 @@ export class Island {
     this.views.set("media", buildMedia({
       blip: () => Sound.play("blip"),
       control: (action) => mediaControl(action),
+      seek: mediaSeek,
       toggleLyrics: () => this.toggleLyrics(),
     }));
     this.views.set("recipients", buildRecipients({
@@ -257,6 +268,7 @@ export class Island {
     this.views.set("nowplaying", buildNowPlaying({
       blip: () => Sound.play("blip"),
       control: mediaControl,
+      seek: mediaSeek,
       toggleLyrics: () => this.toggleLyrics(),
       open: () => {
         State.isPinned = true;
@@ -1027,17 +1039,22 @@ export class Island {
   }
 
   private mediaTimer: number | null = null;
-  /** While the media view is open and a song plays, move the progress and lyric along. */
+  /** While the song shows and plays, move the progress and lyric along: every frame while
+   *  lyrics are sung (the words fill smoothly), four times a second otherwise. */
   private mediaTick() {
     if (this.mediaTimer != null) return;
+    const later = (f: () => void) => {
+      if (State.settings.lyrics && Array.isArray(State.lyrics)) this.mediaTimer = -requestAnimationFrame(f) - 1;
+      else this.mediaTimer = window.setTimeout(f, 250);
+    };
     const tick = () => {
       this.mediaTimer = null;
       const v = State.view;
       if ((v !== "media" && v !== "nowplaying") || State.mode !== "expanded" || !State.media?.playing) return;
       this.views.get(v)?.sync();
-      this.mediaTimer = window.setTimeout(tick, 250);
+      later(tick);
     };
-    this.mediaTimer = window.setTimeout(tick, 250);
+    later(tick);
   }
 
   private fetchLyrics() {

@@ -562,8 +562,8 @@ html.dev body { background: #2b2f38; }
 .m-btn { width: 34px; height: 34px; }
 .m-btn:disabled { opacity: 0.35; pointer-events: none; }
 .m-lyr { margin-left: 6px; }
-.m-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); margin-top: 10px; overflow: hidden; }
-.m-bar i { display: block; height: 100%; background: var(--teal); border-radius: 2px; }
+.m-bar { margin-top: 10px; }
+.m-btn.m-jump { width: 30px; }
 .m-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .m-line { font-size: 14.5px; font-weight: 650; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .m-line.next { font-size: 12.5px; font-weight: 500; color: var(--dim); margin-top: 1px; }
@@ -589,14 +589,40 @@ html.dev body { background: #2b2f38; }
 .rc-row { position: absolute; left: 24px; right: 24px; bottom: 16px; display: flex; gap: 8px; justify-content: flex-end; }
 
 /* ── the song strip ───────────────────────────────────────────────────────── */
-.np-text { position: absolute; left: 76px; right: 160px; top: 13px; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
-.np-title { font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-artist { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-row { position: absolute; right: 14px; top: 16px; display: flex; gap: 2px; }
-.np-artist.singing { color: inherit; font-weight: 600; }
+.np-text { position: absolute; left: 54px; right: 146px; top: -3px; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
+.np-title { font-size: 12.5px; line-height: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: font-size 0.25s ease, color 0.25s ease; }
+.nowplaying.singing .np-title { font-size: 10.5px; font-weight: 600; color: var(--dim); }
+.np-sing { font-size: 12px; height: 20px; line-height: 20px; }
+.nowplaying.singing .np-sing { font-size: 13.5px; font-weight: 650; }
+.np-row { position: absolute; right: 10px; top: 4px; display: flex; gap: 0; }
 #island .np-lyr.on { color: var(--teal); }
-.np-btn { width: 32px; height: 32px; }
+.np-btn { width: 26px; height: 26px; }
 .np-btn:disabled { opacity: 0.35; pointer-events: none; }
+.seek.np-seek { position: absolute; left: 54px; right: 18px; bottom: -5px; }
+
+/* ── sung lyrics ──────────────────────────────────────────────────────────── */
+.kar { position: relative; overflow: hidden; white-space: nowrap; -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent); mask-image: linear-gradient(90deg, #000 92%, transparent); }
+.kar-row { position: absolute; left: 0; top: 0; line-height: inherit; transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1); animation: kar-in 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.kar-row.out { animation: kar-out 0.26s ease-in both; }
+.kar-row.rest { color: var(--dim); font-weight: 500; }
+.kar-row span { color: color-mix(in srgb, currentColor 42%, transparent); transition: color 0.2s ease; }
+.kar-row span.sung { color: inherit; }
+.kar-row span.now { color: transparent; background: linear-gradient(90deg, var(--fg-sung, #fff) var(--p, 0%), color-mix(in srgb, var(--fg-sung, #fff) 42%, transparent) var(--p, 0%)); -webkit-background-clip: text; background-clip: text; }
+:root[data-tone="light"] .kar-row span.now { --fg-sung: #10141c; }
+@keyframes kar-in { from { opacity: 0; transform: translateY(9px); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes kar-out { to { opacity: 0; transform: translateY(-9px); filter: blur(2px); } }
+@media (prefers-reduced-motion: reduce) { .kar-row, .kar-row.out { animation: none; } .kar-row.out { display: none; } }
+.m-sing { font-size: 14.5px; font-weight: 650; height: 21px; margin-top: 4px; }
+
+/* ── a song's progress you can jump along ────────────────────────────────── */
+.seek { position: relative; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); }
+.seek::before { content: ""; position: absolute; inset: -7px 0; }
+.seek i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--teal); border-radius: 2px; }
+.seek b { position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: #fff; opacity: 0; transform: scale(0.4); transition: opacity 0.15s, transform 0.15s; pointer-events: none; }
+.seek.can { cursor: pointer; }
+.seek.can:hover, .seek.drag { height: 5px; }
+.seek.can:hover b, .seek.drag b { opacity: 1; transform: none; }
+:root[data-tone="light"] .seek { background: rgba(10, 16, 32, 0.12); }
 
 /* ── notes & reminders ──────────────────────────────────────────────────── */
 .nt-text { position: absolute; left: 132px; right: 30px; top: 0; }

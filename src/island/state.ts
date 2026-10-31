@@ -47,6 +47,8 @@ export interface NowPlaying {
   duration_ms: number;
   can_next: boolean;
   can_prev: boolean;
+  /** The player lets us jump to a spot in the song. */
+  can_seek?: boolean;
   /** The album art as a data: URL, or "". */
   art: string;
 }
@@ -55,6 +57,8 @@ export interface NowPlaying {
 export interface LyricLine {
   ms: number;
   text: string;
+  /** Each word and when it is sung (estimated from the line's timing). */
+  words?: { ms: number; end: number; text: string }[];
 }
 
 /** A focus timer that is running: when it ends and how long it was (ms). */

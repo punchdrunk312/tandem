@@ -276,6 +276,11 @@ pub enum Msg {
     Fleet {
         on: bool,
     },
+    /// "Your picture of window `id` arrived": the next one may come. One picture is on
+    /// the way at a time, so pictures never queue up in front of the pointer.
+    MirrorAck {
+        id: u64,
+    },
 }
 
 /// How a computer is doing, as shown on its card in the bar.

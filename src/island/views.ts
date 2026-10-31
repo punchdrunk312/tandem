@@ -557,9 +557,13 @@ export function buildFocus(a: FocusActions): ViewHost {
 
 // ------------------------------------------------------------------ now playing
 
+export type MediaAction = "play_pause" | "next" | "prev";
+
 export interface MediaActions {
   blip(): void;
-  control(action: "play_pause" | "next" | "prev"): void;
+  control(action: MediaAction): void;
+  /** Jump to this spot in the song (ms). */
+  seek(ms: number): void;
   toggleLyrics(): void;
 }
 
@@ -580,7 +584,31 @@ export function parseLrc(text: string): LyricLine[] {
     const words = raw.replace(/\[[^\]]*\]/g, "").trim();
     for (const st of stamps) out.push({ ms: Math.round((Number(st[1]) * 60 + Number(st[2])) * 1000), text: words });
   }
-  return out.sort((x, y) => x.ms - y.ms);
+  return timeWords(out.sort((x, y) => x.ms - y.ms));
+}
+
+/** When each word of each line is sung. The libraries time lines, not words, so the words
+ *  share the line's time by length, at a singing pace (a line followed by a long pause is
+ *  sung in the first part of it, not stretched over the whole gap). */
+export function timeWords(lines: LyricLine[]): LyricLine[] {
+  return lines.map((l, i) => {
+    const words = l.text.split(/\s+/).filter(Boolean);
+    if (!words.length) return l;
+    const gap = (lines[i + 1]?.ms ?? l.ms + 6000) - l.ms;
+    const span = Math.max(300, Math.min(gap * 0.92, words.length * 420 + 350));
+    const weight = words.map((w) => w.length + 2);
+    const total = weight.reduce((a, b) => a + b, 0);
+    let at = l.ms;
+    return {
+      ...l,
+      words: words.map((text, k) => {
+        const d = (span * weight[k]) / total;
+        const w = { ms: Math.round(at), end: Math.round(at + d), text };
+        at += d;
+        return w;
+      }),
+    };
+  });
 }
 
 /** Lyrics without timing, spread evenly over the song (from 6% to 94% of it) so they
@@ -589,16 +617,124 @@ export function spreadLyrics(text: string, durationMs: number): LyricLine[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && l !== "♪");
   if (!lines.length || durationMs <= 0) return [];
   const from = durationMs * 0.06, span = durationMs * 0.88;
-  return lines.map((t, i) => ({ ms: Math.round(from + (span * i) / lines.length), text: t }));
+  return timeWords(lines.map((t, i) => ({ ms: Math.round(from + (span * i) / lines.length), text: t })));
 }
 
 /** The lyric line being sung now, and the one after it. */
-export function lyricAt(ms: number): { now: string; next: string } {
+export function lyricAt(ms: number): { now: string; next: string; line: LyricLine | null } {
   const l = State.lyrics;
-  if (!Array.isArray(l) || !l.length) return { now: "", next: "" };
+  if (!Array.isArray(l) || !l.length) return { now: "", next: "", line: null };
   let i = -1;
   for (let k = 0; k < l.length && l[k].ms <= ms; k++) i = k;
-  return { now: i >= 0 ? l[i].text : "", next: l[i + 1]?.text ?? "" };
+  return { now: i >= 0 ? l[i].text : "", next: l[i + 1]?.text ?? "", line: i >= 0 ? l[i] : null };
+}
+
+/** A lyric line sung word by word: sung words light up, the word being sung fills from
+ *  left to right, and a new line slides in from below. A line too long for the space keeps
+ *  the word being sung in view. `show(ms)` runs every frame, so it only touches styles. */
+export function karaoke(cls: string): { el: HTMLElement; show(ms: number, fallback: string): boolean } {
+  const el = h("div", { class: `kar ${cls}` });
+  let current: LyricLine | null | undefined;
+  let fallbackShown = "";
+  let row: HTMLElement | null = null;
+  let spans: HTMLElement[] = [];
+  let shift = 0;
+  const swap = (next: HTMLElement) => {
+    const old = row;
+    if (old) {
+      old.classList.add("out");
+      window.setTimeout(() => old.remove(), 260);
+    }
+    row = next;
+    el.append(next);
+    shift = 0;
+  };
+  return {
+    el,
+    show(ms, fallback) {
+      const { line } = lyricAt(ms);
+      // Between lines (an instrumental bit): the fallback (the artist), quietly.
+      const sung = line && line.words?.length && ms < (line.words.at(-1)!.end + 2500) ? line : null;
+      if (!sung) {
+        if (current !== null || fallbackShown !== fallback) {
+          current = null;
+          fallbackShown = fallback;
+          spans = [];
+          swap(h("div", { class: "kar-row rest", text: fallback }));
+        }
+        return false;
+      }
+      if (sung !== current) {
+        current = sung;
+        spans = sung.words!.map((w) => h("span", { text: w.text }));
+        const r = h("div", { class: "kar-row" });
+        spans.forEach((s, k) => r.append(...(k ? [" ", s] : [s])));
+        swap(r);
+        // A little too long: a touch smaller. Much too long: it follows the singing.
+        const over = r.scrollWidth / Math.max(1, el.clientWidth);
+        if (over > 1 && over < 1.22) r.style.fontSize = `${Math.max(0.82, 1 / over)}em`;
+      }
+      let now: HTMLElement | null = null;
+      sung.words!.forEach((w, k) => {
+        const s = spans[k];
+        const p = Math.min(1, Math.max(0, (ms - w.ms) / Math.max(1, w.end - w.ms)));
+        const state = p >= 1 ? "sung" : p > 0 ? "now" : "";
+        if (s.className !== state) s.className = state;
+        if (state === "now") {
+          s.style.setProperty("--p", `${(p * 100).toFixed(1)}%`);
+          now = s;
+        }
+      });
+      if (row && row.scrollWidth > el.clientWidth + 1) {
+        const at = now ?? [...spans].reverse().find((s) => s.className === "sung") ?? spans[0];
+        const want = Math.max(0, Math.min(row.scrollWidth - el.clientWidth, at.offsetLeft + at.offsetWidth / 2 - el.clientWidth * 0.45));
+        if (Math.abs(want - shift) > 2) {
+          shift = want;
+          row.style.transform = `translateX(${-shift}px)`;
+        }
+      }
+      return true;
+    },
+  };
+}
+
+/** A song's progress you can click or drag along to jump there. */
+function seekBar(cls: string, a: MediaActions): { el: HTMLElement; show(ms: number, total: number, can: boolean): void } {
+  const fill = h("i");
+  const knob = h("b");
+  const el = h("div", { class: `seek ${cls}`, role: "slider", "aria-label": "Song position" }, fill, knob);
+  let dragging = false;
+  const frac = (e: PointerEvent) => {
+    const r = el.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  };
+  const paint = (f: number) => {
+    fill.style.width = `${f * 100}%`;
+    knob.style.left = `${f * 100}%`;
+  };
+  el.addEventListener("pointerdown", (e) => {
+    if (!el.classList.contains("can")) return;
+    dragging = true;
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("drag");
+    paint(frac(e));
+  });
+  el.addEventListener("pointermove", (e) => { if (dragging) paint(frac(e)); });
+  el.addEventListener("pointerup", (e) => {
+    if (!dragging) return;
+    dragging = false;
+    el.classList.remove("drag");
+    const total = State.media?.duration_ms ?? 0;
+    if (total) { a.blip(); a.seek(frac(e) * total); }
+  });
+  return {
+    el,
+    show(ms, total, can) {
+      el.classList.toggle("can", can && total > 0);
+      el.title = can ? "Click or drag to jump" : "This player doesn't let CubeCursor jump around in the song";
+      if (!dragging) paint(total ? Math.min(1, ms / total) : 0);
+    },
+  };
 }
 
 /** "Spotify" from "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" or "Spotify.exe". */
@@ -610,6 +746,8 @@ function appName(id: string): string {
 }
 
 const MEDIA_ICON = {
+  back15: "M11 5L6 9l5 4M6 9h8a5 5 0 0 1 0 10h-3",
+  fwd15: "M13 5l5 4-5 4M18 9h-8a5 5 0 0 0 0 10h3",
   prev: "M6 5v14M19 5L9 12l10 7z",
   next: "M18 5v14M5 5l10 7-10 7z",
   play: "M7 4l13 8-13 8z",
@@ -621,21 +759,25 @@ export function buildMedia(a: MediaActions): ViewHost {
   const app = h("div", { class: "m-app" });
   const title = h("div", { class: "m-title" });
   const artist = h("div", { class: "m-artist" });
-  const fill = h("i");
-  const bar = h("div", { class: "m-bar" }, fill);
+  const bar = seekBar("m-bar", a);
   const tNow = h("span"), tEnd = h("span");
   const times = h("div", { class: "m-times" }, tNow, tEnd);
   const icon = (d: string, filled = true) => svg(d, 18, filled ? { fill: "currentColor", stroke: 0 } : { stroke: 2 });
-  const btn = (label: string, d: string, act: "play_pause" | "next" | "prev") =>
+  const btn = (label: string, d: string, act: MediaAction) =>
     h("button", { class: "icon-btn m-btn", title: label, "aria-label": label, onclick: () => { a.blip(); a.control(act); } }, icon(d));
-  const prev = btn("Previous", MEDIA_ICON.prev, "prev");
+  const jump = (label: string, d: string, by: number) =>
+    h("button", { class: "icon-btn m-btn m-jump", title: label, "aria-label": label, onclick: () => { a.blip(); a.seek(Math.max(0, mediaPosition() + by)); } }, icon(d, false));
+  const prev = btn("Previous (or the start of this song)", MEDIA_ICON.prev, "prev");
+  const back = jump("15 seconds back", MEDIA_ICON.back15, -15_000);
   const play = btn("Play / pause", MEDIA_ICON.play, "play_pause");
+  const fwd = jump("15 seconds on", MEDIA_ICON.fwd15, 15_000);
   const next = btn("Next", MEDIA_ICON.next, "next");
-  const lyr = h("button", { class: "btn m-lyr", text: "Lyrics", title: "Show lyrics (looks the song up on lrclib.net)", onclick: () => { a.blip(); a.toggleLyrics(); } });
+  const lyr = h("button", { class: "btn m-lyr", text: "Lyrics", title: "Show lyrics (looks the song up online)", onclick: () => { a.blip(); a.toggleLyrics(); } });
+  const sing = karaoke("m-sing");
   const line = h("div", { class: "m-line" });
   const lineNext = h("div", { class: "m-line next" });
   const empty = h("div", { class: "m-empty", text: "Nothing is playing. Start a song in Spotify, a browser or any player, and it shows up here." });
-  const body = h("div", { class: "m-text" }, app, title, artist, h("div", { class: "m-row" }, prev, play, next, lyr), bar, times, line, lineNext);
+  const body = h("div", { class: "m-text" }, app, title, artist, h("div", { class: "m-row" }, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext);
   const el = h("div", { class: "view media" }, body, empty);
   const mmss = (ms: number) => {
     const s = Math.floor(ms / 1000);
@@ -659,10 +801,14 @@ export function buildMedia(a: MediaActions): ViewHost {
         play.replaceChildren(icon(m.playing ? MEDIA_ICON.pause : MEDIA_ICON.play));
       }
       const pos = mediaPosition();
-      fill.style.width = m.duration_ms ? `${(100 * pos) / m.duration_ms}%` : "0%";
+      bar.show(pos, m.duration_ms, !!m.can_seek);
+      back.disabled = fwd.disabled = !m.can_seek;
       tNow.textContent = mmss(pos);
       tEnd.textContent = m.duration_ms ? mmss(m.duration_ms) : "";
       lyr.classList.toggle("on", State.settings.lyrics);
+      const timed = State.settings.lyrics && Array.isArray(State.lyrics);
+      sing.el.hidden = !timed;
+      line.hidden = timed;
       if (!State.settings.lyrics) {
         line.textContent = "";
         lineNext.textContent = "";
@@ -670,9 +816,8 @@ export function buildMedia(a: MediaActions): ViewHost {
         line.textContent = State.lyrics.split("\n").find((s) => s.trim()) ?? "";
         lineNext.textContent = "No timing for this song, so the lyrics don't follow along.";
       } else if (Array.isArray(State.lyrics)) {
-        const { now, next: n } = lyricAt(pos);
-        line.textContent = now || "♪";
-        lineNext.textContent = n;
+        sing.show(pos, "♪");
+        lineNext.textContent = lyricAt(pos).next;
       } else {
         const key = `${m.title}|${m.artist}`;
         line.textContent = State.lyricsFor === key ? "No lyrics found for this song."
@@ -721,31 +866,38 @@ export function buildRecipients(a: RecipientActions): ViewHost {
   };
 }
 
-/** The slim strip that pops up when a song starts: the song, play/pause and next. */
+/** The slim strip that stays while a song plays: the song (or the words being sung),
+ *  15 s back, play/pause, next, lyrics on/off, hide, and a thin bar to jump along it. */
 export function buildNowPlaying(a: MediaActions & { open(): void; close(): void }): ViewHost {
   const title = h("div", { class: "np-title" });
-  const artist = h("div", { class: "np-artist" });
-  const icon = (d: string) => svg(d, 16, { fill: "currentColor" });
-  const play = h("button", { class: "icon-btn np-btn", title: "Play / pause", "aria-label": "Play / pause", onclick: () => { a.blip(); a.control("play_pause"); } });
-  const next = h("button", { class: "icon-btn np-btn", title: "Next", "aria-label": "Next", onclick: () => { a.blip(); a.control("next"); } }, icon(MEDIA_ICON.next));
-  const lyr = h("button", { class: "icon-btn np-btn np-lyr", title: "Lyrics", "aria-label": "Lyrics", onclick: () => { a.blip(); a.toggleLyrics(); } }, svg("M4 6h16M4 11h16M4 16h10M18 15v5", 16, { stroke: 2 }));
-  const close = h("button", { class: "icon-btn np-btn", title: "Hide until the next song", "aria-label": "Hide", onclick: () => { a.blip(); a.close(); } }, svg("M6 6l12 12M18 6L6 18", 14, { stroke: 2 }));
-  const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, artist);
-  const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, lyr, play, next, close));
+  const sing = karaoke("np-sing");
+  const icon = (d: string) => svg(d, 14, { fill: "currentColor" });
+  const b = (label: string, child: Element, act: () => void, cls = "") =>
+    h("button", { class: `icon-btn np-btn ${cls}`, title: label, "aria-label": label, onclick: () => { a.blip(); act(); } }, child);
+  const back = b("15 seconds back", svg(MEDIA_ICON.back15, 15, { stroke: 2 }), () => a.seek(Math.max(0, mediaPosition() - 15_000)));
+  const play = b("Play / pause", icon(MEDIA_ICON.play), () => a.control("play_pause"));
+  const next = b("Next", icon(MEDIA_ICON.next), () => a.control("next"));
+  const lyr = b("Lyrics", svg("M4 6h16M4 11h16M4 16h10M18 15v5", 14, { stroke: 2 }), () => a.toggleLyrics(), "np-lyr");
+  const close = b("Hide until the next song", svg("M6 6l12 12M18 6L6 18", 12, { stroke: 2 }), () => a.close());
+  const bar = seekBar("np-seek", a);
+  const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, sing.el);
+  const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, back, play, next, lyr, close), bar.el);
   let shown: boolean | null = null;
   return {
     el,
     sync() {
       const m = State.media;
       if (!m) return;
-      title.textContent = m.title;
+      const pos = mediaPosition();
       lyr.classList.toggle("on", State.settings.lyrics);
-      // With lyrics on, the second line sings along; otherwise it names the artist.
-      const lines = State.settings.lyrics && Array.isArray(State.lyrics) ? State.lyrics : null;
-      const now = lines ? lyricAt(mediaPosition()).now : "";
-      artist.textContent = now || m.artist;
-      artist.classList.toggle("singing", !!now);
+      // With lyrics on, the second line sings along word by word; otherwise it names the artist.
+      const timed = State.settings.lyrics && Array.isArray(State.lyrics);
+      const singing = timed ? sing.show(pos, m.artist) : sing.show(-1, m.artist);
+      title.textContent = singing ? `${m.title} · ${m.artist}` : m.title;
+      el.classList.toggle("singing", singing);
       next.disabled = !m.can_next;
+      back.disabled = !m.can_seek;
+      bar.show(pos, m.duration_ms, !!m.can_seek);
       if (shown !== m.playing) {
         shown = m.playing;
         play.replaceChildren(icon(m.playing ? MEDIA_ICON.pause : MEDIA_ICON.play));

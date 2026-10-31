@@ -793,6 +793,7 @@ impl Node {
             span_driving: false,
             span_in: None,
             mirrors_out: HashMap::new(),
+            frames_out: HashMap::new(),
             mirrors_in: HashMap::new(),
             mirror_k: HashMap::new(),
             span_view: None,
@@ -1118,9 +1119,17 @@ async fn writer_task<W: tokio::io::AsyncWrite + Unpin>(
                     *dx = dx.saturating_add(*a);
                     *dy = dy.saturating_add(*b);
                 }
+                (
+                    Some(Msg::PortalCursor { id, rx, ry, shape }),
+                    Msg::PortalCursor { id: i, rx: x, ry: y, shape: s },
+                ) if id == i => {
+                    (*rx, *ry, *shape) = (*x, *y, *s);
+                }
                 _ => out.push(m),
             }
         }
+        // Window pictures are big: everything else (the pointer, keys) goes out first.
+        out.sort_by_key(|m| matches!(m, Msg::MirrorFrame { .. }));
         if w.send_many(&out).await.is_err() {
             return;
         }
@@ -1270,6 +1279,9 @@ struct Actor {
     span_in: Option<(String, u32, u32)>,
     /// Second-monitor mode: our windows shown on another computer (id → that computer).
     mirrors_out: HashMap<u64, String>,
+    /// Pictures of our windows on their way: when the last one left (not yet acknowledged),
+    /// and the newest one taken since, sent as soon as that one arrives.
+    frames_out: HashMap<u64, (Instant, Option<Msg>)>,
     /// Other computers' windows shown here (id → that computer).
     mirrors_in: HashMap<u64, String>,
     /// How much bigger each of those is shown here than it really is (screens of other
@@ -2333,8 +2345,17 @@ impl Actor {
                 }
             }
             CaptureEvent::MirrorFrame { id, w, h, jpeg } => {
-                if let Some(to) = self.mirrors_out.get(&id) {
-                    self.send_to(&to.clone(), Msg::MirrorFrame { id, w, h, jpeg });
+                if let Some(to) = self.mirrors_out.get(&id).cloned() {
+                    let m = Msg::MirrorFrame { id, w, h, jpeg };
+                    match self.frames_out.get_mut(&id) {
+                        // The last one hasn't arrived yet: this one waits (replacing any
+                        // older one waiting). A lost answer only holds it up a moment.
+                        Some((at, wait)) if at.elapsed() < Duration::from_millis(400) => *wait = Some(m),
+                        _ => {
+                            self.frames_out.insert(id, (Instant::now(), None));
+                            self.send_to(&to, m);
+                        }
+                    }
                 }
             }
             CaptureEvent::MirrorMoved { id, dx, dy, done } => {
@@ -3325,6 +3346,22 @@ impl Actor {
                         crate::span::sc(h as i32, k).max(1) as u32,
                     );
                     plat.mirror_frame(id, sw, sh, jpeg);
+                    self.send_to(from, Msg::MirrorAck { id });
+                }
+            }
+            Msg::MirrorAck { id } => {
+                if self.mirrors_out.get(&id).map(String::as_str) != Some(from) {
+                    self.frames_out.remove(&id);
+                    return;
+                }
+                match self.frames_out.get_mut(&id).and_then(|(_, w)| w.take()) {
+                    Some(m) => {
+                        self.frames_out.insert(id, (Instant::now(), None));
+                        self.send_to(from, m);
+                    }
+                    None => {
+                        self.frames_out.remove(&id);
+                    }
                 }
             }
             Msg::MirrorEnd { id } => {
