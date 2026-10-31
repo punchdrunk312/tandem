@@ -570,3 +570,7 @@ html.dev body { background: #2b2f38; }
 .view.drop.menu .d-targets { display: none; }
 .d-act { padding: 6px 12px; font-size: .82rem; }
 .d-act.ghost { opacity: .7; }
+
+/* Cancel an outgoing send (× on the transfer row) */
+.x-cancel { flex: none; align-self: center; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(127,127,127,0.14); color: var(--dim); cursor: pointer; font-size: 11px; line-height: 1; padding: 0; transition: background-color 150ms ease, color 150ms ease; }
+.x-cancel:hover { background: var(--red, #f4505e); color: #fff; }

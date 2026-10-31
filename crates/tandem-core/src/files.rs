@@ -203,6 +203,7 @@ pub async fn serve<R, W>(
     w: &mut SecureWriter<W>,
     lookup: impl Fn(u64) -> Option<std::sync::Arc<Offer>>,
     progress: &(dyn Fn(u64, u64) + Send + Sync),
+    cancelled: &(dyn Fn(u64) -> bool + Send + Sync),
 ) -> (Option<u64>, Result<()>)
 where
     R: AsyncRead + Unpin,
@@ -213,7 +214,7 @@ where
         Ok(_) => return (None, Err(Error::Proto("expected Request".into()))),
         Err(e) => return (None, Err(e)),
     };
-    (Some(id), serve_offer(w, id, lookup, progress).await)
+    (Some(id), serve_offer(w, id, lookup, progress, cancelled).await)
 }
 
 async fn serve_offer<W: AsyncWrite + Unpin>(
@@ -221,6 +222,7 @@ async fn serve_offer<W: AsyncWrite + Unpin>(
     id: u64,
     lookup: impl Fn(u64) -> Option<std::sync::Arc<Offer>>,
     progress: &(dyn Fn(u64, u64) + Send + Sync),
+    cancelled: &(dyn Fn(u64) -> bool + Send + Sync),
 ) -> Result<()> {
     let Some(offer) = lookup(id) else {
         w.send(&FileMsg::Error("offer expired".into())).await?;
@@ -244,6 +246,11 @@ async fn serve_offer<W: AsyncWrite + Unpin>(
         let mut left = item.size;
         let mut buf = vec![0u8; CHUNK];
         while left > 0 {
+            // The person cancelled this send: tell the other side and stop.
+            if cancelled(id) {
+                let _ = w.send(&FileMsg::Error("cancelled".into())).await;
+                return Err(Error::Rejected("cancelled".into()));
+            }
             let want = left.min(CHUNK as u64) as usize;
             let n = f.read(&mut buf[..want]).await?;
             if n == 0 {

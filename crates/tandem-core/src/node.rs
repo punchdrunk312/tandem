@@ -282,6 +282,8 @@ struct Shared {
     discovered: Mutex<HashMap<String, (Discovered, Instant)>>,
     offers: Mutex<VecDeque<(u64, Arc<Offer>)>>,
     transfers: Mutex<Vec<TransferView>>,
+    /// Ids of sends the person asked to cancel; the serve loop checks this each chunk.
+    cancels: Mutex<HashSet<u64>>,
     status: Mutex<Status>,
     devices: Mutex<Devices>,
     next_sid: AtomicU64,
@@ -549,6 +551,9 @@ enum Cmd {
         paths: Vec<PathBuf>,
         target: Option<String>,
     },
+    CancelTransfer {
+        id: u64,
+    },
     SetClipboardSync(bool),
     SetGameMode(bool),
     SetSwitchDelay(u32),
@@ -634,6 +639,7 @@ impl Node {
             discovered: Mutex::new(HashMap::new()),
             offers: Mutex::new(VecDeque::new()),
             transfers: Mutex::new(vec![]),
+            cancels: Mutex::new(HashSet::new()),
             status: Mutex::new(Status {
                 control: "local",
                 licensed: no_licence_needed,
@@ -806,6 +812,10 @@ impl Node {
             target: Some(peer_id),
         })
     }
+    /// Cancel a send in progress (the × on an outgoing transfer).
+    pub fn cancel_transfer(&self, id: u64) {
+        self.cmd(Cmd::CancelTransfer { id })
+    }
     pub fn set_clipboard_sync(&self, on: bool) {
         self.cmd(Cmd::SetClipboardSync(on))
     }
@@ -967,8 +977,11 @@ async fn handle_incoming(
             };
             let sh3 = sh.clone();
             let prog = move |id: u64, n: u64| sh3.transfer_progress(id, "out", n);
-            let (id, res) = files::serve(&mut r, &mut w, lookup, &prog).await;
+            let sh4 = sh.clone();
+            let cancelled = move |id: u64| sh4.cancels.lock().unwrap().contains(&id);
+            let (id, res) = files::serve(&mut r, &mut w, lookup, &prog, &cancelled).await;
             if let Some(id) = id {
+                sh.cancels.lock().unwrap().remove(&id);
                 sh.transfer_finish(id, "out", res.map(|_| None).map_err(|e| e.to_string()));
             }
         }
@@ -3547,6 +3560,12 @@ impl Actor {
                 for t in targets {
                     self.build_offer(paths.clone(), OfferKind::Send, t);
                 }
+            }
+            Cmd::CancelTransfer { id } => {
+                // Flag it so the serve loop stops at its next chunk, and show it as cancelled now.
+                self.sh.cancels.lock().unwrap().insert(id);
+                self.sh
+                    .transfer_finish(id, "out", Err("Cancelled".to_string()));
             }
         }
     }

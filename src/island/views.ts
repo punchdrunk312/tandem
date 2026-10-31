@@ -184,7 +184,11 @@ export function buildHome(a: ViewActions): ViewHost {
             h("div", { class: "x-body" },
               h("div", { class: "x-top" }, h("span", { class: "x-name", text: many ? `${r.name} · ${r.peer}` : r.name }), h("span", { class: "x-state", text: "" })),
               h("div", { class: "x-bar" }, h("i")),
-              r.message ? h("div", { class: "x-msg", text: r.message }) : ""))),
+              r.message ? h("div", { class: "x-msg", text: r.message }) : ""),
+            // Cancel an outgoing send that's still going.
+            r.direction === "out" && r.state === "active"
+              ? h("button", { class: "x-cancel", title: "Cancel this send", "aria-label": "Cancel send", onclick: () => fire("cancel_transfer", { id: r.id }) }, "✕")
+              : "")),
       );
       for (const r of rows) {
         const row = xfers.querySelector<HTMLElement>(`[data-id="${r.direction}${r.id}"]`);

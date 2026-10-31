@@ -266,6 +266,11 @@ fn send_files(st: State<'_, AppState>, paths: Vec<String>, peer_id: Option<Strin
 }
 
 #[tauri::command]
+fn cancel_transfer(st: State<'_, AppState>, id: u64) {
+    st.node.cancel_transfer(id);
+}
+
+#[tauri::command]
 async fn pick_and_send(app: AppHandle, peer_id: Option<String>) -> R {
     let a2 = app.clone();
     let picked =
@@ -1374,6 +1379,7 @@ pub fn run() {
             set_side,
             forget,
             send_files,
+            cancel_transfer,
             pick_and_send,
             set_clipboard_sync,
             set_name,
