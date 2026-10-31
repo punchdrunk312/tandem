@@ -528,6 +528,13 @@ pub enum FileMsg {
     End,
     Done,
     Error(String),
+    /// Instead of `Request`: carry on an interrupted transfer from item `index`, `offset`
+    /// bytes in (everything before is already on the receiver's disk).
+    Resume {
+        id: u64,
+        index: u32,
+        offset: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

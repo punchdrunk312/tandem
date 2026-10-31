@@ -6,7 +6,7 @@ use crate::proto::{FileItem, FileMsg};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs::File;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 pub const CHUNK: usize = 64 * 1024;
 
@@ -209,17 +209,57 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let id = match r.recv::<FileMsg>().await {
-        Ok(FileMsg::Request { id }) => id,
+    let (id, from) = match r.recv::<FileMsg>().await {
+        Ok(FileMsg::Request { id }) => (id, ResumePoint::default()),
+        Ok(FileMsg::Resume { id, index, offset }) => (id, ResumePoint { index, offset }),
         Ok(_) => return (None, Err(Error::Proto("expected Request".into()))),
         Err(e) => return (None, Err(e)),
     };
-    (Some(id), serve_offer(w, id, lookup, progress, cancelled).await)
+    (Some(id), serve_offer(w, id, from, lookup, progress, cancelled).await)
+}
+
+/// How far a receive got: the item being written and how many of its bytes are on disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResumePoint {
+    pub index: u32,
+    pub offset: u64,
+}
+
+/// Bytes of `items` before `at` (whole files before its item, plus its offset).
+fn bytes_before(items: &[FileItem], at: ResumePoint) -> u64 {
+    items
+        .iter()
+        .take(at.index as usize)
+        .filter(|i| !i.is_dir)
+        .map(|i| i.size)
+        .sum::<u64>()
+        + at.offset
+}
+
+/// Is this the kind of failure a dropped connection causes (so the transfer can carry on
+/// later), rather than a refusal, a bad message or a local disk problem?
+pub fn is_interruption(e: &Error) -> bool {
+    use std::io::ErrorKind as K;
+    match e {
+        Error::Closed => true,
+        Error::Io(io) => matches!(
+            io.kind(),
+            K::ConnectionReset
+                | K::ConnectionAborted
+                | K::ConnectionRefused
+                | K::NotConnected
+                | K::BrokenPipe
+                | K::UnexpectedEof
+                | K::TimedOut
+        ),
+        _ => false,
+    }
 }
 
 async fn serve_offer<W: AsyncWrite + Unpin>(
     w: &mut SecureWriter<W>,
     id: u64,
+    from: ResumePoint,
     lookup: impl Fn(u64) -> Option<std::sync::Arc<Offer>>,
     progress: &(dyn Fn(u64, u64) + Send + Sync),
     cancelled: &(dyn Fn(u64) -> bool + Send + Sync),
@@ -228,11 +268,26 @@ async fn serve_offer<W: AsyncWrite + Unpin>(
         w.send(&FileMsg::Error("offer expired".into())).await?;
         return Err(Error::Proto("unknown offer".into()));
     };
-    let mut sent = 0u64;
+    if from.index as usize > offer.items.len() {
+        w.send(&FileMsg::Error("cannot resume: bad position".into())).await?;
+        return Err(Error::Proto("resume past the end".into()));
+    }
+    let mut sent = bytes_before(&offer.items, from);
+    progress(id, sent);
     for (i, (item, path)) in offer.items.iter().zip(&offer.paths).enumerate() {
+        if i < from.index as usize {
+            continue;
+        }
         w.send(&FileMsg::Header { index: i as u32 }).await?;
         if item.is_dir {
             continue;
+        }
+        let skip = if i == from.index as usize { from.offset } else { 0 };
+        if skip > item.size {
+            let _ = w
+                .send(&FileMsg::Error(format!("{} changed while sending", item.path)))
+                .await;
+            return Err(Error::Proto("resume offset past the end of the file".into()));
         }
         let mut f = match File::open(path).await {
             Ok(f) => f,
@@ -243,7 +298,10 @@ async fn serve_offer<W: AsyncWrite + Unpin>(
                 return Err(e.into());
             }
         };
-        let mut left = item.size;
+        if skip > 0 {
+            f.seek(std::io::SeekFrom::Start(skip)).await?;
+        }
+        let mut left = item.size - skip;
         let mut buf = vec![0u8; CHUNK];
         while left > 0 {
             // The person cancelled this send: tell the other side and stop.
@@ -291,7 +349,20 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    // Validate everything and pick collision-free top-level names *before* writing.
+    let plan = plan_receive(items, dest).await?;
+    receive_planned(r, w, id, items, dest, &plan, None, progress, &|_| {}).await
+}
+
+/// Where each item of a receive goes inside its folder. Chosen once, before anything is
+/// written, so a resumed receive keeps writing to the same files.
+#[derive(Clone, Debug)]
+pub struct ReceivePlan {
+    rels: Vec<PathBuf>,
+    tops: Vec<PathBuf>,
+}
+
+/// Validates the offer and picks collision-free top-level names inside `dest`.
+pub async fn plan_receive(items: &[FileItem], dest: &Path) -> Result<ReceivePlan> {
     let mut renames: HashMap<String, String> = HashMap::new();
     let mut tops: Vec<String> = Vec::new();
     let mut rels: Vec<PathBuf> = Vec::with_capacity(items.len());
@@ -314,10 +385,59 @@ where
         target.extend(comps);
         rels.push(target);
     }
+    Ok(ReceivePlan {
+        rels,
+        tops: tops.iter().map(|t| PathBuf::from(&renames[t])).collect(),
+    })
+}
 
-    w.send(&FileMsg::Request { id }).await?;
-    let mut got_total = 0u64;
-    for (i, it) in items.iter().enumerate() {
+/// Receives into the places `plan` chose. With `from`, carries on an interrupted receive
+/// (asking the sender to start there); `mark` hears how far it has got after every chunk.
+#[allow(clippy::too_many_arguments)]
+pub async fn receive_planned<R, W>(
+    r: &mut SecureReader<R>,
+    w: &mut SecureWriter<W>,
+    id: u64,
+    items: &[FileItem],
+    dest: &Path,
+    plan: &ReceivePlan,
+    from: Option<ResumePoint>,
+    progress: &(dyn Fn(u64) + Send + Sync),
+    mark: &(dyn Fn(ResumePoint) + Send + Sync),
+) -> Result<Vec<PathBuf>>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let rels = &plan.rels;
+    let mut start = from.unwrap_or_default();
+    if start.index as usize > items.len() {
+        start = ResumePoint::default();
+    }
+    // Trust the disk, not memory: carry on from what is really there.
+    if start.offset > 0 {
+        let have = match items.get(start.index as usize) {
+            Some(it) if !it.is_dir => tokio::fs::metadata(dest.join(&rels[start.index as usize]))
+                .await
+                .map(|m| m.len().min(it.size))
+                .unwrap_or(0),
+            _ => 0,
+        };
+        start.offset = start.offset.min(have);
+    }
+    if from.is_some() {
+        w.send(&FileMsg::Resume {
+            id,
+            index: start.index,
+            offset: start.offset,
+        })
+        .await?;
+    } else {
+        w.send(&FileMsg::Request { id }).await?;
+    }
+    let mut got_total = bytes_before(items, start);
+    progress(got_total);
+    for (i, it) in items.iter().enumerate().skip(start.index as usize) {
         match r.recv::<FileMsg>().await? {
             FileMsg::Header { index } if index as usize == i => {}
             FileMsg::Error(e) => return Err(Error::Rejected(e)),
@@ -331,8 +451,16 @@ where
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let mut f = File::create(&target).await?;
-        let mut got = 0u64;
+        let carry_on = i == start.index as usize && start.offset > 0;
+        let mut f = if carry_on {
+            let mut f = tokio::fs::OpenOptions::new().write(true).open(&target).await?;
+            f.set_len(start.offset).await?;
+            f.seek(std::io::SeekFrom::End(0)).await?;
+            f
+        } else {
+            File::create(&target).await?
+        };
+        let mut got = if carry_on { start.offset } else { 0 };
         loop {
             match r.recv::<FileMsg>().await? {
                 FileMsg::Data(b) => {
@@ -343,6 +471,10 @@ where
                     f.write_all(&b).await?;
                     got_total += b.len() as u64;
                     progress(got_total);
+                    mark(ResumePoint {
+                        index: i as u32,
+                        offset: got,
+                    });
                 }
                 FileMsg::End => break,
                 FileMsg::Error(e) => return Err(Error::Rejected(e)),
@@ -353,13 +485,17 @@ where
             return Err(Error::Proto("size mismatch".into()));
         }
         f.flush().await?;
+        mark(ResumePoint {
+            index: i as u32 + 1,
+            offset: 0,
+        });
     }
     match r.recv::<FileMsg>().await? {
         FileMsg::Done => {}
         FileMsg::Error(e) => return Err(Error::Rejected(e)),
         _ => return Err(Error::Proto("expected Done".into())),
     }
-    Ok(tops.iter().map(|t| dest.join(&renames[t])).collect())
+    Ok(plan.tops.iter().map(|t| dest.join(t)).collect())
 }
 
 #[cfg(test)]
