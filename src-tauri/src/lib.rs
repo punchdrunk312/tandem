@@ -250,11 +250,21 @@ fn forget(st: State<'_, AppState>, id: String) {
 }
 
 /// Sends to `peer_id`; without it: to the computer being controlled, or to all of them.
+/// `peer_id`: one computer, several separated by commas (the fleet), or none (the default).
 fn send_to(node: &Node, paths: Vec<PathBuf>, peer_id: Option<String>) {
     match peer_id {
+        Some(ids) if ids.contains(',') => {
+            node.send_files_many(paths, ids.split(',').filter(|s| !s.is_empty()).map(String::from).collect())
+        }
         Some(id) => node.send_files_to(paths, id),
         None => node.send_files(paths),
     }
+}
+
+/// Put a paired computer in the fleet (files only), or back on the desk.
+#[tauri::command]
+fn set_fleet(st: State<'_, AppState>, peer_id: String, on: bool) {
+    st.node.set_fleet(peer_id, on);
 }
 
 #[tauri::command]
@@ -1422,6 +1432,7 @@ pub fn run() {
             open_main_window,
             quit_app,
             island::island_typing,
+            set_fleet,
             media::media_control,
             media::media_lyrics,
         ])

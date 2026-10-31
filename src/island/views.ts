@@ -84,7 +84,7 @@ export function buildHeader(a: ViewActions): ViewHost {
       timer.classList.toggle("on", State.view === "focus" || !!State.focus);
       music.classList.toggle("on", State.view === "media" || !!State.media?.playing);
       notes.classList.toggle("on", State.view === "notes" || !!State.dueNote);
-      title.textContent = State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.greeting ?? "CubeCursor";
+      title.textContent = State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
       sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
     },
   };
@@ -679,6 +679,44 @@ export function buildMedia(a: MediaActions): ViewHost {
           : State.lyricsFor === `${key}|offline` ? "Couldn't reach the lyrics library. Try again later." : "Looking up the lyrics…";
         lineNext.textContent = "";
       }
+    },
+  };
+}
+
+export interface RecipientActions {
+  blip(): void;
+  toggle(id: string): void;
+  /** Tick every computer (or, if all are ticked, none). */
+  all(): void;
+  send(): void;
+  cancel(): void;
+}
+
+/** After a drop with several computers connected: tick who gets it, then send to all of
+ *  them at once. Desk computers first, then the fleet. */
+export function buildRecipients(a: RecipientActions): ViewHost {
+  const grid = h("div", { class: "rc-grid" });
+  const all = h("button", { class: "btn", onclick: () => { a.blip(); a.all(); } });
+  const send = h("button", { class: "btn primary", onclick: () => { a.blip(); a.send(); } });
+  const cancel = h("button", { class: "btn", text: "Cancel", onclick: () => { a.blip(); a.cancel(); } });
+  const el = h("div", { class: "view recipients" }, grid, h("div", { class: "rc-row" }, all, cancel, send));
+  return {
+    el,
+    sync() {
+      const peers = [...State.connectedPeers].sort((x, y) => Number(!!x.fleet) - Number(!!y.fleet) || x.name.localeCompare(y.name));
+      const key = JSON.stringify([peers.map((p) => [p.id, p.name, p.fleet]), [...State.picked]]);
+      if (grid.dataset.key !== key) {
+        grid.dataset.key = key;
+        grid.replaceChildren(...peers.map((p) => h("button", {
+          class: `rc-chip${State.picked.has(p.id) ? " on" : ""}`,
+          title: p.fleet ? `${p.name} (fleet: files only)` : p.name,
+          onclick: () => { a.blip(); a.toggle(p.id); },
+        }, h("i", { class: "rc-dot", style: `background:${p.color ?? "var(--teal)"}` }), h("span", { text: p.name }), ...(p.fleet ? [h("small", { text: "fleet" })] : []))));
+      }
+      const n = [...State.picked].filter((id) => peers.some((p) => p.id === id)).length;
+      all.textContent = n === peers.length ? "None" : "All";
+      send.textContent = n === 0 ? "Pick computers" : `Send to ${n}`;
+      (send as HTMLButtonElement).disabled = n === 0;
     },
   };
 }

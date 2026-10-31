@@ -484,3 +484,6 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 .wbtn { padding: 8px 14px; border-radius: 999px; border: 1px solid var(--surface-3, rgba(128,128,128,.3)); background: var(--surface-2, transparent); color: inherit; font: inherit; font-size: .9rem; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease; }
 .wbtn:hover { border-color: var(--accent, #2dd4bf); }
 .wbtn.on { background: var(--accent, #2dd4bf); border-color: var(--accent, #2dd4bf); color: #042; font-weight: 600; }
+
+/* A computer's "files only" switch (the fleet). */
+.pc-fleet { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--ink-2); cursor: pointer; }

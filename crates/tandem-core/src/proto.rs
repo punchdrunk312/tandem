@@ -271,6 +271,11 @@ pub enum Msg {
     MirrorClosed {
         id: u64,
     },
+    /// "We are in each other's fleet": files only between us (no edge, input or
+    /// clipboard), or (false) a normal computer on the desk again.
+    Fleet {
+        on: bool,
+    },
 }
 
 /// How a computer is doing, as shown on its card in the bar.

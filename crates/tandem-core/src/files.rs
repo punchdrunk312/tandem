@@ -17,6 +17,7 @@ const SLOW_BYTES_PER_SEC: u64 = 6 * 1024 * 1024;
 pub const MAX_ITEMS: usize = 20_000;
 
 /// What the sender keeps for an outstanding offer.
+#[derive(Clone)]
 pub struct Offer {
     pub items: Vec<FileItem>,
     pub paths: Vec<PathBuf>,

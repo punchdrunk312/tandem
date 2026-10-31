@@ -1787,3 +1787,53 @@ async fn bring_windows_back_from_the_owner() {
     until("gone on A", || a.plat.st.lock().unwrap().mirrors_closed == vec![7]).await;
     until("B says so", || notice_has(&b, "Brought the window back")).await;
 }
+
+#[tokio::test]
+async fn the_fleet_gets_files_but_no_edge_or_clipboard() {
+    let a = start("HUB").await;
+    let b = start("PC-B").await;
+    let c = start("PC-C").await;
+    pair(&a, &b).await;
+    let code = a.node.snapshot().pairing_code;
+    c.node.connect(lo(), a.node.tcp_port(), code);
+    until("hub sees both", || connected_names(&a).len() == 2).await;
+    let (b_id, c_id) = (b.node.snapshot().device_id, c.node.snapshot().device_id);
+    let clip = |s: &Side| s.plat.st.lock().unwrap().clipboard.clone();
+
+    // Both go in the hub's fleet; each hears about it and agrees.
+    a.node.set_fleet(b_id.clone(), true);
+    a.node.set_fleet(c_id.clone(), true);
+    let in_fleet = |s: &Side, id: &str| s.node.snapshot().paired.iter().any(|p| p.id == id && p.fleet);
+    let a_id = a.node.snapshot().device_id;
+    until("fleet on both ends", || {
+        in_fleet(&a, &b_id) && in_fleet(&a, &c_id) && in_fleet(&b, &a_id) && in_fleet(&c, &a_id)
+    })
+    .await;
+    // No screen edge leads to a fleet computer any more.
+    until("no edges on the hub", || edges_of(&a).is_empty()).await;
+
+    // The clipboard stays on the desk.
+    a.plat.user_copy(ClipContent::Text("desk only".into()));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_ne!(clip(&b), Some(ClipContent::Text("desk only".into())));
+
+    // One send to both, picked by name.
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("report.pdf");
+    std::fs::write(&f, vec![9u8; 200_000]).unwrap();
+    a.node.send_files_many(vec![f], vec![b_id.clone(), c_id.clone()]);
+    until("both got it", || {
+        b.dl.path().join("report.pdf").exists() && c.dl.path().join("report.pdf").exists()
+    })
+    .await;
+    until("sends finished", || {
+        let t = a.node.snapshot().transfers;
+        t.len() == 2 && t.iter().all(|t| t.state == "done")
+    })
+    .await;
+    assert_eq!(std::fs::read(b.dl.path().join("report.pdf")).unwrap().len(), 200_000);
+
+    // Back on the desk: an edge again.
+    a.node.set_fleet(b_id.clone(), false);
+    until("B has an edge again", || edges_of(&a).len() == 1).await;
+}

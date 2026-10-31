@@ -133,6 +133,8 @@ class IslandState {
   /** Brief reaction to a finished / failed transfer. */
   flash: BotStateName | null = null;
   notice = "";
+  /** The computers ticked in the recipient picker (after a drop with several connected). */
+  picked = new Set<string>();
   /** The song playing, and when it arrived (performance.now), to move the position on. */
   media: NowPlaying | null = null;
   mediaAt = 0;

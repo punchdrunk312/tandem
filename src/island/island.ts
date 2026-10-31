@@ -16,7 +16,7 @@ import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNowPlaying, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNowPlaying, buildRecipients, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -233,6 +233,31 @@ export class Island {
         if (State.lyricsFor.endsWith("|offline")) State.lyricsFor = "";
         this.fetchLyrics();
         State.notify();
+      },
+    }));
+    this.views.set("recipients", buildRecipients({
+      blip: () => Sound.play("blip"),
+      toggle: (id) => {
+        if (State.picked.has(id)) State.picked.delete(id);
+        else State.picked.add(id);
+        State.notify();
+      },
+      all: () => {
+        const ids = State.connectedPeers.map((p) => p.id);
+        State.picked = ids.every((id) => State.picked.has(id)) ? new Set() : new Set(ids);
+        State.notify();
+      },
+      send: () => {
+        const ids = [...State.picked].filter((id) => State.connectedPeers.some((p) => p.id === id));
+        const d = this.pendingDrop;
+        if (!d || !ids.length) return;
+        this.pendingDrop = null;
+        this.setView("drop");
+        this.swallow(d, ids.length === 1 ? ids[0] : ids.join(","));
+      },
+      cancel: () => {
+        this.pendingDrop = null;
+        this.closeBar();
       },
     }));
     this.views.set("nowplaying", buildNowPlaying({
@@ -1157,10 +1182,13 @@ export class Island {
           return;
         }
         if (State.connectedPeers.length > 1 && !e.target) {
-          // Several computers and none picked: don't guess.
+          // Several computers and none picked: ask who gets it (the desk ones ticked).
           this.engine.animateMorph(0);
-          Sound.play("error");
-          this.showNote("Drop it on a computer's name.", 2600, "home");
+          this.pendingDrop = dropped;
+          const desk = State.connectedPeers.filter((p) => !p.fleet).map((p) => p.id);
+          State.picked = new Set(desk);
+          State.isPinned = true;
+          this.setView("recipients");
           return;
         }
         // Shift held: don't send yet — open the "prepare before sending" menu.

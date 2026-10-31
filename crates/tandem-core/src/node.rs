@@ -59,6 +59,9 @@ pub struct PairedPeer {
     /// Its network card's address, to wake it up while it sleeps.
     #[serde(default)]
     pub mac: Option<String>,
+    /// In the fleet: files only (no screen edge, no mouse, keyboard or clipboard).
+    #[serde(default)]
+    pub fleet: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -138,6 +141,8 @@ pub struct PairedView {
     pub color: String,
     /// It can be woken over the network (its address is known).
     pub wakeable: bool,
+    /// In the fleet: files only.
+    pub fleet: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -286,6 +291,8 @@ struct Shared {
     cancels: Mutex<HashSet<u64>>,
     /// Incoming sends that can carry on after a dropped connection (by offer id).
     partials: Mutex<HashMap<u64, Partial>>,
+    /// Uploads running at once (a send to many computers queues behind these).
+    serve_slots: Semaphore,
     status: Mutex<Status>,
     devices: Mutex<Devices>,
     next_sid: AtomicU64,
@@ -417,6 +424,7 @@ impl Shared {
                         ping_ms,
                         color: css(device_rgb(&p.id)),
                         wakeable: p.mac.is_some(),
+                        fleet: p.fleet,
                     }
                 })
                 .collect(),
@@ -577,6 +585,14 @@ enum Cmd {
         paths: Vec<PathBuf>,
         target: Option<String>,
     },
+    SendFilesMany {
+        paths: Vec<PathBuf>,
+        targets: Vec<String>,
+    },
+    SetFleet {
+        peer_id: String,
+        on: bool,
+    },
     CancelTransfer {
         id: u64,
     },
@@ -667,6 +683,7 @@ impl Node {
             transfers: Mutex::new(vec![]),
             cancels: Mutex::new(HashSet::new()),
             partials: Mutex::new(HashMap::new()),
+            serve_slots: Semaphore::new(8),
             status: Mutex::new(Status {
                 control: "local",
                 licensed: no_licence_needed,
@@ -839,6 +856,17 @@ impl Node {
             target: Some(peer_id),
         })
     }
+    /// Send files to several connected computers at once (the fleet).
+    pub fn send_files_many(&self, paths: Vec<PathBuf>, peer_ids: Vec<String>) {
+        self.cmd(Cmd::SendFilesMany {
+            paths,
+            targets: peer_ids,
+        })
+    }
+    /// Put a paired computer in the fleet (files only), or back on the desk.
+    pub fn set_fleet(&self, peer_id: String, on: bool) {
+        self.cmd(Cmd::SetFleet { peer_id, on })
+    }
     /// Cancel a send in progress (the × on an outgoing transfer).
     pub fn cancel_transfer(&self, id: u64) {
         self.cmd(Cmd::CancelTransfer { id })
@@ -925,6 +953,11 @@ enum Ev {
         target: String,
         res: std::io::Result<Offer>,
     },
+    /// One manifest for a send to several computers: (offer id, computer) each.
+    OfferBuiltMany {
+        pairs: Vec<(u64, String)>,
+        res: std::io::Result<Offer>,
+    },
     ClipFiles(Vec<PathBuf>),
     /// The person was asked about a dragged window before a hand-off.
     /// `Err("")` means they said no.
@@ -1006,6 +1039,8 @@ async fn handle_incoming(
             let prog = move |id: u64, n: u64| sh3.transfer_progress(id, "out", n);
             let sh4 = sh.clone();
             let cancelled = move |id: u64| sh4.cancels.lock().unwrap().contains(&id);
+            // A send to the whole fleet: at most a few uploads at once, the rest wait.
+            let _slot = sh.serve_slots.acquire().await;
             let (id, res) = files::serve(&mut r, &mut w, lookup, &prog, &cancelled).await;
             if let Some(id) = id {
                 sh.cancels.lock().unwrap().remove(&id);
@@ -1135,7 +1170,10 @@ enum Control {
 }
 
 /// How many computers can be connected at once: one per side and one per corner.
+/// Computers on the desk (each behind a screen edge).
 const MAX_PEERS: usize = 8;
+/// Everything connected at once, fleet computers (files only) included.
+const MAX_CONNECTED: usize = 100;
 /// Sides handed out to new computers, in this order.
 const SIDE_ORDER: [Edge; 8] = [
     Edge::Right,
@@ -1168,6 +1206,8 @@ struct Session {
     ping_at: Option<Instant>,
     /// Its screen's size in pixels, once it said.
     screen: Option<(i32, i32)>,
+    /// In the fleet: files only, it has no edge and gets no input or clipboard.
+    fleet: bool,
 }
 
 impl Drop for Session {
@@ -1427,6 +1467,52 @@ impl Actor {
     }
 
     /// Send to every connected computer except `except` (if given).
+    /// Computers on the desk (not in the fleet) connected now.
+    fn desk_count(&self) -> usize {
+        self.sessions.values().filter(|s| !s.fleet).count()
+    }
+
+    /// Like `send_all_but`, but only to the computers on the desk (the clipboard).
+    fn send_desk_but(&self, except: Option<&str>, m: &Msg) {
+        for (id, s) in &self.sessions {
+            if Some(id.as_str()) != except && !s.fleet {
+                let _ = s.tx.send(m.clone());
+            }
+        }
+    }
+
+    /// Puts `pid` in the fleet (files only) or back on the desk, here and (`tell`) there.
+    fn set_fleet(&mut self, pid: &str, on: bool, tell: bool) {
+        if !on && self.sessions.get(pid).is_some_and(|s| s.fleet) && self.desk_count() >= MAX_PEERS {
+            return self.sh.set_error(Some(format!(
+                "{MAX_PEERS} computers are already on the desk — put one in the fleet first"
+            )));
+        }
+        {
+            let mut per = self.sh.persisted.lock().unwrap();
+            let Some(p) = per.peers.iter_mut().find(|p| p.id == pid) else {
+                return;
+            };
+            p.fleet = on;
+        }
+        self.sh.save();
+        if let Some(s) = self.sessions.get_mut(pid) {
+            s.fleet = on;
+        }
+        if on {
+            // Never keep the mouse or a drag with a computer that just left the desk.
+            let ours = matches!(&self.control, Control::Remote { peer, .. } | Control::Controlled { peer, .. } if peer == pid);
+            if ours {
+                self.send_to(pid, Msg::Release);
+                self.set_control(Control::Local);
+            }
+        }
+        if tell {
+            self.send_to(pid, Msg::Fleet { on });
+        }
+        self.refresh_connected();
+    }
+
     fn send_all_but(&self, except: Option<&str>, m: &Msg) {
         for (id, s) in &self.sessions {
             if Some(id.as_str()) != except {
@@ -1452,7 +1538,7 @@ impl Actor {
             .collect();
         v.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
         self.sh.status.lock().unwrap().connected = v;
-        let edges: Vec<Edge> = self.sessions.values().map(|s| s.side).collect();
+        let edges: Vec<Edge> = self.sessions.values().filter(|s| !s.fleet).map(|s| s.side).collect();
         self.sh.platform.set_active_edges(&edges);
         self.sh.publish();
     }
@@ -1654,8 +1740,11 @@ impl Actor {
     fn auto_connect(&mut self) {
         let per = self.sh.persisted.lock().unwrap().clone();
         for p in &per.peers {
-            if self.sessions.len() >= MAX_PEERS {
+            if self.sessions.len() >= MAX_CONNECTED {
                 return;
+            }
+            if !p.fleet && self.desk_count() >= MAX_PEERS {
+                continue;
             }
             if self.sh.me.id >= p.id || self.sessions.contains_key(&p.id) {
                 continue;
@@ -1756,6 +1845,15 @@ impl Actor {
                 target,
                 res,
             } => self.on_offer_built(id, kind, target, res),
+            Ev::OfferBuiltMany { pairs, res } => {
+                for (id, target) in pairs {
+                    let one = match &res {
+                        Ok(o) => Ok(o.clone()),
+                        Err(e) => Err(std::io::Error::new(e.kind(), e.to_string())),
+                    };
+                    self.on_offer_built(id, OfferKind::Send, target, one);
+                }
+            }
             Ev::CarryFetched { id, paths } => self.on_carry_fetched(id, paths),
             Ev::CarryDropped { id, dir, res } => match res {
                 Ok(paths) => {
@@ -1851,11 +1949,21 @@ impl Actor {
             Some(_) => self.drop_session(&pid, ""),
             None => {}
         }
-        if self.sessions.len() >= MAX_PEERS {
+        let is_fleet = self
+            .sh
+            .persisted
+            .lock()
+            .unwrap()
+            .peers
+            .iter()
+            .any(|p| p.id == pid && p.fleet);
+        if self.sessions.len() >= MAX_CONNECTED || (!is_fleet && self.desk_count() >= MAX_PEERS) {
             reader.abort();
-            self.sh.set_error(Some(
-                "Four computers are already connected — disconnect one first".into(),
-            ));
+            self.sh.set_error(Some(if is_fleet {
+                format!("{MAX_CONNECTED} computers are already connected — disconnect one first")
+            } else {
+                format!("{MAX_PEERS} computers are already on the desk — disconnect one, or put one in the fleet")
+            }));
             return;
         }
         // Persist a new pairing / refresh name & address.
@@ -1891,6 +1999,7 @@ impl Actor {
                     side,
                     last_addr: Some(sock),
                     mac: None,
+                    fleet: false,
                 });
                 side
             } else {
@@ -1901,10 +2010,10 @@ impl Actor {
         };
         // Two connected computers never share a side (with more than eight paired, the
         // stored sides can clash).
-        if self.sessions.values().any(|s| s.side == side) {
+        if !is_fleet && self.sessions.values().any(|s| !s.fleet && s.side == side) {
             if let Some(free) = SIDE_ORDER
                 .into_iter()
-                .find(|e| !self.sessions.values().any(|s| s.side == *e))
+                .find(|e| !self.sessions.values().any(|s| !s.fleet && s.side == *e))
             {
                 side = free;
                 let mut per = self.sh.persisted.lock().unwrap();
@@ -1930,6 +2039,7 @@ impl Actor {
                 license_seen: false,
                 ping_at: None,
                 screen: None,
+                fleet: is_fleet,
             },
         );
         let pass = self.my_pass_if_valid();
@@ -2008,7 +2118,7 @@ impl Actor {
                 let target = if self.control == Control::Local {
                     self.sessions
                         .iter()
-                        .find(|(_, s)| s.side == edge)
+                        .find(|(_, s)| !s.fleet && s.side == edge)
                         .map(|(id, _)| id.clone())
                 } else {
                     None
@@ -2047,7 +2157,7 @@ impl Actor {
                 {
                     self.sessions
                         .iter()
-                        .find(|(_, s)| s.side == edge)
+                        .find(|(_, s)| !s.fleet && s.side == edge)
                         .map(|(id, _)| id.clone())
                 } else {
                     None
@@ -2086,7 +2196,7 @@ impl Actor {
                 let Some(to) = self
                     .sessions
                     .iter()
-                    .find(|(_, s)| s.side == edge)
+                    .find(|(_, s)| !s.fleet && s.side == edge)
                     .map(|(id, _)| id.clone())
                 else {
                     self.notify("No computer is set on that side");
@@ -2098,7 +2208,7 @@ impl Actor {
                 let to = self
                     .sessions
                     .iter()
-                    .find(|(_, s)| s.side == edge)
+                    .find(|(_, s)| !s.fleet && s.side == edge)
                     .map(|(id, _)| id.clone());
                 log::info!("app span: a {w}x{h} window crosses the {edge:?} edge");
                 // The pointer may drive it on across the whole other screen.
@@ -2714,18 +2824,17 @@ impl Actor {
 
     /// The computer a bare "jump" goes to: the one used last, else the first by name.
     fn default_target(&self) -> Option<String> {
-        self.last_peer
-            .clone()
-            .filter(|p| self.sessions.contains_key(p))
-            .or_else(|| {
-                self.sh
-                    .status
-                    .lock()
-                    .unwrap()
-                    .connected
-                    .first()
-                    .map(|c| c.id.clone())
-            })
+        let desk = |p: &String| self.sessions.get(p).is_some_and(|s| !s.fleet);
+        self.last_peer.clone().filter(desk).or_else(|| {
+            self.sh
+                .status
+                .lock()
+                .unwrap()
+                .connected
+                .iter()
+                .map(|c| c.id.clone())
+                .find(desk)
+        })
     }
 
     fn engage(&mut self, target: Option<String>) {
@@ -3029,7 +3138,7 @@ impl Actor {
 
                     let _ = self.clip.send(ClipJob::Write(c));
                     // A computer in the middle passes it on to the others.
-                    self.send_all_but(Some(from), &Msg::ClipText(t));
+                    self.send_desk_but(Some(from), &Msg::ClipText(t));
                 }
             }
             Msg::ClipImage(png) => {
@@ -3044,7 +3153,7 @@ impl Actor {
                     self.last_clip_sig = Some(s);
                     self.clip_written_at = Some(Instant::now());
                     let _ = self.clip.send(ClipJob::Write(c));
-                    self.send_all_but(Some(from), &Msg::ClipImage(png));
+                    self.send_desk_but(Some(from), &Msg::ClipImage(png));
                 }
             }
             Msg::MoveApp { id, app } => {
@@ -3157,6 +3266,7 @@ impl Actor {
                 let plat = self.sh.platform.clone();
                 tokio::task::spawn_blocking(move || plat.power(a));
             }
+            Msg::Fleet { on } => self.set_fleet(from, on, false),
             Msg::SendApps => {
                 if !self.sh.persisted.lock().unwrap().move_apps {
                     self.send_to(
@@ -3471,10 +3581,10 @@ impl Actor {
     fn on_cmd(&mut self, c: Cmd) {
         match c {
             Cmd::Connect { addr, port, code } => {
-                if self.sessions.len() >= MAX_PEERS {
-                    self.sh.set_error(Some(
-                        "Four computers are already connected — disconnect one first".into(),
-                    ));
+                if self.sessions.len() >= MAX_CONNECTED {
+                    self.sh.set_error(Some(format!(
+                        "{MAX_CONNECTED} computers are already connected — disconnect one first"
+                    )));
                 } else {
                     self.sh.set_error(None);
                     self.start_dial(SocketAddr::new(addr, port), ClientAuth::Pair { code });
@@ -3494,7 +3604,7 @@ impl Actor {
                         .map(|a| (a.ip(), a.port()))
                 });
                 if let (Some((ip, port)), Some(key)) = (target, unhex32(&p.link_key)) {
-                    if !self.sessions.contains_key(&peer_id) && self.sessions.len() < MAX_PEERS {
+                    if !self.sessions.contains_key(&peer_id) && self.sessions.len() < MAX_CONNECTED {
                         self.sh.set_error(None);
                         self.start_dial(
                             SocketAddr::new(ip, port),
@@ -3628,6 +3738,14 @@ impl Actor {
                 self.sh.publish();
             }
             Cmd::Engage(target) => self.engage(target),
+            Cmd::SendFilesMany { paths, targets } => {
+                let targets: Vec<String> = targets.into_iter().filter(|t| self.sessions.contains_key(t)).collect();
+                if targets.is_empty() {
+                    return self.sh.set_error(Some("None of those computers is connected".into()));
+                }
+                self.build_offer_many(paths, targets);
+            }
+            Cmd::SetFleet { peer_id, on } => self.set_fleet(&peer_id, on, true),
             Cmd::SendFiles { paths, target } => {
                 let targets = self.file_targets(target);
                 if targets.is_empty() {
@@ -3662,7 +3780,12 @@ impl Actor {
                 return vec![peer.clone()];
             }
         }
-        let mut all: Vec<String> = self.sessions.keys().cloned().collect();
+        let mut all: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| !s.fleet)
+            .map(|(id, _)| id.clone())
+            .collect();
         all.sort();
         all
     }
@@ -3700,11 +3823,11 @@ impl Actor {
         match c {
             ClipContent::Text(t) => {
                 if !t.is_empty() && t.len() <= MAX_CLIP_TEXT {
-                    self.send_all_but(None, &Msg::ClipText(t));
+                    self.send_desk_but(None, &Msg::ClipText(t));
                 }
             }
             ClipContent::Files(paths) => {
-                let mut ids: Vec<String> = self.sessions.keys().cloned().collect();
+                let mut ids: Vec<String> = self.sessions.iter().filter(|(_, s)| !s.fleet).map(|(id, _)| id.clone()).collect();
                 ids.sort();
                 for id in ids {
                     self.build_offer(paths.clone(), OfferKind::Clipboard, id);
@@ -3713,7 +3836,7 @@ impl Actor {
             ClipContent::Image(png) => {
                 if !png.is_empty() && png.len() <= MAX_CLIP_IMAGE {
                     log::info!("clipboard: sending a picture ({} KB)", png.len() / 1024);
-                    self.send_all_but(None, &Msg::ClipImage(png));
+                    self.send_desk_but(None, &Msg::ClipImage(png));
                 } else {
                     log::info!(
                         "clipboard: picture too big to sync ({} KB)",
@@ -3723,6 +3846,16 @@ impl Actor {
                 }
             }
         }
+    }
+
+    /// One send to several computers: the files are listed once, each gets its own offer.
+    fn build_offer_many(&mut self, paths: Vec<PathBuf>, targets: Vec<String>) {
+        let pairs: Vec<(u64, String)> = targets.into_iter().map(|t| (rand::thread_rng().gen(), t)).collect();
+        let ev_tx = self.ev_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let res = files::build_manifest(&paths);
+            let _ = ev_tx.send(Ev::OfferBuiltMany { pairs, res });
+        });
     }
 
     fn build_offer(&mut self, paths: Vec<PathBuf>, kind: OfferKind, target: String) -> u64 {
@@ -3761,7 +3894,7 @@ impl Actor {
         {
             let mut q = self.sh.offers.lock().unwrap();
             q.push_back((id, offer.clone()));
-            while q.len() > 16 {
+            while q.len() > 256 {
                 q.pop_front();
             }
         }

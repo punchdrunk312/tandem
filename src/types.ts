@@ -64,6 +64,8 @@ export interface PairedPeer {
   color?: string;
   /** It can be woken over the network. */
   wakeable?: boolean;
+  /** In the fleet: files only (no edge, input or clipboard). */
+  fleet?: boolean;
 }
 
 export interface DeviceInfo {

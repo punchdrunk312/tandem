@@ -295,7 +295,7 @@ function peerCard(s: Snapshot, p: Snapshot["paired"][number]): HTMLElement {
   const color = p.color ?? "#14b8a6";
   const d = p.device ?? null;
   const inControl = p.id === s.control_peer;
-  const where = `On your ${sideLabel(p.side)}`;
+  const where = p.fleet ? "Fleet · files only" : `On your ${sideLabel(p.side)}`;
   const status = !p.connected ? (p.nearby ? "Seen nearby · not connected" : "Not connected")
     : inControl ? (s.control === "remote" ? "You're using it now" : "It's using this computer")
     : `${where}${p.ping_ms != null ? ` · ${p.ping_ms} ms` : ""}`;
@@ -306,7 +306,7 @@ function peerCard(s: Snapshot, p: Snapshot["paired"][number]): HTMLElement {
     for (const a of (d.accessories ?? []).slice(0, 2)) stats.push(h("div", { class: "stat" }, miniRing(a.battery, a.battery <= 15 ? "#e8743b" : "#2c6fd6", a.name), h("span", { class: "acc" }, a.name)));
   }
   const actions: Node[] = p.connected
-    ? [h("button", { class: "primary", onclick: () => call("engage", { peerId: p.id }) }, inControl && s.control === "remote" ? "Come back" : "Jump there"),
+    ? [...(p.fleet ? [] : [h("button", { class: "primary", onclick: () => call("engage", { peerId: p.id }) }, inControl && s.control === "remote" ? "Come back" : "Jump there")]),
        h("button", { onclick: () => call("disconnect", { peerId: p.id }) }, "Disconnect")]
     : [h("button", { class: "primary", onclick: () => call("connect_known", { id: p.id }) }, "Connect"),
        ...(p.wakeable ? [h("button", { onclick: () => call("wake_peer", { peerId: p.id }) }, "Wake it")] : [])];
@@ -315,7 +315,9 @@ function peerCard(s: Snapshot, p: Snapshot["paired"][number]): HTMLElement {
       h("span", { class: "pc-av" }, Array.from(p.name)[0]?.toUpperCase() ?? "?"),
       h("div", { class: "grow" }, h("div", { class: "pc-name" }, p.name), h("div", { class: "pc-sub" }, h("i", { class: "pc-dot" }), status))),
     stats.length ? h("div", { class: "pc-stats" }, ...stats) : null,
-    h("div", { class: "pc-act" }, ...actions));
+    h("div", { class: "pc-act" }, ...actions),
+    h("label", { class: "pc-fleet", title: "Fleet computers only send and receive files: no screen edge, no mouse, keyboard or clipboard. Up to 100 can be connected." },
+      switchEl(!!p.fleet, (on) => call("set_fleet", { peerId: p.id, on })), h("span", {}, "Files only (fleet)")));
 }
 
 const ACC_ICON: Record<string, string> = {
@@ -347,7 +349,7 @@ function accCard(list: NonNullable<Snapshot["me"]>["accessories"]): HTMLElement 
 
 function renderStage(s: Snapshot) {
   const live = s.paired.filter((p) => p.connected);
-  update(stage, "stage", [s.control, s.control_peer, s.paired.map((p) => [p.id, p.name, p.side, p.connected, p.nearby, p.ping_ms, p.color, p.wakeable, p.device?.battery, p.device?.charging, p.device?.plugged, p.device ? Math.round(p.device.cpu / 10) : null, p.device?.accessories]), s.me?.accessories, s.pairing_code, s.nearby, s.error, addOpen], () => {
+  update(stage, "stage", [s.control, s.control_peer, s.paired.map((p) => [p.id, p.name, p.side, p.connected, p.nearby, p.ping_ms, p.color, p.wakeable, p.fleet, p.device?.battery, p.device?.charging, p.device?.plugged, p.device ? Math.round(p.device.cpu / 10) : null, p.device?.accessories]), s.me?.accessories, s.pairing_code, s.nearby, s.error, addOpen], () => {
     stage.className = s.paired.length ? "stage" : "card";
     if (!s.paired.length) return pairSection(s, "Add your first computer", true);
     const ctl = s.paired.find((p) => p.id === s.control_peer)?.name ?? "";
