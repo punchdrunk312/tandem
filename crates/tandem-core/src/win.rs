@@ -1188,7 +1188,6 @@ fn mouse_inner(msg: u32, h: &MsLl) -> bool {
         if msg == WM_MOUSEMOVE && !GAME_ACTIVE.load(Relaxed) {
             match crate::winmirror::hook_move(h.x, h.y, LEFT_HELD.load(Relaxed)) {
                 crate::winmirror::Hook::Pass => {}
-                crate::winmirror::Hook::Stay => return false,
                 crate::winmirror::Hook::Cross(ev) => {
                     reset_move();
                     set_capturing(true);
@@ -1817,6 +1816,8 @@ pub struct WinPlatform {
 
 impl WinPlatform {
     pub fn new() -> Self {
+        // A window the last run left parked at the edge (it crashed) comes back first.
+        crate::winmirror::rescue_parked();
         // Coordinates must be physical pixels on every monitor.
         unsafe {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -1959,6 +1960,10 @@ impl Platform for WinPlatform {
     }
 
     fn inject(&self, ev: &InputEvent) {
+        // Second-monitor mode: the pointer is on a window of ours shown over there.
+        if crate::winmirror::portal_input(ev) {
+            return;
+        }
         match ev {
             InputEvent::MouseMove { dx, dy } => {
                 // Absolute positioning: the sender's deltas are already

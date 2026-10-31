@@ -1822,16 +1822,14 @@ async fn the_fleet_gets_files_but_no_edge_or_clipboard() {
     let f = dir.path().join("report.pdf");
     std::fs::write(&f, vec![9u8; 200_000]).unwrap();
     a.node.send_files_many(vec![f], vec![b_id.clone(), c_id.clone()]);
-    until("both got it", || {
-        b.dl.path().join("report.pdf").exists() && c.dl.path().join("report.pdf").exists()
-    })
-    .await;
+    // Whole files (they exist as soon as the first bytes arrive).
+    let size = |s: &Side| std::fs::metadata(s.dl.path().join("report.pdf")).map(|m| m.len()).unwrap_or(0);
+    until("both got all of it", || size(&b) == 200_000 && size(&c) == 200_000).await;
     until("sends finished", || {
         let t = a.node.snapshot().transfers;
         t.len() == 2 && t.iter().all(|t| t.state == "done")
     })
     .await;
-    assert_eq!(std::fs::read(b.dl.path().join("report.pdf")).unwrap().len(), 200_000);
 
     // Back on the desk: an edge again.
     a.node.set_fleet(b_id.clone(), false);

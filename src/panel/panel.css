@@ -487,3 +487,6 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 
 /* A computer's "files only" switch (the fleet). */
 .pc-fleet { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+
+/* A "Beta" tag on an option that is still being tried out. */
+.beta { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; background: #fde68a; color: #7c4a03; vertical-align: 1px; }

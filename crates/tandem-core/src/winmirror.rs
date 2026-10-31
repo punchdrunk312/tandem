@@ -76,6 +76,53 @@ struct Owned {
 }
 
 static OWNED: Mutex<Vec<Owned>> = Mutex::new(Vec::new());
+
+/// Where the list of parked windows is kept, so a crash never strands one off screen.
+fn parked_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("cubecursor-parked.txt")
+}
+
+/// Writes down every window parked here (handle, and the work area to bring it back to).
+fn save_parked() {
+    let lines: Vec<String> = OWNED
+        .lock()
+        .map(|all| {
+            all.iter()
+                .map(|o| format!("{} {} {} {} {}", o.hwnd, o.work.x, o.work.y, o.work.w, o.work.h))
+                .collect()
+        })
+        .unwrap_or_default();
+    let f = parked_file();
+    if lines.is_empty() {
+        let _ = std::fs::remove_file(f);
+    } else {
+        let _ = std::fs::write(f, lines.join("\n"));
+    }
+}
+
+/// At start: windows a previous run left parked (it crashed, or was killed) come back to
+/// the middle of their screen.
+pub fn rescue_parked() {
+    let Ok(text) = std::fs::read_to_string(parked_file()) else {
+        return;
+    };
+    for line in text.lines() {
+        let v: Vec<i64> = line.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+        let [h, x, y, w, ht] = v[..] else { continue };
+        let h = h as isize;
+        if !unsafe { IsWindow(Some(hwnd(h))).as_bool() } {
+            continue;
+        }
+        let (Some(vis), Some(full)) = (visible_rect(h).map(rect_of), window_rect(h)) else {
+            continue;
+        };
+        let work = Rect { x: x as i32, y: y as i32, w: w as i32, h: ht as i32 };
+        let r = mirror::slide_in(work, vis.w, vis.h);
+        log::info!("mirror: window {h} was left parked by the last run: back on screen");
+        place(h, (vis.x - full.left, vis.y - full.top), r.x, r.y, false);
+    }
+    let _ = std::fs::remove_file(parked_file());
+}
 /// The window the pointer is on, for the hook: id, and its visible rectangle.
 static PORTAL_ID: AtomicU64 = AtomicU64::new(0);
 static PORTAL_ON: AtomicBool = AtomicBool::new(false);
@@ -96,14 +143,6 @@ fn set_portal_rect(r: Rect) {
     PR[3].store(r.h, Relaxed);
 }
 
-fn portal_rect() -> Rect {
-    Rect {
-        x: PR[0].load(Relaxed),
-        y: PR[1].load(Relaxed),
-        w: PR[2].load(Relaxed),
-        h: PR[3].load(Relaxed),
-    }
-}
 
 /// Moves window `h` so its visible part's top-left is at (`x`, `y`). `top`: keep it
 /// above other windows (and make sure it shows).
@@ -235,6 +274,7 @@ pub fn adopt(edge: Edge) -> Option<(u64, u32, u32)> {
         all.retain(|x| x.hwnd != h);
         all.push(o);
     }
+    save_parked();
     OWNER_THREADS.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("tandem-mirror-pics".into())
@@ -275,13 +315,8 @@ pub fn release(id: u64, home: Option<f32>) {
         }
     };
     place(o.hwnd, o.off, x, y, o.was_topmost);
-    if was_portal {
-        // The pointer stays on the same spot of the window.
-        let (cx, cy) = cursor();
-        unsafe {
-            let _ = SetCursorPos(cx + x - vis.x, cy + y - vis.y);
-        }
-    }
+    let _ = was_portal;
+    save_parked();
 }
 
 /// Every window still kept here goes back on screen (CubeCursor is closing).
@@ -307,31 +342,215 @@ pub fn portal_begin(id: u64, rx: i32, ry: i32) -> Option<(i32, i32)> {
             let _ = ShowWindow(hwnd(o.hwnd), SW_RESTORE);
         }
     }
+    // The window never moves: it stays parked, its pictures keep coming, and the other
+    // computer's mouse and keys go to it directly (`portal_input`). Moving windows on and
+    // off the screen is what made them flicker, jump, and sometimes get lost.
     let v = rect_of(visible_rect(o.hwnd)?);
-    let r = mirror::slide_in(o.work, v.w, v.h);
-    // A picture of the screen as it is goes over that spot first, then the window slides
-    // in under it: on this screen nothing seems to change.
-    match winspan::screen_pixels(r.x, r.y, r.w, r.h) {
-        Some(px) => winspan::veil(Some(winspan::Veil {
-            x: r.x,
-            y: r.y,
-            w: r.w,
-            h: r.h,
-            px,
-            then: Some((o.hwnd, o.off, r.x, r.y)),
-        })),
-        None => place(o.hwnd, o.off, r.x, r.y, true),
-    }
-    o.slid = Some(r);
-    o.seen = (r.x, r.y);
+    let full = window_rect(o.hwnd)?;
+    o.slid = None;
     o.dragging = false;
-    set_portal_rect(r);
+    set_portal_rect(Rect { x: full.left, y: full.top, w: full.right - full.left, h: full.bottom - full.top });
+    // The pointer inside the window, counted from its visible top-left like the mirror.
+    let (vx, vy) = (v.x - full.left, v.y - full.top);
+    VP[0].store(vx + rx.clamp(0, v.w - 1), Relaxed);
+    VP[1].store(vy + ry.clamp(0, v.h - 1), Relaxed);
+    VOFF[0].store(vx, Relaxed);
+    VOFF[1].store(vy, Relaxed);
+    VBTN.store(0, Relaxed);
     PORTAL_ID.store(id, Relaxed);
     PORTAL_ON.store(true, Relaxed);
     if let Ok(mut t) = PORTAL_SINCE.lock() {
         *t = Some(Instant::now());
     }
-    Some((r.x + rx.clamp(0, r.w - 1), r.y + ry.clamp(0, r.h - 1)))
+    // Keys typed over there go to whatever is in front here: this window.
+    bring_forward(o.hwnd);
+    // The real pointer stays where it is.
+    Some(cursor())
+}
+
+/// The pointer inside the window being used through its mirror (window coordinates).
+static VP: [AtomicI32; 2] = [AtomicI32::new(0), AtomicI32::new(0)];
+/// Where the visible part starts inside the window (its invisible resize borders).
+static VOFF: [AtomicI32; 2] = [AtomicI32::new(0), AtomicI32::new(0)];
+/// Buttons held through the mirror (MK_* flags), and a title-bar drag of the mirror.
+static VBTN: AtomicUsize = AtomicUsize::new(0);
+static VDRAG: AtomicBool = AtomicBool::new(false);
+static VLAST_CLICK: Mutex<Option<(Instant, i32, i32, u32)>> = Mutex::new(None);
+
+const MK_LBUTTON: usize = 0x0001;
+const MK_RBUTTON: usize = 0x0002;
+const MK_MBUTTON: usize = 0x0010;
+
+/// Brings `h` to the front without moving it. Windows only lets the program the person
+/// is using do that, so join the front window's input queue for a moment.
+fn bring_forward(h: isize) {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg == hwnd(h) {
+            return;
+        }
+        let me = windows::Win32::System::Threading::GetCurrentThreadId();
+        let theirs = GetWindowThreadProcessId(fg, None);
+        let joined = theirs != 0 && theirs != me && windows::Win32::System::Threading::AttachThreadInput(me, theirs, true).as_bool();
+        let _ = SetForegroundWindow(hwnd(h));
+        if joined {
+            let _ = windows::Win32::System::Threading::AttachThreadInput(me, theirs, false);
+        }
+    }
+}
+
+/// The window's point (`x`, `y`) on the (virtual) screen.
+fn on_screen(h: isize, x: i32, y: i32) -> (i32, i32) {
+    match window_rect(h) {
+        Some(r) => (r.left + x, r.top + y),
+        None => (x, y),
+    }
+}
+
+/// The deepest child of `top` under screen point `p`, and `p` in its client coordinates.
+fn target_at(top: isize, p: (i32, i32)) -> (HWND, POINT) {
+    unsafe {
+        let mut cur = hwnd(top);
+        loop {
+            let mut c = POINT { x: p.0, y: p.1 };
+            let _ = ScreenToClient(cur, &mut c);
+            let child = ChildWindowFromPointEx(cur, c, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT);
+            if child.0.is_null() || child == cur {
+                return (cur, c);
+            }
+            cur = child;
+        }
+    }
+}
+
+fn lparam_xy(x: i32, y: i32) -> LPARAM {
+    LPARAM((((y as u16 as u32) << 16) | (x as u16 as u32)) as isize)
+}
+
+/// What part of window `h` screen point `p` is on (HTCLIENT, HTCAPTION, HTCLOSE...).
+fn hit(h: isize, p: (i32, i32)) -> u32 {
+    let mut out = 0usize;
+    unsafe {
+        let _ = SendMessageTimeoutW(hwnd(h), WM_NCHITTEST, WPARAM(0), lparam_xy(p.0, p.1), SMTO_ABORTIFHUNG, 60, Some(&mut out));
+    }
+    out as u32
+}
+
+/// The other computer's mouse, on a window shown over there: moves, clicks, double-clicks
+/// and the wheel go straight to the program as window messages, so the window never has
+/// to come onto this screen. Keys are left alone (true = handled here): they go to the
+/// front window, which is this one.
+pub fn portal_input(ev: &crate::proto::InputEvent) -> bool {
+    use crate::proto::{Button, InputEvent};
+    if !PORTAL_ON.load(Relaxed) {
+        return false;
+    }
+    let id = PORTAL_ID.load(Relaxed);
+    let h = id as isize;
+    if !unsafe { IsWindow(Some(hwnd(h))).as_bool() } {
+        return false;
+    }
+    let (x, y) = (VP[0].load(Relaxed), VP[1].load(Relaxed));
+    let held = VBTN.load(Relaxed);
+    match ev {
+        InputEvent::MouseMove { dx, dy } => {
+            let (nx, ny) = (x + dx, y + dy);
+            VP[0].store(nx, Relaxed);
+            VP[1].store(ny, Relaxed);
+            if VDRAG.load(Relaxed) {
+                // Dragging the window by its title bar: the mirror follows (and can be
+                // dragged home); the real window stays parked.
+                emit(CaptureEvent::MirrorMoved { id, dx: *dx, dy: *dy, done: false });
+                return true;
+            }
+            let p = on_screen(h, nx, ny);
+            let (t, c) = target_at(h, p);
+            unsafe {
+                let _ = PostMessageW(Some(t), WM_MOUSEMOVE, WPARAM(held), lparam_xy(c.x, c.y));
+            }
+            true
+        }
+        InputEvent::Button { button, down } => {
+            let p = on_screen(h, x, y);
+            let (flag, dn, up, dbl) = match button {
+                Button::Left => (MK_LBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_LBUTTONDBLCLK),
+                Button::Right => (MK_RBUTTON, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_RBUTTONDBLCLK),
+                Button::Middle => (MK_MBUTTON, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MBUTTONDBLCLK),
+                _ => return true,
+            };
+            if *button == Button::Left {
+                if *down {
+                    bring_forward(h);
+                    match hit(h, p) {
+                        HTCAPTION => {
+                            VDRAG.store(true, Relaxed);
+                            return true;
+                        }
+                        HTCLOSE => {
+                            unsafe {
+                                let _ = PostMessageW(Some(hwnd(h)), WM_SYSCOMMAND, WPARAM(SC_CLOSE as usize), LPARAM(0));
+                            }
+                            return true;
+                        }
+                        HTMINBUTTON | HTMAXBUTTON => return true,
+                        _ => {}
+                    }
+                } else if VDRAG.swap(false, Relaxed) {
+                    emit(CaptureEvent::MirrorMoved { id, dx: 0, dy: 0, done: true });
+                    return true;
+                }
+            }
+            let held = if *down { held | flag } else { held & !flag };
+            VBTN.store(held, Relaxed);
+            let (t, c) = target_at(h, p);
+            let mut msg = if *down { dn } else { up };
+            if *down {
+                // Windows makes double-clicks out of real clicks only: make them here too.
+                let mut last = VLAST_CLICK.lock().unwrap();
+                let quick = Duration::from_millis(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() } as u64);
+                if let Some((t0, lx, ly, m)) = *last {
+                    if m == dn && t0.elapsed() <= quick && (lx - x).abs() <= 4 && (ly - y).abs() <= 4 {
+                        msg = dbl;
+                        *last = None;
+                    } else {
+                        *last = Some((Instant::now(), x, y, dn));
+                    }
+                } else {
+                    *last = Some((Instant::now(), x, y, dn));
+                }
+            }
+            unsafe {
+                let _ = PostMessageW(Some(t), msg, WPARAM(held), lparam_xy(c.x, c.y));
+            }
+            true
+        }
+        InputEvent::Wheel { dx, dy } => {
+            let p = on_screen(h, x, y);
+            let (t, _) = target_at(h, p);
+            let pack = |d: i32| WPARAM(held | (((d as i16) as u16 as usize) << 16));
+            unsafe {
+                if *dy != 0 {
+                    let _ = PostMessageW(Some(t), WM_MOUSEWHEEL, pack(*dy), lparam_xy(p.0, p.1));
+                }
+                if *dx != 0 {
+                    let _ = PostMessageW(Some(t), WM_MOUSEHWHEEL, pack(*dx), lparam_xy(p.0, p.1));
+                }
+            }
+            true
+        }
+        InputEvent::Key { .. } => false,
+    }
+}
+
+/// The pointer's shape over the window, for the stand-in pointer drawn over there: the
+/// shape the control under it asks for (text boxes ask for the I-beam, links the hand).
+fn virtual_shape(table: &[(isize, u8)]) -> u8 {
+    let id = PORTAL_ID.load(Relaxed);
+    let h = id as isize;
+    let p = on_screen(h, VP[0].load(Relaxed), VP[1].load(Relaxed));
+    let (t, _) = target_at(h, p);
+    let cur = unsafe { GetClassLongPtrW(t, GCLP_HCURSOR) } as isize;
+    table.iter().find(|(c, _)| *c == cur).map(|(_, s)| *s).unwrap_or(0)
 }
 
 /// The pointer left the window: park it again.
@@ -339,45 +558,40 @@ pub fn portal_end() {
     if !PORTAL_ON.swap(false, Relaxed) {
         return;
     }
-    portal_over();
-    let id = PORTAL_ID.load(Relaxed);
-    if let Ok(mut all) = OWNED.lock() {
-        if let Some(o) = all.iter_mut().find(|o| o.hwnd as u64 == id) {
-            park(o);
-        }
+    VBTN.store(0, Relaxed);
+    if VDRAG.swap(false, Relaxed) {
+        emit(CaptureEvent::MirrorMoved { id: PORTAL_ID.load(Relaxed), dx: 0, dy: 0, done: true });
     }
+    // The window never left its parking place: nothing to put back.
 }
 
 /// Driven from the other computer: is the pointer off the window (no button down)?
 pub fn portal_outside() -> Option<(i32, i32)> {
-    if !PORTAL_ON.load(Relaxed) || buttons_down() {
+    if !PORTAL_ON.load(Relaxed) || VBTN.load(Relaxed) != 0 || VDRAG.load(Relaxed) {
         return None;
     }
-    let r = portal_rect();
-    let (x, y) = cursor();
-    (!r.contains(x, y)).then_some((x - r.x, y - r.y))
+    let id = PORTAL_ID.load(Relaxed);
+    let v = visible_rect(id as isize).map(rect_of)?;
+    let full = window_rect(id as isize)?;
+    let (ox, oy) = (v.x - full.left, v.y - full.top);
+    // Relative to the visible part, like the mirror shows it.
+    let (x, y) = (VP[0].load(Relaxed) - ox, VP[1].load(Relaxed) - oy);
+    let inside = x >= 0 && y >= 0 && x < v.w && y < v.h;
+    (!inside).then_some((x, y))
 }
 
 /// What the hook does with a move of this computer's own mouse.
 pub enum Hook {
     /// Nothing to do with mirrors: carry on (edges and all).
     Pass,
-    /// On a window being driven here: no edges, nothing else.
-    Stay,
     /// Swallow from now on and send this.
     Cross(CaptureEvent),
 }
 
 pub fn hook_move(x: i32, y: i32, left_held: bool) -> Hook {
     if PORTAL_ON.load(Relaxed) {
-        let r = portal_rect();
-        if left_held || r.contains(x, y) || buttons_down() {
-            return Hook::Stay;
-        }
-        return Hook::Cross(CaptureEvent::PortalOut {
-            rx: x - r.x,
-            ry: y - r.y,
-        });
+        // The window is used from the other computer; this one's own mouse is free.
+        return Hook::Pass;
     }
     if MIRROR_COUNT.load(Relaxed) == 0 || left_held || winspan::showing() {
         return Hook::Pass;
@@ -425,6 +639,7 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
         if let Ok(mut all) = OWNED.lock() {
             all.retain(|o| o.hwnd != h);
         }
+        save_parked();
         if PORTAL_ID.load(Relaxed) == id && PORTAL_ON.swap(false, Relaxed) {
             portal_over();
         }
@@ -545,24 +760,6 @@ fn look_after(h: isize, prints: &mut HashMap<isize, u64>) {
     }
 }
 
-/// The standard shape the pointer has right now (the program over which it is chose it).
-/// The system's own pointer handles keep their identity even while CubeCursor blanks
-/// their pictures to hide the pointer, so they still tell the shape.
-fn pointer_shape(table: &[(isize, u8)]) -> u8 {
-    let mut ci = CURSORINFO {
-        cbSize: std::mem::size_of::<CURSORINFO>() as u32,
-        ..Default::default()
-    };
-    if unsafe { GetCursorInfo(&mut ci) }.is_err() {
-        return span::shape::ARROW;
-    }
-    let h = ci.hCursor.0 as isize;
-    table
-        .iter()
-        .find(|(c, _)| *c == h && h != 0)
-        .map(|(_, s)| *s)
-        .unwrap_or(span::shape::ARROW)
-}
 
 fn shape_table() -> Vec<(isize, u8)> {
     use span::shape::*;
@@ -600,9 +797,12 @@ fn cursor_watch() {
             continue;
         }
         let id = PORTAL_ID.load(Relaxed);
-        let r = portal_rect();
-        let (x, y) = cursor();
-        let now = (x - r.x, y - r.y, id, pointer_shape(&table));
+        let now = (
+            VP[0].load(Relaxed) - VOFF[0].load(Relaxed),
+            VP[1].load(Relaxed) - VOFF[1].load(Relaxed),
+            id,
+            virtual_shape(&table),
+        );
         if now != last {
             last = now;
             emit(CaptureEvent::PortalCursor {

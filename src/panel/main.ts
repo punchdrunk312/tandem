@@ -636,28 +636,25 @@ type WindowsMode = "off" | "move" | "monitor";
 const WINDOWS_OPTS: { id: WindowsMode; title: string; line: string; art: string }[] = [
   { id: "off", title: "Stay put", line: "Windows stop at the edge.", art: `<div class="wa wa-off"><b></b><b></b><i></i></div>` },
   { id: "move", title: "Move the app", line: "It opens over there and closes here.", art: `<div class="wa wa-move"><b></b><b></b><i></i></div>` },
-  { id: "monitor", title: "Second monitor", line: "Runs here, shows and works over there.", art: `<div class="wa wa-mon"><b></b><b></b><i></i></div>` },
+  { id: "monitor", title: "Second monitor", line: "Stays here, shows and works over there.", art: `<div class="wa wa-mon"><b></b><b></b><i></i></div>` },
 ];
 const WINDOWS_HELP: Record<WindowsMode, string> = {
   off: "Windows stop at the edge of the screen, like they always have.",
   move: "Drag a program by its title bar through the edge. Let go more than halfway over and it opens there and closes here; let go sooner, or press Esc, and it stays. In a browser, drag a tab to the edge and the page opens there. Turn it on at both computers.",
-  monitor: "Drag any window through the edge and let go more than halfway over: it keeps running here and shows there, live, sized for that screen. Click and type in it over there. Drag it back over the edge, or press “Bring windows back” in the bar, to bring it home.",
+  monitor: "Drag any window through the edge and let go more than halfway over: it keeps running here, waits at the edge of this screen, and shows there, live, sized for that screen. Click, scroll and type in it over there; drag it by its title bar to move it, or back over the edge to bring it home (or press “Bring windows back” in the bar). A few programs ignore clicks sent this way.",
 };
 
 /** What dragging a window across the edge does: three pictures to pick from. */
 function windowsChooser(s: Snapshot): HTMLElement {
-  // Second monitor is held back for now: anyone who had it on goes back to normal.
-  if (s.monitor_mode) void call("set_monitor_mode", { on: false });
-  const mode: WindowsMode = s.move_apps ? "move" : "off";
+  const mode: WindowsMode = s.monitor_mode ? "monitor" : s.move_apps ? "move" : "off";
   const pick = (v: WindowsMode) => {
     void call("set_monitor_mode", { on: v === "monitor" });
     void call("set_move_apps", { on: v === "move" });
   };
-  // Second monitor isn't in this release: only "stay put" and "move the app".
-  const cards = WINDOWS_OPTS.filter((o) => o.id !== "monitor").map((o) => {
+  const cards = WINDOWS_OPTS.map((o) => {
     const b = h("button", { class: `wopt${o.id === mode ? " on" : ""}`, role: "radio", "aria-checked": String(o.id === mode), onclick: () => pick(o.id) },
       h("div", { class: "wopt-art" }),
-      h("div", { class: "wopt-title" }, o.title),
+      h("div", { class: "wopt-title" }, o.title, ...(o.id === "monitor" ? [h("span", { class: "beta" }, "Beta")] : [])),
       h("div", { class: "wopt-line" }, o.line));
     (b.firstChild as HTMLElement).innerHTML = o.art; // static, trusted markup
     return b;
@@ -665,7 +662,7 @@ function windowsChooser(s: Snapshot): HTMLElement {
   const mac = isMac() && mode !== "off" ? " macOS asks once for Screen Recording, so the window can be shown on the other computer." : "";
   return h("section", { class: "group" },
     h("h2", { class: "g-title" }, "Windows across screens"),
-    h("div", { class: "wopts two", role: "radiogroup" }, ...cards),
+    h("div", { class: "wopts", role: "radiogroup" }, ...cards),
     h("p", { class: "g-help" }, WINDOWS_HELP[mode] + mac));
 }
 
