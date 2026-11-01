@@ -123,7 +123,7 @@ html.dev body { background: #2b2f38; }
   display: grid; place-items: center;
   background: none; border: none; border-radius: 8px;
   color: var(--dim); cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, transform 0.14s cubic-bezier(0.3, 0.7, 0.4, 1.4);
 }
 .icon-btn:hover { background: rgba(255, 255, 255, 0.09); color: var(--ink); }
 .icon-btn:focus-visible, .btn:focus-visible, .side-btn:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
@@ -136,16 +136,21 @@ html.dev body { background: #2b2f38; }
   position: absolute;
   inset: 0;
   opacity: 0;
-  transform: scale(0.97);
+  transform: scale(0.97) translateY(4px);
   pointer-events: none;
-  transition: opacity 0.16s ease-in;
+  transition: opacity 0.16s ease-in, transform 0.16s ease-in;
 }
 .view.on {
   opacity: 1;
   transform: none;
   pointer-events: auto;
-  transition: opacity 0.2s ease-out 0.06s;
+  transition: opacity 0.22s ease-out 0.06s, transform 0.36s cubic-bezier(0.2, 0.9, 0.25, 1.05) 0.04s;
 }
+
+/* Buttons give a little under the finger; a swapped icon (play ↔ pause) pops in. */
+.icon-btn:active, .btn:active { transform: scale(0.9); transition-duration: 0.06s; }
+.np-btn svg, .m-btn svg { animation: icon-pop 0.24s cubic-bezier(0.3, 0.7, 0.4, 1.3); }
+@keyframes icon-pop { from { transform: scale(0.6); opacity: 0.4; } }
 
 /* home */
 .h-text { position: absolute; left: 96px; right: 150px; top: 2px; }
@@ -159,7 +164,7 @@ html.dev body { background: #2b2f38; }
   border: none; border-radius: 999px;
   background: rgba(255, 255, 255, 0.1); color: var(--ink);
   cursor: pointer; white-space: nowrap;
-  transition: background 0.12s;
+  transition: background 0.12s, transform 0.14s cubic-bezier(0.3, 0.7, 0.4, 1.4);
 }
 .btn:hover { background: rgba(255, 255, 255, 0.18); }
 .btn.primary { background: var(--ink); color: #000; }
@@ -176,7 +181,7 @@ html.dev body { background: #2b2f38; }
   border: none; border-radius: 8px;
   background: rgba(255, 255, 255, 0.07); color: var(--dim);
   font-size: 10px; cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, transform 0.14s cubic-bezier(0.3, 0.7, 0.4, 1.4);
 }
 .side-btn:hover { background: rgba(255, 255, 255, 0.16); color: var(--ink); }
 .side-btn.on { background: var(--teal); color: #04201c; }
@@ -564,6 +569,11 @@ html.dev body { background: #2b2f38; }
 .m-lyr { margin-left: 6px; }
 .m-bar { margin-top: 10px; }
 .m-btn.m-jump { width: 30px; }
+@media (prefers-reduced-motion: reduce) {
+  .view, .view.on { transform: none; transition: opacity 0.15s; }
+  .np-btn svg, .m-btn svg, .video.on .vd-frame { animation: none; }
+  .icon-btn:active, .btn:active { transform: none; }
+}
 .m-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .m-line { font-size: 14.5px; font-weight: 650; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .m-line.next { font-size: 12.5px; font-weight: 500; color: var(--dim); margin-top: 1px; }
@@ -602,6 +612,8 @@ html.dev body { background: #2b2f38; }
 
 /* ── a video playing on in the bar ───────────────────────────────────────── */
 .vd-frame { position: absolute; inset: 0; border-radius: 14px; overflow: hidden; background: #000; }
+.video.on .vd-frame { animation: vd-in 0.42s cubic-bezier(0.2, 0.9, 0.25, 1.05) both; }
+@keyframes vd-in { from { opacity: 0; transform: scale(0.92); border-radius: 22px; } }
 .vd-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
 .vd-row { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s ease; }
 .video:hover .vd-row { opacity: 1; }
@@ -624,8 +636,11 @@ html.dev body { background: #2b2f38; }
 /* ── a song's progress you can jump along ────────────────────────────────── */
 .seek { position: relative; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); }
 .seek::before { content: ""; position: absolute; inset: -7px 0; }
-.seek i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--teal); border-radius: 2px; }
-.seek b { position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: #fff; opacity: 0; transform: scale(0.4); transition: opacity 0.15s, transform 0.15s; pointer-events: none; }
+.seek i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--teal); border-radius: 2px; transition: width 0.2s linear; }
+.seek b { transition: opacity 0.15s, transform 0.15s, left 0.2s linear; }
+.seek.drag i, .seek.drag b { transition: none; }
+.seek { transition: height 0.15s ease; }
+.seek b { position: absolute; top: 50%; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: #fff; opacity: 0; transform: scale(0.4); pointer-events: none; }
 .seek.can { cursor: pointer; }
 .seek.can:hover, .seek.drag { height: 5px; }
 .seek.can:hover b, .seek.drag b { opacity: 1; transform: none; }

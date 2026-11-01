@@ -1661,6 +1661,7 @@ impl Actor {
             .filter(|(_, p)| p.as_str() == pid)
         {
             self.mirrors_out.remove(id);
+            self.frames_out.remove(id);
             self.sh.platform.mirror_release(*id, None);
         }
         for (id, _) in self

@@ -199,7 +199,7 @@ fn lyrics_ovh(title: &str, artist: &str) -> Result<Option<Lyrics>, String> {
     if artist.trim().is_empty() {
         return Ok(None);
     }
-    let enc = |s: &str| s.trim().replace('/', " ").replace('?', " ");
+    let enc = |s: &str| s.trim().replace(['/', '?'], " ");
     let url = format!(
         "https://api.lyrics.ovh/v1/{}/{}",
         urlencode(&enc(artist)),
@@ -518,7 +518,9 @@ mod sys {
                 .and_then(|s| read(&s, last.as_ref()))
                 .filter(|n| !n.title.is_empty())
                 .map(|mut n| {
-                    n.video_hidden = video_window(&n.title).is_some_and(|(_, min)| min);
+                    let app = n.app.to_lowercase();
+                    let browser = ["chrome", "edge", "firefox", "brave", "opera", "vivaldi"].iter().any(|b| app.contains(b));
+                    n.video_hidden = browser && video_window(&n.title).is_some_and(|(_, min)| min);
                     n
                 });
             // The island moves the position on by itself: send when anything else changes,
@@ -529,7 +531,7 @@ mod sys {
                 (Some(a), Some(b)) => {
                     let same = NowPlaying { position_ms: 0, ..a.clone() } == NowPlaying { position_ms: 0, ..b.clone() };
                     let thinks = sent.0 + if b.playing { sent.1.elapsed().as_millis() as u64 } else { 0 };
-                    !same || thinks.abs_diff(b.position_ms) > 250
+                    !same || b.duration_ms > 0 && thinks.abs_diff(b.position_ms) > 250
                 }
                 _ => true,
             };
