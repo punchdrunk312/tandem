@@ -478,6 +478,8 @@ export class Island {
           this.pillSuppressed = false;
           this.flashState("error", 3200);
           this.ping("error");
+          // A send that failed (not one you cancelled): Bob facepalms.
+          if (t.message !== "Cancelled") this.engine.gesture("facepalm");
           this.reveal();
         }
       }
