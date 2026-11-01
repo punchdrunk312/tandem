@@ -2425,6 +2425,18 @@ impl Actor {
             CaptureEvent::Input(ev) => {
                 self.track_button(&ev);
                 if let Control::Remote { peer, .. } = &self.control {
+                    // Our mouse on another computer's window, shown here: the pointer on it
+                    // moves now, not after the round trip (that computer moves the window's
+                    // pointer by the same amount; it only sends back the pointer's shape).
+                    if let (InputEvent::MouseMove { dx, dy }, Some(id)) =
+                        (&ev, self.portal.as_ref().filter(|p| !p.owner && p.peer == *peer).map(|p| p.id))
+                    {
+                        let k = self.mk(id);
+                        if let Some(p) = self.portal.as_mut() {
+                            p.at = (p.at.0 + crate::span::sc(*dx, k), p.at.1 + crate::span::sc(*dy, k));
+                            self.sh.platform.mirror_cursor(id, Some(p.at));
+                        }
+                    }
                     if let Some(s) = self.sessions.get(peer) {
                         let _ = s.tx.send(Msg::Input(ev));
                     }
@@ -3414,9 +3426,14 @@ impl Actor {
                     .as_mut()
                     .filter(|p| !p.owner && p.peer == from && p.id == id)
                 {
-                    let (rx, ry) = (crate::span::sc(rx, k), crate::span::sc(ry, k));
-                    p.at = (rx, ry);
-                    plat.mirror_cursor(id, Some((rx, ry)));
+                    // Our own mouse drives it: the pointer already moved here (see Input);
+                    // the position sent back is a round trip old. Theirs: follow it.
+                    let ours = matches!(&self.control, Control::Remote { peer, .. } if peer == from);
+                    if !ours {
+                        let (rx, ry) = (crate::span::sc(rx, k), crate::span::sc(ry, k));
+                        p.at = (rx, ry);
+                        plat.mirror_cursor(id, Some((rx, ry)));
+                    }
                 }
             }
             Msg::MirrorMoved { id, dx, dy, done } => {
