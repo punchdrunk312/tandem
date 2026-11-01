@@ -1479,6 +1479,11 @@ pub fn run() {
             ai::ai_key_set,
             ai::ai_ask,
             ai::ai_copy,
+            ai::media_play_on,
+            media::media_outputs,
+            media::media_set_output,
+            media::media_volume,
+            media::media_set_volume,
             media::media_show_video,
         ])
         .build(tauri::generate_context!())

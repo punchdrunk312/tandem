@@ -57,6 +57,37 @@ pub fn media_control(action: String) -> Result<(), String> {
     }
 }
 
+/// The program behind a player's id ("Spotify.exe", "Chrome", "MSEdge", an app's
+/// "…!Spotify"), as the Volume Mixer knows it.
+fn exe_hint(app: &str) -> String {
+    let a = app.to_lowercase();
+    for (k, exe) in [("spotify", "spotify"), ("chrome", "chrome"), ("msedge", "msedge"), ("firefox", "firefox"), ("308046b0af4a39cb", "firefox"), ("brave", "brave"), ("opera", "opera"), ("vlc", "vlc"), ("zune", "microsoft.media.player"), ("music", "microsoft.media.player")] {
+        if a.contains(k) {
+            return exe.into();
+        }
+    }
+    a.rsplit('!').next().unwrap_or(&a).trim_end_matches(".exe").to_string()
+}
+
+/// Speakers, headphones…: where the sound can go, and which is used now.
+#[tauri::command]
+pub fn media_outputs() -> Vec<tandem_core::audio::Output> {
+    tandem_core::audio::outputs()
+}
+#[tauri::command]
+pub fn media_set_output(id: String) -> Result<(), String> {
+    tandem_core::audio::set_output(&id)
+}
+/// The playing app's own volume (0..1), as in the Volume Mixer.
+#[tauri::command]
+pub fn media_volume(app: String) -> Option<f32> {
+    tandem_core::audio::app_volume(&exe_hint(&app))
+}
+#[tauri::command]
+pub fn media_set_volume(app: String, volume: f32) -> Result<(), String> {
+    tandem_core::audio::set_app_volume(&exe_hint(&app), volume)
+}
+
 /// Time-stamped lyrics ("[mm:ss.xx] line" per line), or plain lyrics, or None.
 /// Runs off the UI thread: Tauri runs async commands on its own pool.
 #[tauri::command]
@@ -569,6 +600,11 @@ mod sys {
                     .and_then(|o| o.get())
                     .map_err(|e| e.to_string())?;
                 return if ok { Ok(()) } else { Err("This player doesn't let CubeCursor jump around in the song.".into()) };
+            }
+            rate if rate.starts_with("rate:") => {
+                let r: f64 = rate[5..].parse().map_err(|_| "bad rate")?;
+                let ok = s.TryChangePlaybackRateAsync(r).and_then(|o| o.get()).map_err(|e| e.to_string())?;
+                return if ok { Ok(()) } else { Err("This player doesn't let CubeCursor change its speed.".into()) };
             }
             other => return Err(format!("unknown media action {other}")),
         };

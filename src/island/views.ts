@@ -104,7 +104,7 @@ export function buildHeader(a: ViewActions): ViewHost {
       game.classList.toggle("on", State.view === "game");
       ai.classList.toggle("on", State.view === "ai" || State.view === "agent");
       ai.classList.toggle("ping", [...agents.values()].some((e) => e.state === "approve" || e.state === "waiting"));
-      title.textContent = State.view === "ai" ? "AI agents" : State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
+      title.textContent = State.view === "lyrics" ? "Lyrics" : State.view === "stats" ? "Your week in music" : State.view === "ai" ? "AI agents" : State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
       sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
     },
   };
@@ -723,6 +723,20 @@ export interface MediaActions {
   toggleLyrics(): void;
 }
 
+/** The media view's extra row: app volume, where the sound goes, speed, sleep timer. */
+export interface MediaMore {
+  audio(): Promise<{ volume: number | null; outputs: { id: string; name: string; default: boolean }[] }>;
+  setVolume(v: number): void;
+  setOutput(id: string): void;
+  speed(): number;
+  setSpeed(r: number): void;
+  /** Minutes left on the sleep timer (0: off). */
+  sleepLeft(): number;
+  cycleSleep(): void;
+  openLyrics(): void;
+  openStats(): void;
+}
+
 /** Where the song is now: the last position Windows gave, moved on while it plays. */
 export function mediaPosition(): number {
   const m = State.media;
@@ -894,7 +908,7 @@ function seekBar(cls: string, a: MediaActions): { el: HTMLElement; show(ms: numb
 }
 
 /** "Spotify" from "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" or "Spotify.exe". */
-function appName(id: string): string {
+export function appName(id: string): string {
   const last = id.split("!").pop() ?? id;
   const base = last.replace(/\.exe$/i, "").split(".").pop() ?? last;
   if (/^msedge$/i.test(base)) return "Edge";
@@ -911,7 +925,7 @@ const MEDIA_ICON = {
 };
 
 /** The song, how far along it is, play/pause/skip, and (if wanted) the lyric being sung. */
-export function buildMedia(a: MediaActions): ViewHost {
+export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const app = h("div", { class: "m-app" });
   const title = h("div", { class: "m-title" });
   const artist = h("div", { class: "m-artist" });
@@ -933,7 +947,33 @@ export function buildMedia(a: MediaActions): ViewHost {
   const line = h("div", { class: "m-line" });
   const lineNext = h("div", { class: "m-line next" });
   const empty = h("div", { class: "m-empty", text: "Nothing is playing. Start a song in Spotify, a browser or any player, and it shows up here." });
-  const body = h("div", { class: "m-text" }, app, title, artist, h("div", { class: "m-row" }, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext);
+  // The second row: the app's own volume, where the sound comes out, speed, sleep, more.
+  const vol = h("input", { type: "range", class: "m-vol", min: "0", max: "1", step: "0.02", title: "This app's volume", "aria-label": "App volume" }) as HTMLInputElement;
+  let volT = 0;
+  vol.oninput = () => { window.clearTimeout(volT); volT = window.setTimeout(() => a.setVolume(Number(vol.value)), 40); };
+  const out = h("select", { class: "m-out", title: "Where the sound comes out", "aria-label": "Sound output" }) as HTMLSelectElement;
+  out.onchange = () => { a.blip(); a.setOutput(out.value); };
+  const speed = h("button", { class: "btn m-chip", title: "Playback speed", onclick: () => {
+    const steps = [1, 1.25, 1.5, 2, 0.75];
+    a.blip();
+    a.setSpeed(steps[(steps.indexOf(a.speed()) + 1) % steps.length]);
+  } });
+  const sleep = h("button", { class: "btn m-chip", title: "Sleep timer: the music stops by itself", onclick: () => { a.blip(); a.cycleSleep(); } });
+  const full = h("button", { class: "btn m-chip", text: "All lyrics", title: "The whole song's words", onclick: () => { a.blip(); a.openLyrics(); } });
+  const stats = h("button", { class: "btn m-chip", text: "📊", title: "What you listened to this week", onclick: () => { a.blip(); a.openStats(); } });
+  const row2 = h("div", { class: "m-row2" }, svg("M4 9v6h4l5 4V5L8 9H4z", 14, { stroke: 1.8 }), vol, out, speed, sleep, full, stats);
+  let wasOpen = false;
+  const loadAudio = () => void a.audio().then(({ volume, outputs }) => {
+    vol.disabled = volume == null;
+    if (volume != null) vol.value = String(volume);
+    const peers = State.connectedPeers.filter((p) => !p.fleet);
+    const sel = State.snap?.audio_out ? `pc:${State.snap.audio_out}` : outputs.find((o) => o.default)?.id ?? "";
+    out.replaceChildren(
+      ...outputs.map((o) => h("option", { value: o.id, text: o.name || "Speakers" })),
+      ...peers.map((p) => h("option", { value: `pc:${p.id}`, text: `🖥 ${p.name}` })));
+    out.value = sel;
+  });
+  const body = h("div", { class: "m-text" }, app, title, artist, h("div", { class: "m-row" }, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext, row2);
   const el = h("div", { class: "view media" }, body, empty);
   const mmss = (ms: number) => {
     const s = Math.floor(ms / 1000);
@@ -946,7 +986,16 @@ export function buildMedia(a: MediaActions): ViewHost {
       const m = State.media;
       body.hidden = !m;
       empty.hidden = !!m;
+      const open = State.view === "media";
+      if (open && !wasOpen) loadAudio();
+      wasOpen = open;
       if (!m) return;
+      const r = a.speed();
+      speed.textContent = `${r}×`;
+      speed.classList.toggle("on", r !== 1);
+      const left = a.sleepLeft();
+      sleep.textContent = left ? `🌙 ${left} min` : "🌙";
+      sleep.classList.toggle("on", left > 0);
       app.textContent = appName(m.app);
       title.textContent = m.title;
       artist.textContent = [m.artist, m.album].filter(Boolean).join(" · ");
@@ -1023,14 +1072,19 @@ export function buildRecipients(a: RecipientActions): ViewHost {
 }
 
 /** A YouTube video playing on in the bar (its browser is minimised): the video, and
- *  buttons to send it back to the browser or close it. Reports how far it has got. */
-export function buildVideo(a: { blip(): void; back(): void; close(): void }): ViewHost {
+ *  buttons to send it back to the browser, on to another computer, or close it. Reports
+ *  how far it has got. */
+export function buildVideo(a: { blip(): void; back(): void; close(): void; sendTo(peerId: string): void }): ViewHost {
   const frame = h("div", { class: "vd-frame" });
   const back = h("button", { class: "icon-btn vd-btn", title: "Back to the browser", "aria-label": "Back to the browser", onclick: () => { a.blip(); a.back(); } },
     svg("M4 5h16v11H4zM8 20h8M12 16v4", 14, { stroke: 2 }));
   const close = h("button", { class: "icon-btn vd-btn", title: "Close (stays paused in the browser)", "aria-label": "Close", onclick: () => { a.blip(); a.close(); } },
     svg("M6 6l12 12M18 6L6 18", 12, { stroke: 2 }));
-  const el = h("div", { class: "view video" }, frame, h("div", { class: "vd-row" }, back, close));
+  const away = h("button", { class: "icon-btn vd-btn vd-away", "aria-label": "Play it on another computer", onclick: () => {
+    const p = State.connectedPeers.find((x) => !x.fleet);
+    if (p) { a.blip(); a.sendTo(p.id); }
+  } }, svg("M3 5h12v9H3zM7 18h4M9 14v4M15 12h6m-3-3 3 3-3 3", 14, { stroke: 2 }));
+  const el = h("div", { class: "view video" }, frame, h("div", { class: "vd-row" }, away, back, close));
   let shown = "";
   let player: HTMLIFrameElement | null = null;
   // The YouTube player says where it is when asked to "listen".
@@ -1045,6 +1099,9 @@ export function buildVideo(a: { blip(): void; back(): void; close(): void }): Vi
   return {
     el,
     sync() {
+      const peer = State.connectedPeers.find((x) => !x.fleet);
+      away.hidden = !peer;
+      away.title = peer ? `Play it on ${peer.name}` : "";
       const v = State.video;
       const key = v ? `${v.id}@${v.startMs}` : "";
       if (key === shown) return;
@@ -1414,6 +1471,105 @@ export function buildAi(a: {
     askNow(q) {
       input.value = q.length > 300 ? q.slice(0, 300) + "…" : q;
       void ask(q);
+    },
+  };
+}
+
+// ------------------------------------------------------------------ all the lyrics
+
+/** The whole song's words, the line being sung in the middle and lit up. */
+export function buildLyrics(a: { back(): void }): ViewHost {
+  const list = h("div", { class: "ly-list" });
+  const msg = h("div", { class: "ly-msg" });
+  const el = h("div", { class: "view lyrics" }, list, msg,
+    h("button", { class: "btn ly-back", text: "Back", onclick: () => a.back() }));
+  let built = "";
+  let at = -2;
+  let rows: HTMLElement[] = [];
+  return {
+    el,
+    sync() {
+      if (State.view !== "lyrics") return;
+      const l = State.lyrics;
+      const key = `${State.lyricsFor}|${Array.isArray(l) ? l.length : typeof l}`;
+      if (key !== built) {
+        built = key;
+        at = -2;
+        if (Array.isArray(l)) {
+          rows = l.map((x) => h("div", { class: "ly-line", text: x.text || "♪" }));
+          list.replaceChildren(...rows);
+          msg.textContent = "";
+        } else if (typeof l === "string") {
+          rows = [];
+          list.replaceChildren(...l.split("\n").map((x) => h("div", { class: "ly-line plain", text: x })));
+          msg.textContent = "";
+        } else {
+          rows = [];
+          list.replaceChildren();
+          msg.textContent = State.settings.lyrics ? "Looking up the lyrics…" : "Turn lyrics on (the Lyrics button) to see the words.";
+        }
+      }
+      if (!rows.length || !Array.isArray(l)) return;
+      const ms = mediaPosition();
+      let i = -1;
+      for (let k = 0; k < l.length && l[k].ms <= ms; k++) i = k;
+      if (i === at) return;
+      at = i;
+      rows.forEach((r, k) => { r.classList.toggle("on", k === i); r.classList.toggle("past", k < i); });
+      const cur = rows[Math.max(0, i)];
+      list.scrollTo({ top: cur.offsetTop - list.clientHeight / 2 + cur.clientHeight / 2, behavior: "smooth" });
+    },
+  };
+}
+
+// ------------------------------------------------------------------ listening stats
+
+export interface ListenDay { t: number; a: Record<string, number>; s: Record<string, number> }
+export function loadListen(): Record<string, ListenDay> {
+  try { return JSON.parse(localStorage.getItem("cc.listen") || "{}") as Record<string, ListenDay>; } catch { return {}; }
+}
+export function dayKey(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/** The last 7 days added up: total seconds, top artists, top songs. */
+export function listenWeek(): { secs: number; artists: [string, number][]; songs: [string, number][] } {
+  const days = loadListen();
+  const a = new Map<string, number>(), s = new Map<string, number>();
+  let secs = 0;
+  for (let k = 0; k < 7; k++) {
+    const d = days[dayKey(new Date(Date.now() - k * 864e5))];
+    if (!d) continue;
+    secs += d.t;
+    for (const [n, v] of Object.entries(d.a)) a.set(n, (a.get(n) ?? 0) + v);
+    for (const [n, v] of Object.entries(d.s)) s.set(n, (s.get(n) ?? 0) + v);
+  }
+  const top = (m: Map<string, number>) => [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3);
+  return { secs, artists: top(a), songs: top(s) };
+}
+export const hoursText = (secs: number) => {
+  const m = Math.round(secs / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
+};
+
+export function buildStats(a: { back(): void }): ViewHost {
+  const big = h("div", { class: "st-big" });
+  const cols = h("div", { class: "st-cols" });
+  const el = h("div", { class: "view stats" }, h("div", { class: "st-text" }, big, cols),
+    h("button", { class: "btn ly-back", text: "Back", onclick: () => a.back() }));
+  let was = false;
+  return {
+    el,
+    sync() {
+      const open = State.view === "stats";
+      if (open && !was) {
+        const w = listenWeek();
+        big.textContent = w.secs ? `${hoursText(w.secs)} of music this week 🎧` : "No music this week yet 🎧";
+        const col = (t: string, list: [string, number][]) => h("div", { class: "st-col" }, h("div", { class: "st-h", text: t }),
+          ...(list.length ? list.map(([n, v], i) => h("div", { class: "st-row" }, h("b", { text: `${i + 1}` }), h("span", { text: n }), h("small", { text: hoursText(v) })))
+            : [h("div", { class: "st-row" }, h("span", { text: "—" }))]));
+        cols.replaceChildren(col("Top artists", w.artists), col("Top songs", w.songs));
+      }
+      was = open;
     },
   };
 }

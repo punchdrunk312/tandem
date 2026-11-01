@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai" | "lyrics" | "stats";
 
 export type BotStateName =
   | "idle"
@@ -52,7 +52,11 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   // The focus timer: Bob on the left keeping time, the clock in the middle.
   focus: { height: 162, botX: 68, botY: 98, botDiameter: 58 },
   // Now playing: Bob listens on the left, the song, its progress, buttons and a lyric line.
-  media: { height: 176, botX: 68, botY: 100, botDiameter: 58 },
+  media: { height: 212, botX: 68, botY: 112, botDiameter: 58 },
+  // All the words of the song, the line being sung in the middle (Bob steps aside).
+  lyrics: { height: 320, botX: 0, botY: 0, botDiameter: 0 },
+  // What you listened to this week: Bob on the left with his headphones.
+  stats: { height: 190, botX: 68, botY: 110, botDiameter: 58 },
   // Who gets the dropped files: a chip per connected computer (Bob steps aside).
   recipients: { height: 214, botX: 0, botY: 0, botDiameter: 0 },
   // A song just started: a slim strip with Bob, the song and two buttons (no header).

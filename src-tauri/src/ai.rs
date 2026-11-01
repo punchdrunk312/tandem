@@ -494,20 +494,32 @@ fn on_relay(m: tandem_core::node::RelayIn) {
             }
         }
         "ai_send" => receive_send(&m.from_name, &v),
+        "audio_pull" => {
+            if let Some(st) = ai().app.try_state::<AppState>() {
+                st.node.hear_audio(m.from.clone(), v["on"].as_bool().unwrap_or(false));
+            }
+        }
         "instr" => receive_instructions(&v),
         k if k.starts_with("ui:") => to_bar("relay", &json!({ "from": m.from, "fromName": m.from_name, "kind": k, "json": m.json })),
         _ => {}
     }
 }
 
-/// The bar's own relays (the prompt library), to every other computer.
+/// The bar's own relays (the prompt library, a video moving over), to one computer or
+/// every other one.
 #[tauri::command]
-pub fn ai_relay(kind: String, json: String) {
+pub fn ai_relay(kind: String, json: String, to: Option<String>) {
     if kind.starts_with("ui:") {
         if let Some(st) = ai().app.try_state::<AppState>() {
-            st.node.relay(None, kind, json);
+            st.node.relay(to, kind, json);
         }
     }
+}
+
+/// Play this computer's sound on that one's speakers (it asks for it, as "Hear it" does).
+#[tauri::command]
+pub fn media_play_on(peer_id: String, on: bool) {
+    relay(Some(peer_id), "audio_pull", &json!({ "on": on }));
 }
 
 // ------------------------------------------------------------------ MCP

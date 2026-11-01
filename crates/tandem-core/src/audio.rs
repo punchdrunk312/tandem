@@ -255,3 +255,159 @@ mod imp {
         }
     }
 }
+
+/// A place sound can come out of: speakers, headphones, a monitor, a headset.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Output {
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+}
+
+#[cfg(windows)]
+pub use devices::{app_volume, outputs, set_app_volume, set_output};
+
+#[cfg(not(windows))]
+pub fn outputs() -> Vec<Output> {
+    vec![]
+}
+#[cfg(not(windows))]
+pub fn set_output(_id: &str) -> Result<(), String> {
+    Err("Works on Windows for now".into())
+}
+#[cfg(not(windows))]
+pub fn app_volume(_app: &str) -> Option<f32> {
+    None
+}
+#[cfg(not(windows))]
+pub fn set_app_volume(_app: &str, _v: f32) -> Result<(), String> {
+    Err("Works on Windows for now".into())
+}
+
+/// Windows' sound outputs and each app's own volume (the Volume Mixer).
+#[cfg(windows)]
+mod devices {
+    use super::Output;
+    use std::ffi::c_void;
+    use windows::core::{Interface, GUID, HRESULT, IUnknown, PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{CloseHandle, PROPERTYKEY};
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator,
+        DEVICE_STATE_ACTIVE,
+    };
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ};
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    const FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY { fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0), pid: 14 };
+
+    fn enumerator() -> windows::core::Result<IMMDeviceEnumerator> {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        }
+    }
+    unsafe fn take(p: PWSTR) -> String {
+        let s = p.to_string().unwrap_or_default();
+        CoTaskMemFree(Some(p.0 as *const c_void));
+        s
+    }
+
+    pub fn outputs() -> Vec<Output> {
+        let run = || -> windows::core::Result<Vec<Output>> {
+            let en = enumerator()?;
+            let def = unsafe { en.GetDefaultAudioEndpoint(eRender, eConsole).and_then(|d| d.GetId()).map(|p| take(p)).unwrap_or_default() };
+            let all = unsafe { en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)? };
+            let mut out = vec![];
+            for i in 0..unsafe { all.GetCount()? } {
+                let d = unsafe { all.Item(i)? };
+                let id = unsafe { take(d.GetId()?) };
+                let name = unsafe { d.OpenPropertyStore(STGM_READ).and_then(|s| s.GetValue(&FRIENDLY_NAME)).map(|v| v.to_string()).unwrap_or_default() };
+                out.push(Output { default: id == def, id, name });
+            }
+            Ok(out)
+        };
+        run().unwrap_or_default()
+    }
+
+    /// Makes this output the default for everything (as the Sound settings do).
+    pub fn set_output(id: &str) -> Result<(), String> {
+        // IPolicyConfig: not in the SDK, but what Windows' own Sound settings use.
+        #[repr(C)]
+        struct Vtbl {
+            _skip: [usize; 13],
+            set_default: unsafe extern "system" fn(*mut c_void, PCWSTR, i32) -> HRESULT,
+        }
+        const CLSID: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+        const IID: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let unk: IUnknown = CoCreateInstance(&CLSID, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+            let mut p: *mut c_void = std::ptr::null_mut();
+            unk.query(&IID, &mut p).ok().map_err(|e| e.to_string())?;
+            let policy = IUnknown::from_raw(p);
+            let vt = *(p as *const *const Vtbl);
+            let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+            for role in 0..3 {
+                ((*vt).set_default)(p, PCWSTR(wide.as_ptr()), role).ok().map_err(|e| e.to_string())?;
+            }
+            drop(policy);
+        }
+        Ok(())
+    }
+
+    fn exe_of(pid: u32) -> String {
+        unsafe {
+            let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return String::new() };
+            let mut buf = [0u16; 520];
+            let mut n = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n).is_ok();
+            let _ = CloseHandle(h);
+            if !ok {
+                return String::new();
+            }
+            let path = String::from_utf16_lossy(&buf[..n as usize]);
+            path.rsplit(['\\', '/']).next().unwrap_or("").trim_end_matches(".exe").to_lowercase()
+        }
+    }
+
+    /// The volume controls of every sound session of this app (a browser has several).
+    fn sessions(app: &str) -> Vec<ISimpleAudioVolume> {
+        let want = app.to_lowercase();
+        let run = || -> windows::core::Result<Vec<ISimpleAudioVolume>> {
+            let en = enumerator()?;
+            let dev = unsafe { en.GetDefaultAudioEndpoint(eRender, eConsole)? };
+            let mgr: IAudioSessionManager2 = unsafe { dev.Activate(CLSCTX_ALL, None)? };
+            let list = unsafe { mgr.GetSessionEnumerator()? };
+            let mut out = vec![];
+            for i in 0..unsafe { list.GetCount()? } {
+                let c = unsafe { list.GetSession(i)? };
+                let Ok(c2) = c.cast::<IAudioSessionControl2>() else { continue };
+                let pid = unsafe { c2.GetProcessId().unwrap_or(0) };
+                if pid == 0 || exe_of(pid) != want {
+                    continue;
+                }
+                if let Ok(v) = c.cast::<ISimpleAudioVolume>() {
+                    out.push(v);
+                }
+            }
+            Ok(out)
+        };
+        run().unwrap_or_default()
+    }
+
+    /// This app's own volume (0..1), if it is making sound.
+    pub fn app_volume(app: &str) -> Option<f32> {
+        sessions(app).first().and_then(|v| unsafe { v.GetMasterVolume().ok() })
+    }
+
+    pub fn set_app_volume(app: &str, v: f32) -> Result<(), String> {
+        let list = sessions(app);
+        if list.is_empty() {
+            return Err("That app isn't making any sound right now.".into());
+        }
+        for s in list {
+            unsafe { s.SetMasterVolume(v.clamp(0.0, 1.0), std::ptr::null()).map_err(|e| e.to_string())? };
+        }
+        Ok(())
+    }
+}

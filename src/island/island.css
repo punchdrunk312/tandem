@@ -868,3 +868,33 @@ html.dev body { background: #2b2f38; }
 .ai-prompts { display: flex; flex-wrap: wrap; gap: 6px; }
 .ai-chip { font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink); padding: 4px 10px; border-radius: 999px; border: none; background: rgba(255, 255, 255, 0.1); cursor: pointer; max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ai-chip:hover { background: rgba(255, 255, 255, 0.2); }
+
+/* ── music: the second row, all the lyrics, the week in music ─────────────── */
+.m-row2 { display: flex; align-items: center; gap: 7px; margin-top: 8px; color: var(--dim); }
+.m-vol { width: 84px; accent-color: var(--accent, #2dd4bf); }
+.m-vol:disabled { opacity: 0.35; }
+.m-out { max-width: 150px; font: inherit; font-size: 11.5px; color: var(--ink); background: rgba(255, 255, 255, 0.08); border: none; border-radius: 999px; padding: 4px 8px; outline: none; cursor: pointer; }
+.m-out option { color: #000; }
+.m-chip { padding: 4px 9px; font-size: 11.5px; }
+.m-chip.on { background: rgba(255, 255, 255, 0.22); }
+
+.lyrics { padding: 0 22px 12px; }
+.ly-list { position: absolute; inset: 0 22px 44px; overflow-y: auto; scrollbar-width: none; mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent); padding: 90px 0; }
+.ly-list::-webkit-scrollbar { display: none; }
+.ly-line { font-size: 17px; font-weight: 650; line-height: 1.35; padding: 5px 0; color: var(--dim-2); opacity: 0.55; transition: color 0.35s, opacity 0.35s, transform 0.35s; transform-origin: left center; }
+.ly-line.past { opacity: 0.35; }
+.ly-line.on { color: var(--ink); opacity: 1; transform: scale(1.06); }
+.ly-line.plain { font-size: 14px; opacity: 0.85; color: var(--ink); }
+.ly-msg { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); font-size: 13px; pointer-events: none; }
+.ly-msg:empty { display: none; }
+.ly-back { position: absolute; right: 18px; bottom: 10px; }
+
+.stats { display: flex; align-items: center; padding: 0 24px 0 132px; }
+.st-big { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 10px; }
+.st-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.st-h { font-size: 10.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim-2); margin-bottom: 4px; }
+.st-row { display: flex; align-items: baseline; gap: 7px; font-size: 12.5px; min-width: 0; padding: 2px 0; }
+.st-row b { color: var(--dim-2); width: 10px; }
+.st-row span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-row small { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.vd-away[hidden] { display: none; }

@@ -19,6 +19,7 @@ import { State } from "./state";
 import { buildGame } from "./game";
 import { buildSuggest, buildTour, type Suggestion, type TourStep } from "./views";
 import { agentKey, agents, buildAgent, buildAi, loadPrompts, type AgentEv, type Prompt } from "./views";
+import { appName, buildLyrics, buildStats, dayKey, hoursText, listenWeek, loadListen } from "./views";
 import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
@@ -267,7 +268,47 @@ export class Island {
       control: (action) => mediaControl(action),
       seek: mediaSeek,
       toggleLyrics: () => this.toggleLyrics(),
+      audio: async () => {
+        const app = State.media?.app ?? "";
+        const [volume, outputs] = await Promise.all([
+          call<number | null>("media_volume", { app }).catch(() => null),
+          call<{ id: string; name: string; default: boolean }[]>("media_outputs").catch(() => []),
+        ]);
+        return { volume, outputs };
+      },
+      setVolume: (v) => void call("media_set_volume", { app: State.media?.app ?? "", volume: v }).catch((e) => this.showNote(String(e), 2600, "home")),
+      setOutput: (id) => {
+        const was = State.snap?.audio_out;
+        if (id.startsWith("pc:")) {
+          fire("media_play_on", { peerId: id.slice(3), on: true });
+          this.showNote("🔊 Your sound is moving over…", 2400, "home");
+          return;
+        }
+        if (was) fire("media_play_on", { peerId: was, on: false });
+        void call("media_set_output", { id }).catch((e) => this.showNote(String(e), 3000, "home"));
+      },
+      speed: () => this.mediaRate,
+      setSpeed: (r) => void call("media_control", { action: `rate:${r}` }).then(
+        () => { this.mediaRate = r; State.notify(); },
+        (e) => this.showNote(String(e), 3000, "home")),
+      sleepLeft: () => (this.sleepAt ? Math.max(1, Math.ceil((this.sleepAt - Date.now()) / 60_000)) : 0),
+      cycleSleep: () => {
+        const steps = [0, 15, 30, 60];
+        const left = this.sleepAt ? Math.ceil((this.sleepAt - Date.now()) / 60_000) : 0;
+        const next = steps.find((s) => s > left) ?? 0;
+        this.sleepAt = next ? Date.now() + next * 60_000 : 0;
+        if (next) this.engine.triggerEmote("yawn", 1);
+        State.notify();
+      },
+      openLyrics: () => {
+        if (!State.settings.lyrics) this.toggleLyrics();
+        this.setView("lyrics");
+      },
+      openStats: () => this.setView("stats"),
     }));
+    this.views.set("lyrics", buildLyrics({ back: () => this.setView("media") }));
+    this.views.set("stats", buildStats({ back: () => this.setView("media") }));
+    window.setInterval(() => this.listenTick(), 5000);
     this.views.set("recipients", buildRecipients({
       blip: () => Sound.play("blip"),
       toggle: (id) => {
@@ -303,6 +344,16 @@ export class Island {
       close: () => {
         if (State.video) this.videoClosedFor = State.video.title;
         this.endVideo(false);
+      },
+      sendTo: (peerId) => {
+        const v = State.video;
+        if (!v) return;
+        const peer = State.connectedPeers.find((p) => p.id === peerId);
+        fire("ai_relay", { kind: "ui:video", json: JSON.stringify({ id: v.id, title: v.title, ms: v.nowMs }), to: peerId });
+        this.videoClosedFor = v.title;
+        this.endVideo(false);
+        this.paperPlane(true, /left/i.test(peer?.side ?? "") ? -1 : 1);
+        this.autoly(() => this.showNote(`📺 Playing on ${peer?.name ?? "your other computer"}`, 2600));
       },
     }));
     this.views.set("nowplaying", buildNowPlaying({
@@ -516,6 +567,52 @@ export class Island {
     if (State.view === "tour") this.closeBar();
   }
 
+  // ── Music: speed, sleep timer, what you listened to ──────────────────────────
+
+  private mediaRate = 1;
+  private sleepAt = 0;
+  private lastSong = "";
+
+  /** Every 5 s: the sleep timer, and adding up what plays. */
+  private listenTick() {
+    if (this.sleepAt && Date.now() >= this.sleepAt) {
+      this.sleepAt = 0;
+      void call("media_control", { action: "pause" }).catch(() => {});
+      this.engine.triggerEmote("yawn", 4);
+      this.autoly(() => this.showNote("Good night 🌙 The music is off.", 4000));
+      State.notify();
+    }
+    const m = State.media;
+    if (m?.title !== this.lastSong) {
+      this.lastSong = m?.title ?? "";
+      this.mediaRate = 1;
+    }
+    if (m?.playing && !State.video) {
+      const days = loadListen();
+      const k = dayKey();
+      const d = days[k] ?? { t: 0, a: {}, s: {} };
+      d.t += 5;
+      const artist = (m.artist || appName(m.app)).split(/,|&| feat\./i)[0].trim();
+      if (artist) d.a[artist] = (d.a[artist] ?? 0) + 5;
+      const song = m.artist ? `${m.title} — ${artist}` : m.title;
+      if (song) d.s[song] = (d.s[song] ?? 0) + 5;
+      days[k] = d;
+      // Two weeks is plenty.
+      for (const key of Object.keys(days)) if (Date.now() - new Date(key).getTime() > 15 * 864e5) delete days[key];
+      try { localStorage.setItem("cc.listen", JSON.stringify(days)); } catch { /* fine */ }
+    }
+    // Sunday evening: the week in music.
+    const now = new Date();
+    if (now.getDay() === 0 && now.getHours() >= 18) {
+      const w = listenWeek();
+      if (w.secs > 3600) this.suggest("listen-week", {
+        title: `${hoursText(w.secs)} of music this week 🎧`,
+        sub: w.artists[0] ? `You played ${w.artists[0][0]} the most.` : "Nice taste.",
+        act: ["See more", () => window.setTimeout(() => this.setView("stats"), 50)],
+      });
+    }
+  }
+
   // ── AI agents ───────────────────────────────────────────────────────────────
 
   private agentView!: ReturnType<typeof buildAgent>;
@@ -579,8 +676,19 @@ export class Island {
   promptsChanged() {
     fire("ai_relay", { kind: "ui:prompts", json: JSON.stringify(loadPrompts()) });
   }
-  /** …or there: newest version of each wins. */
-  onRelay(m: { kind: string; json: string }) {
+  /** …or there: newest version of each wins. A video sent over plays on here. */
+  onRelay(m: { kind: string; json: string; fromName?: string }) {
+    if (m.kind === "ui:video") {
+      try {
+        const v = JSON.parse(m.json) as { id: string; title: string; ms: number };
+        State.video = { id: v.id, title: v.title, startMs: v.ms, nowMs: v.ms };
+        State.isPinned = true;
+        this.engine.triggerEmote("surprised", 0.6);
+        this.autoly(() => this.alert("video"));
+        State.notify();
+      } catch { /* not for us */ }
+      return;
+    }
     if (m.kind !== "ui:prompts") return;
     let theirs: Prompt[] = [];
     try { theirs = JSON.parse(m.json) as Prompt[]; } catch { return; }
