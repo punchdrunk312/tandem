@@ -2450,6 +2450,20 @@ impl Actor {
                 if let (Control::Remote { peer, .. }, Some(p)) = (&self.control, &self.portal) {
                     if p.owner && p.peer == *peer {
                         let (peer, id) = (peer.clone(), p.id);
+                        // The window came home or closed meanwhile: the mouse is ours again
+                        // (and the other computer lets go of it too).
+                        if !self.mirrors_out.contains_key(&id) {
+                            log::info!("portal: window {id} is no longer shown on {peer}: the mouse comes back");
+                            self.portal = None;
+                            self.sh.platform.portal_end();
+                            self.send_to(&peer, Msg::Release);
+                            let (x, y) = self.center();
+                            self.sh.platform.end_capture(x, y);
+                            self.sh.platform.pointer_hidden(false);
+                            self.set_control(Control::Local);
+                            self.held = None;
+                            return;
+                        }
                         self.sh.platform.inject(&ev);
                         if matches!(ev, InputEvent::MouseMove { .. }) && !self.left_down {
                             if let Some((rx, ry)) = self.sh.platform.portal_outside() {
