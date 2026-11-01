@@ -32,6 +32,7 @@ async function main() {
   await safe("hotkey listener", () => onEvent<"bar" | "pill">("hotkey", (what) => island.hotkey(what)));
   await safe("media listener", () => onEvent<import("./state").NowPlaying | null>("media", (m) => island.onMedia(m)));
   await safe("note listener", () => onEvent<string>("note", (msg) => island.note(msg)));
+  await safe("voice listener", () => onEvent<string>("voice", (text) => island.onVoice(text)));
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
@@ -67,6 +68,8 @@ async function main() {
   // The pairing/settings window edits the same settings entry.
   window.addEventListener("storage", (e) => {
     if (e.key === NOTES_KEY) island.reloadNotes();
+    // Settings → "Show me around again".
+    if (e.key === "cc.tourAgain") island.startTour();
     if (e.key === SETTINGS_KEY) {
       State.reloadSettings();
       island.applySettings();

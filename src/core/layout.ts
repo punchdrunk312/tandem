@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour";
 
 export type BotStateName =
   | "idle"
@@ -61,6 +61,12 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   video: { height: 250, botX: 0, botY: 0, botDiameter: 0, width: 428 },
   // This computer's charger, like a phone's: a slim wide pill, the battery left, the level right.
   charge: { height: 40, botX: 0, botY: 0, botDiameter: 0, width: 400 },
+  // Catch: the ball over the bar, Bob running along the bottom to catch it.
+  game: { height: 220, botX: 320, botY: 186, botDiameter: 44 },
+  // A suggestion: Bob on the left, the idea and a button.
+  suggest: { height: 124, botX: 62, botY: 74, botDiameter: 50 },
+  // The tour: Bob shows you round, a step at a time.
+  tour: { height: 160, botX: 70, botY: 98, botDiameter: 60 },
   // Notes: a reminder that is due, or the next note and a couple more, or writing one.
   notes: { height: 196, botX: 68, botY: 104, botDiameter: 58 },
   // A new version: Bob holds up the news, the words and two buttons beside him.

@@ -3888,6 +3888,7 @@ dependencies = [
  "tokio",
  "ureq",
  "windows 0.61.3",
+ "windows-collections 0.2.0",
 ]
 
 [[package]]

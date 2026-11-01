@@ -175,6 +175,17 @@ const FONT = `system-ui, "Segoe UI Variable Text", "Segoe UI", sans-serif`;
 // ── Engine ────────────────────────────────────────────────────────────────────
 
 /** The wardrobe the person can pick from (Bar & Bob settings), on top of any seasonal look. */
+const SKINS: Record<string, [RGB, RGB]> = {
+  "": [TEAL_TOP, TEAL_BOTTOM],
+  coral: [[1, 0.66, 0.58], [0.92, 0.33, 0.33]],
+  violet: [[0.78, 0.68, 1], [0.47, 0.33, 0.92]],
+  gold: [[1, 0.9, 0.5], [0.93, 0.63, 0.1]],
+  sky: [[0.6, 0.85, 1], [0.15, 0.52, 0.93]],
+  midnight: [[0.45, 0.52, 0.8], [0.13, 0.17, 0.42]],
+  pink: [[1, 0.72, 0.88], [0.9, 0.32, 0.6]],
+  lime: [[0.82, 1, 0.55], [0.4, 0.75, 0.12]],
+};
+
 const WARDROBE: Record<string, Partial<Look>> = {
   party: { hat: "party" },
   beanie: { hat: "beanie" },
@@ -256,6 +267,17 @@ export class Bob {
 
   /** Fired when three slaps land inside 1.7 s (→ dizzy + confused view). */
   onDizzy: (() => void) | null = null;
+
+  /** His colour (a skin): the light top and the deep bottom of his body. */
+  skinTop: RGB = TEAL_TOP;
+  skinBottom: RGB = TEAL_BOTTOM;
+  setSkin(id: string) {
+    const s = SKINS[id] ?? SKINS[""];
+    this.skinTop = s[0];
+    this.skinBottom = s[1];
+  }
+  /** How happy he is with you (0 … 1): it grows with use and drops when he's left alone. */
+  mood = 0.6;
 
   /** A song is playing: headphones on, nodding to the beat, notes floating up. */
   music = false;
@@ -818,6 +840,15 @@ export class Bob {
       this.ambient && this.state === "idle" && !this.isMini && this.morph < 0.05 && this.hands < 0.05 &&
       !this.eyeOverride && this.locks.size === 0;
     if (!calm) return;
+    // A happy Bob beams at you now and then; a neglected one sighs.
+    if (this.mood > 0.75 && Math.random() < 0.16) {
+      this.triggerEmote(Math.random() < 0.5 ? "love" : "happy", 1.4);
+      return;
+    }
+    if (this.mood < 0.3 && Math.random() < 0.22) {
+      this.triggerEmote("yawn", 1.8);
+      return;
+    }
     const r = Math.random();
     if (r < 0.26) {
       this.hop();
@@ -971,8 +1002,8 @@ export class Bob {
       x.save();
       x.translate(0, R * 0.08 * (1 - m));
       const ex = x.createLinearGradient(0, 0, 0, hh);
-      ex.addColorStop(0, rgba(mix3(TEAL_BOTTOM, [0, 0.12, 0.18], 0.35)));
-      ex.addColorStop(1, rgba(mix3(TEAL_BOTTOM, [0, 0.12, 0.18], 0.6)));
+      ex.addColorStop(0, rgba(mix3(this.skinBottom, [0, 0.12, 0.18], 0.35)));
+      ex.addColorStop(1, rgba(mix3(this.skinBottom, [0, 0.12, 0.18], 0.6)));
       x.fillStyle = ex;
       x.fill(body);
       x.restore();
@@ -1013,8 +1044,8 @@ export class Bob {
 
   private drawBody(x: CanvasRenderingContext2D, body: Path2D, R: number, hw: number, hh: number) {
     const tint = this.tint * (1 - this.morph);
-    const top = mix3(TEAL_TOP, this.col, tint * 0.4);
-    const bottom = mix3(TEAL_BOTTOM, this.col, tint * 0.55);
+    const top = mix3(this.skinTop, this.col, tint * 0.4);
+    const bottom = mix3(this.skinBottom, this.col, tint * 0.55);
     const mid = mix3(top, bottom, 0.5);
 
     // Base, with a soft shadow cast onto the twin behind him.
@@ -1143,8 +1174,8 @@ export class Bob {
       x.translate(sd * hw * 0.96, hh * 0.22);
       x.rotate(sd * (0.42 + swing));
       const g = x.createLinearGradient(-R * 0.18, 0, R * 0.18, 0);
-      g.addColorStop(0, rgba(mix3(TEAL_TOP, TEAL_BOTTOM, 0.35)));
-      g.addColorStop(1, rgba(mix3(TEAL_BOTTOM, [0, 0.12, 0.18], 0.3)));
+      g.addColorStop(0, rgba(mix3(this.skinTop, this.skinBottom, 0.35)));
+      g.addColorStop(1, rgba(mix3(this.skinBottom, [0, 0.12, 0.18], 0.3)));
       x.fillStyle = g;
       x.beginPath();
       x.ellipse(0, R * 0.16, R * 0.17, R * 0.27, 0, 0, Math.PI * 2);
@@ -1160,8 +1191,8 @@ export class Bob {
     x.save();
     x.globalAlpha = a;
     const g = x.createLinearGradient(0, hh * 0.9, 0, hh * 1.25);
-    g.addColorStop(0, rgba(mix3(TEAL_BOTTOM, [0, 0.1, 0.15], 0.25)));
-    g.addColorStop(1, rgba(mix3(TEAL_BOTTOM, [0, 0.1, 0.15], 0.55)));
+    g.addColorStop(0, rgba(mix3(this.skinBottom, [0, 0.1, 0.15], 0.25)));
+    g.addColorStop(1, rgba(mix3(this.skinBottom, [0, 0.1, 0.15], 0.55)));
     x.fillStyle = g;
     const lift = Math.max(0, -this.oy) * R * 0.5; // feet tuck up a little in a hop
     for (const sd of [-1, 1]) {
@@ -1185,7 +1216,7 @@ export class Bob {
 
     x.save();
     x.globalAlpha = a;
-    x.strokeStyle = rgba(mix3(TEAL_BOTTOM, [0, 0.15, 0.2], 0.35));
+    x.strokeStyle = rgba(mix3(this.skinBottom, [0, 0.15, 0.2], 0.35));
     x.lineWidth = Math.max(1.5, R * 0.06);
     x.lineCap = "round";
     x.beginPath();

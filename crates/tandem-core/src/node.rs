@@ -218,6 +218,12 @@ pub struct Snapshot {
     pub me: DeviceInfo,
     /// This computer's colour ("#rrggbb").
     pub my_color: String,
+    /// The computer whose sound plays here, if any.
+    #[serde(default)]
+    pub audio_in: Option<String>,
+    /// The computer this one's sound plays on, if any.
+    #[serde(default)]
+    pub audio_out: Option<String>,
 }
 
 /// Every computer gets a colour of its own, the same on all of them (from its id).
@@ -275,6 +281,8 @@ struct Status {
     carry: Option<CarryView>,
     /// This computer has a valid licence pass (or no licence is needed).
     licensed: bool,
+    audio_in: Option<String>,
+    audio_out: Option<String>,
 }
 
 struct Shared {
@@ -437,6 +445,8 @@ impl Shared {
             move_apps: per.move_apps,
             monitor_mode: per.monitor_mode,
             licensed: st.licensed,
+            audio_in: st.audio_in.clone(),
+            audio_out: st.audio_out.clone(),
             error: st.error.clone(),
             notice: st.notice.as_ref().map(|(m, _)| m.clone()),
             undo: st
@@ -614,6 +624,11 @@ enum Cmd {
     SetName(String),
     NewCode,
     Engage(Option<String>),
+    /// Play that computer's sound here (or stop).
+    HearAudio {
+        peer_id: String,
+        on: bool,
+    },
 }
 
 impl Node {
@@ -795,6 +810,8 @@ impl Node {
             mirrors_out: HashMap::new(),
             frames_out: HashMap::new(),
             frame_ackers: Default::default(),
+            audio_out: None,
+            audio_in: None,
             frame_stats: (0, 0, 0, Instant::now()),
             mirrors_in: HashMap::new(),
             mirror_k: HashMap::new(),
@@ -895,6 +912,10 @@ impl Node {
         self.cmd(Cmd::SetMoveApps(on));
     }
     /// Lock a connected computer, or put it to sleep.
+    /// Play that computer's sound on this one's speakers (or stop).
+    pub fn hear_audio(&self, peer_id: String, on: bool) {
+        self.cmd(Cmd::HearAudio { peer_id, on });
+    }
     pub fn power(&self, peer_id: String, action: PowerAction) {
         self.cmd(Cmd::Power { peer_id, action });
     }
@@ -962,6 +983,8 @@ enum Ev {
         res: std::io::Result<Offer>,
     },
     ClipFiles(Vec<PathBuf>),
+    /// 20 ms of this computer's sound, for the computer it plays on.
+    AudioChunk(Vec<u8>),
     /// The person was asked about a dragged window before a hand-off.
     /// `Err("")` means they said no.
     AppPicked {
@@ -1073,6 +1096,9 @@ fn establish(
                     if ev2.send(Ev::Msg(sid, m)).is_err() {
                         return;
                     }
+                }
+                Err(crate::Error::Proto(e)) => {
+                    log::info!("session {sid}: skipped a message this version doesn't know ({e})");
                 }
                 Err(e) => {
                     log::info!("session {sid} ended: {e}");
@@ -1286,6 +1312,10 @@ struct Actor {
     frames_out: HashMap<u64, (Instant, Option<Msg>)>,
     /// Computers that answer window pictures (an older version doesn't: no pacing for it).
     frame_ackers: std::collections::HashSet<String>,
+    /// Our sound going to that computer (the recording runs while this is set).
+    audio_out: Option<(String, crate::audio::Capture)>,
+    /// That computer's sound playing here.
+    audio_in: Option<(String, crate::audio::Player)>,
     /// Pictures sent and held back, and their bytes, since `.3` (logged every few seconds).
     frame_stats: (u32, u32, usize, Instant),
     /// Other computers' windows shown here (id → that computer).
@@ -1669,6 +1699,14 @@ impl Actor {
         let Some(sess) = self.sessions.remove(pid) else {
             return;
         };
+        // Sound to or from it stops with it.
+        if self.audio_out.as_ref().is_some_and(|(p, _)| p == pid) {
+            self.audio_out = None;
+        }
+        if self.audio_in.as_ref().is_some_and(|(p, _)| p == pid) {
+            self.audio_in = None;
+        }
+        self.publish_audio();
         self.sh.devices.lock().unwrap().peers.remove(pid);
         if self.span_in.as_ref().is_some_and(|(p, ..)| p == pid) {
             self.span_in = None;
@@ -1865,6 +1903,12 @@ impl Actor {
                 }
             }
             Ev::Cmd(c) => self.on_cmd(c),
+            Ev::AudioChunk(pcm) => {
+                if let Some((to, _)) = &self.audio_out {
+                    let to = to.clone();
+                    self.send_to(&to, Msg::Audio { pcm });
+                }
+            }
             Ev::DialFailed { ip, err } => {
                 self.dialing.remove(&ip);
                 // Quiet during background reconnects; loud only when nothing else is going on.
@@ -2535,6 +2579,18 @@ impl Actor {
     }
 
     /// Shows a short message in the UI; it clears itself after a few seconds.
+    /// Who plays whose sound, for the bar.
+    fn publish_audio(&mut self) {
+        let (i, o) = (self.audio_in.as_ref().map(|(p, _)| p.clone()), self.audio_out.as_ref().map(|(p, _)| p.clone()));
+        let mut st = self.sh.status.lock().unwrap();
+        if st.audio_in != i || st.audio_out != o {
+            st.audio_in = i;
+            st.audio_out = o;
+            drop(st);
+            self.sh.publish();
+        }
+    }
+
     fn notify(&mut self, msg: &str) {
         self.sh.status.lock().unwrap().notice = Some((msg.to_string(), Instant::now()));
         self.sh.publish();
@@ -3383,6 +3439,43 @@ impl Actor {
                 tokio::task::spawn_blocking(move || plat.power(a));
             }
             Msg::Fleet { on } => self.set_fleet(from, on, false),
+            Msg::AudioWant { on } => {
+                self.audio_out = None;
+                if on {
+                    if self.audio_in.as_ref().is_some_and(|(p, _)| p == from) {
+                        self.audio_in = None;
+                    }
+                    let tx = self.ev_tx.clone();
+                    match crate::audio::Capture::start(move |pcm| {
+                        let _ = tx.send(Ev::AudioChunk(pcm));
+                    }) {
+                        Ok(c) => {
+                            log::info!("audio: this computer's sound plays on {from}");
+                            self.audio_out = Some((from.to_string(), c));
+                        }
+                        Err(e) => {
+                            log::warn!("audio: can't share the sound: {e}");
+                            self.send_to(from, Msg::AudioOff);
+                        }
+                    }
+                }
+                self.publish_audio();
+            }
+            Msg::Audio { pcm } => {
+                if let Some((p, player)) = &self.audio_in {
+                    if p == from {
+                        player.push(&pcm);
+                    }
+                }
+            }
+            Msg::AudioOff => {
+                if self.audio_in.as_ref().is_some_and(|(p, _)| p == from) {
+                    self.audio_in = None;
+                    let name = self.sessions.get(from).map(|s| s.peer.name.clone()).unwrap_or_default();
+                    self.notify(&format!("{name} couldn't share its sound"));
+                }
+                self.publish_audio();
+            }
             Msg::SendApps => {
                 if !self.sh.persisted.lock().unwrap().move_apps {
                     self.send_to(
@@ -3800,6 +3893,26 @@ impl Actor {
                 self.license_changed();
             }
             Cmd::Power { peer_id, action } => self.send_to(&peer_id, Msg::Power(action)),
+            Cmd::HearAudio { peer_id, on } => {
+                if let Some((was, _)) = self.audio_in.take() {
+                    self.send_to(&was, Msg::AudioWant { on: false });
+                }
+                if on && self.sessions.contains_key(&peer_id) {
+                    // Never both ways at once: their sound coming back here would echo.
+                    if self.audio_out.as_ref().is_some_and(|(p, _)| *p == peer_id) {
+                        self.audio_out = None;
+                    }
+                    match crate::audio::Player::start() {
+                        Ok(p) => {
+                            log::info!("audio: playing {peer_id}'s sound here");
+                            self.audio_in = Some((peer_id.clone(), p));
+                            self.send_to(&peer_id, Msg::AudioWant { on: true });
+                        }
+                        Err(e) => self.notify(&format!("Couldn't play its sound here: {e}")),
+                    }
+                }
+                self.publish_audio();
+            }
             Cmd::TakeApps(peer_id) => {
                 if self.sessions.contains_key(&peer_id) {
                     self.notify("Bringing your programs over…");

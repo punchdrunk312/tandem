@@ -21,6 +21,7 @@ mod ghost;
 mod island;
 mod license_client;
 mod media;
+mod voice;
 mod weather;
 mod reports;
 mod shellmenu;
@@ -351,6 +352,12 @@ fn undo_last(st: State<'_, AppState>) {
 #[tauri::command]
 fn bring_windows_back(st: State<'_, AppState>) {
     st.node.bring_windows_back();
+}
+
+/// Play that computer's sound on this one's speakers (or stop).
+#[tauri::command]
+fn hear_audio(st: State<'_, AppState>, peer_id: String, on: bool) {
+    st.node.hear_audio(peer_id, on);
 }
 
 /// Second-monitor mode: a window dragged across stays here and is shown over there.
@@ -1438,6 +1445,8 @@ pub fn run() {
             media::media_lyrics,
             media::media_video_id,
             weather::weather,
+            hear_audio,
+            voice::voice_set,
             media::media_show_video,
         ])
         .build(tauri::generate_context!())

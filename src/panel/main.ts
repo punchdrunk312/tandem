@@ -76,6 +76,7 @@ const veil = h("div", { id: "veil" });
 document.body.append(veil);
 
 const ICONS = {
+  voice: "M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM5 11a7 7 0 0014 0M12 18v3",
   weather: "M7 18a4 4 0 010-8 6 6 0 0111.3 2A3.5 3.5 0 0118 18H7zM9 21l-1 2M13 21l-1 2M17 21l-1 2",
   computers: "M3 5h13v9H3zM8 18h3M9.5 14v4M19 8v10M16 18h6",
   files: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
@@ -854,10 +855,12 @@ const ISLAND_KEY = "tandem.island";
 interface IslandOpts {
   soundEnabled: boolean; soundVolume: number; autoCloseInterval: number;
   seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
-  weather: boolean; city: string;
+  weather: boolean; city: string; voice: boolean;
   theme: "glass" | "dark";
   accent: string;
   barColor: string;
+  bobSkin: string;
+  barIcons: string;
   outfit: string;
   tips: boolean;
   accCards: boolean;
@@ -865,10 +868,12 @@ interface IslandOpts {
 const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
-  weather: true, city: "",
+  weather: true, city: "", voice: false,
   theme: "glass",
   accent: "",
   barColor: "",
+  bobSkin: "",
+  barIcons: "",
   outfit: "none",
   tips: true,
   accCards: true,
@@ -880,6 +885,31 @@ function islandSettings(): IslandOpts {
     return { ...ISLAND_DEFAULTS };
   }
 }
+const BAR_ICONS: [string, string][] = [["notes", "Notes"], ["music", "Now playing"], ["timer", "Focus timer"], ["devices", "Your computers"], ["game", "Catch with Bob"], ["sound", "Sound"]];
+const DEFAULT_BAR_ICONS = "notes,music,timer,devices,game,sound";
+/** The top-bar icons: a tick to show each, arrows to move it. */
+function barIconsEl(v: string, change: (v: string) => void): HTMLElement {
+  const shown = (v || DEFAULT_BAR_ICONS).split(",").filter((id) => BAR_ICONS.some(([k]) => k === id));
+  const hidden = BAR_ICONS.map(([k]) => k).filter((k) => !shown.includes(k));
+  const all = [...shown, ...hidden];
+  const save = (list: string[], on: string[]) => change(list.filter((k) => on.includes(k)).join(","));
+  return h("div", { class: "bar-icons" }, ...all.map((id, i) => {
+    const label = BAR_ICONS.find(([k]) => k === id)![1];
+    const on = shown.includes(id);
+    const move = (d: number) => {
+      const list = [...all];
+      const j = i + d;
+      if (j < 0 || j >= list.length) return;
+      [list[i], list[j]] = [list[j], list[i]];
+      save(list, shown);
+    };
+    return h("div", { class: `bi-row${on ? "" : " off"}` },
+      h("label", {}, h("input", { type: "checkbox", checked: on, onchange: (e: Event) => save(all, (e.target as HTMLInputElement).checked ? [...shown, id] : shown.filter((k) => k !== id)) }), ` ${label}`),
+      h("button", { class: "bi-mv", text: "↑", "aria-label": `Move ${label} up`, disabled: i === 0, onclick: () => move(-1) }),
+      h("button", { class: "bi-mv", text: "↓", "aria-label": `Move ${label} down`, disabled: i === all.length - 1, onclick: () => move(1) }));
+  }));
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** Bob's birthday picker: a month and a day, saved as "MM-DD" (empty = not set). */
 function birthdayEl(v: string): HTMLElement {
@@ -984,9 +1014,20 @@ function renderTopBar() {
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Bar colour"),
         h("div", { class: "wardrobe", role: "radiogroup", "aria-label": "Bar colour" },
-          ...([["", "Standard"], ["carbon", "Carbon"]] as const).map(([id, label]) =>
+          ...([["", "Standard"], ["carbon", "Carbon"], ["midnight", "Midnight"], ["sand", "Sand"], ["rose", "Rose gold"]] as const).map(([id, label]) =>
             h("button", { class: `wbtn${is.barColor === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.barColor === id), onclick: () => set({ barColor: id }) }, label))),
-        h("p", { class: "g-help" }, "Carbon is a charcoal bar, on Liquid Glass and on Classic.")),
+        h("p", { class: "g-help" }, "The bar's own colour, on Liquid Glass and on Classic.")),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Bob's colour"),
+        h("div", { class: "swatches", role: "radiogroup", "aria-label": "Bob's colour" },
+          ...([["", "#2dd4bf", "Teal"], ["coral", "#ec5b54", "Coral"], ["violet", "#7a55eb", "Violet"], ["gold", "#eda11a", "Gold"], ["sky", "#2785ed", "Sky"], ["midnight", "#22296b", "Midnight"], ["pink", "#e5529a", "Pink"], ["lime", "#66bf1f", "Lime"]] as const).map(([id, hex, label]) =>
+            h("button", { class: `sw${is.bobSkin === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.bobSkin === id), title: label, "aria-label": label, style: `--sw:${hex}`, onclick: () => set({ bobSkin: id }) }))),
+        h("p", { class: "g-help" }, "Bob's own colour.")),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Top bar icons"),
+        barIconsEl(is.barIcons, (v) => set({ barIcons: v })),
+        h("p", { class: "g-help" }, "Tick the icons you want in the bar, and use the arrows to put them in order."),
+        h("button", { class: "btn", text: "Show me around again", onclick: () => { try { localStorage.setItem("cc.tourAgain", String(Date.now())); } catch { /* fine */ } } })),
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Bob's wardrobe"),
         wardrobe,
@@ -1005,6 +1046,9 @@ function renderTopBar() {
           control: switchEl(is.tips, (v) => set({ tips: v })) }),
         tile({ id: "seasons", icon: ICONS.seasons, color: "rose", title: "Seasons & holidays", line: "Bob dresses for the time of year.", on: is.seasons,
           control: switchEl(is.seasons, (v) => set({ seasons: v })) }),
+        tile({ id: "voice", icon: ICONS.voice, color: "violet", title: "Hey Bob", line: "Say \"Hey Bob, play\", \"…next song\", \"…start focus\".", on: is.voice,
+          more: "Windows listens on this computer for a short list of phrases: Hey Bob, play / pause / next song / previous song / show the lyrics / start focus / open my notes / show my computers / play catch / what's the weather / jump / play its sound here / stop the sound / close / how are you. Nothing leaves your computer.",
+          control: switchEl(is.voice, (v) => set({ voice: v })) }),
         tile({ id: "weather", icon: ICONS.weather, color: "blue", title: "Weather", line: "Rain, snow or sun in the bar; Bob dresses for it.", on: is.weather,
           more: "The weather comes from Open-Meteo for the city below (or the one in your time zone). Only the city name is sent.",
           control: h("div", { style: "display:flex;gap:8px;align-items:center" },

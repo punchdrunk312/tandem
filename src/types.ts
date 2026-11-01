@@ -34,6 +34,9 @@ export interface Snapshot {
   move_apps: boolean;
   /** Second-monitor mode: windows dragged across stay here and show there. */
   monitor_mode: boolean;
+  /** The computer whose sound plays here, and the one this one's sound plays on. */
+  audio_in?: string | null;
+  audio_out?: string | null;
   /** Files being carried to this computer right now (shown under the cursor). */
   carry: { name: string; count: number; folder: boolean } | null;
   switch_delay_ms: number;

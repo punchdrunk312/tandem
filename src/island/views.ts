@@ -25,6 +25,7 @@ export interface ViewActions {
   toggleMedia(): void;
   /** The header's notes button: notes and reminders, or back. */
   toggleNotes(): void;
+  toggleGame(): void;
   /** Shift-drop menu: prepare the files this way, then send. */
   dropAction(a: "asis" | "zip" | "png" | "jpg"): void;
   /** Shift-drop menu: back out without sending. */
@@ -64,6 +65,8 @@ function keyed(el: HTMLElement, key: string, build: () => (Node | string)[]) {
 
 // ------------------------------------------------------------------ header
 
+export const DEFAULT_ICONS = "notes,music,timer,devices,game,sound";
+
 export function buildHeader(a: ViewActions): ViewHost {
   const dot = h("i", { class: "hd-dot" });
   const title = h("span", { class: "hd-title", text: "CubeCursor" });
@@ -74,18 +77,92 @@ export function buildHeader(a: ViewActions): ViewHost {
   const timer = h("button", { class: "icon-btn", title: "Focus timer", "aria-label": "Focus timer", onclick: () => { a.blip(); a.toggleFocus(); } }, svg(ICON.timer, 15, { stroke: 1.8 }));
   const music = h("button", { class: "icon-btn", title: "Now playing", "aria-label": "Now playing", onclick: () => { a.blip(); a.toggleMedia(); } }, svg(ICON.music, 15, { stroke: 1.8 }));
   const notes = h("button", { class: "icon-btn", title: "Notes", "aria-label": "Notes and reminders", onclick: () => { a.blip(); a.toggleNotes(); } }, svg(ICON.notes, 15, { stroke: 1.8 }));
-  const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }), notes, music, timer, devices, sound, settings, close);
+  const game = h("button", { class: "icon-btn", title: "Catch with Bob", "aria-label": "Play catch with Bob", onclick: () => { a.blip(); a.toggleGame(); } },
+    svg("M12 3a9 9 0 100 18 9 9 0 000-18zM3.5 9.5h17M3.5 14.5h17M12 3c2.5 2.6 2.5 15.4 0 18", 15, { stroke: 1.8 }));
+  const byId: Record<string, HTMLElement> = { notes, music, timer, devices, game, sound };
+  const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }));
+  let order = "-";
   return {
     el,
     sync() {
+      // Your icons, in your order (settings → Top bar icons).
+      const want = State.settings.barIcons || DEFAULT_ICONS;
+      if (want !== order) {
+        order = want;
+        const ids = want.split(",").filter((id) => byId[id]);
+        el.replaceChildren(dot, title, h("span", { class: "spacer" }), ...ids.map((id) => byId[id]), settings, close);
+      }
       const live = State.snap?.control && State.snap.control !== "offline";
       dot.className = `hd-dot${live ? " on" : ""}`;
       devices.classList.toggle("on", State.view === "devices");
       timer.classList.toggle("on", State.view === "focus" || !!State.focus);
       music.classList.toggle("on", State.view === "media" || !!State.media?.playing);
       notes.classList.toggle("on", State.view === "notes" || !!State.dueNote);
-      title.textContent = State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
+      game.classList.toggle("on", State.view === "game");
+      title.textContent = State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
       sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
+    },
+  };
+}
+
+// ------------------------------------------------------------------ suggestion
+
+export interface Suggestion {
+  title: string;
+  sub: string;
+  /** The button that does it (if any). */
+  act?: [string, () => void];
+}
+
+/** Bob has an idea: a line, why, and a button to do it. */
+export function buildSuggest(dismiss: () => void): ViewHost & { show(s: Suggestion): void } {
+  const title = h("div", { class: "sg-title" });
+  const sub = h("div", { class: "sg-sub" });
+  const acts = h("div", { class: "m-actions" });
+  const el = h("div", { class: "view suggest" }, h("div", { class: "sg-text" }, title, sub, acts));
+  return {
+    el,
+    sync() {},
+    show(s) {
+      title.textContent = s.title;
+      sub.textContent = s.sub;
+      acts.replaceChildren(
+        ...(s.act ? [h("button", { class: "btn primary", text: s.act[0], onclick: () => { s.act![1](); dismiss(); } })] : []),
+        h("button", { class: "btn", text: s.act ? "Not now" : "Thanks, Bob", onclick: dismiss }),
+      );
+    },
+  };
+}
+
+// ------------------------------------------------------------------ tour
+
+export interface TourStep {
+  title: string;
+  sub: string;
+}
+
+/** The first-run tour: a step at a time, dots for where you are. */
+export function buildTour(a: { next(): void; skip(): void }): ViewHost & { show(step: TourStep, i: number, n: number): void } {
+  const dots = h("div", { class: "tr-dots" });
+  const title = h("div", { class: "tr-title" });
+  const sub = h("div", { class: "tr-sub" });
+  const next = h("button", { class: "btn primary", onclick: () => a.next() });
+  const skip = h("button", { class: "btn", text: "Skip", onclick: () => a.skip() });
+  const text = h("div", { class: "tr-text" }, dots, title, sub, h("div", { class: "m-actions" }, next, skip));
+  const el = h("div", { class: "view tour" }, text);
+  return {
+    el,
+    sync() {},
+    show(step, i, n) {
+      dots.replaceChildren(...Array.from({ length: n }, (_, k) => h("i", { class: k === i ? "on" : k < i ? "done" : "" })));
+      title.textContent = step.title;
+      sub.textContent = step.sub;
+      next.textContent = i === n - 1 ? "Let's go!" : "Next";
+      skip.style.display = i === n - 1 ? "none" : "";
+      // Each step slides in.
+      text.classList.remove("in");
+      void text.offsetWidth;
+      text.classList.add("in");
     },
   };
 }
@@ -483,6 +560,8 @@ export function buildCharge(): ViewHost & {
 export interface DeviceActions {
   jump(peerId: string): void;
   power(peerId: string, action: "lock" | "sleep"): void;
+  /** Play that computer's sound here (or stop). */
+  hear(peerId: string, on: boolean): void;
   wake(peerId: string): void;
   blip(): void;
 }
@@ -553,7 +632,9 @@ export function buildDevices(a: DeviceActions): ViewHost {
               ? null
               : h("div", { class: "dv-actions" },
                   ...(c.connected
-                    ? [btn("Jump", () => a.jump(c.id), "primary"), btn("Lock", () => a.power(c.id, "lock")), btn("Sleep", () => a.power(c.id, "sleep"))]
+                    ? [btn("Jump", () => a.jump(c.id), "primary"),
+                       btn(State.snap?.audio_in === c.id ? "🔊 Stop sound" : "🔊 Hear it", () => a.hear(c.id, State.snap?.audio_in !== c.id)),
+                       btn("Lock", () => a.power(c.id, "lock")), btn("Sleep", () => a.power(c.id, "sleep"))]
                     : [btn("Wake", () => a.wake(c.id), "primary")])));
         }),
       );

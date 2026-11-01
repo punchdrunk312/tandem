@@ -16,6 +16,8 @@ import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
+import { buildGame } from "./game";
+import { buildSuggest, buildTour, type Suggestion, type TourStep } from "./views";
 import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
@@ -74,6 +76,11 @@ export class Island {
   // The device moments, one at a time.
   private watcher = new MomentWatcher();
   private momentView!: ReturnType<typeof buildMoment>;
+  private gameView!: ReturnType<typeof buildGame>;
+  private suggestView!: ReturnType<typeof buildSuggest>;
+  private tourView!: ReturnType<typeof buildTour>;
+  /** Where Bob runs to in the game (island coordinates), or null for his usual place. */
+  private gameBobX: number | null = null;
   private chargeView!: ReturnType<typeof buildCharge>;
   private momentQueue: Moment[] = [];
   private momentTimer: number | null = null;
@@ -167,6 +174,11 @@ export class Island {
       toggleFocus: () => this.setView(State.view === "focus" ? "home" : "focus"),
       toggleMedia: () => this.setView(State.view === "media" ? "home" : "media"),
       toggleNotes: () => this.setView(State.view === "notes" ? "home" : "notes"),
+      toggleGame: () => {
+        if (State.view === "game") return this.setView("home");
+        this.setView("game");
+        this.gameView.start();
+      },
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
         Sound.setEnabled(State.settings.soundEnabled);
@@ -210,6 +222,7 @@ export class Island {
       blip: () => Sound.play("blip"),
       jump: (id) => { fire("engage", { peerId: id }); this.closeBar(); },
       power: (id, action) => fire("power_peer", { peerId: id, action }),
+      hear: (id, on) => fire("hear_audio", { peerId: id, on }),
       wake: (id) => fire("wake_peer", { peerId: id }),
     }));
     this.views.set("focus", buildFocus({
@@ -342,6 +355,31 @@ export class Island {
       },
     });
     this.views.set("update", this.updateView);
+    this.gameView = buildGame({
+      bob: () => {
+        const o = this.gameOrigin();
+        return { x: this.botCx.value - o.x, y: this.botCy.value - o.y };
+      },
+      moveBob: (x) => {
+        this.gameBobX = x == null ? null : x + this.gameOrigin().x;
+        this.ensureRunning();
+      },
+      caught: (streak, record) => {
+        Sound.play("pop");
+        this.engine.triggerEmote(record && streak > 2 ? "proud" : streak % 5 === 0 ? "love" : "happy", 0.9);
+        if (record && streak > 2) this.ambient.celebrate();
+        this.moodUp(0.3);
+      },
+      missed: () => {
+        Sound.play("blip");
+        this.engine.triggerEmote("annoyed", 0.9);
+      },
+    });
+    this.views.set("game", this.gameView);
+    this.suggestView = buildSuggest(() => this.closeBar());
+    this.views.set("suggest", this.suggestView);
+    this.tourView = buildTour({ next: () => this.tourStep(this.tourAt + 1), skip: () => this.endTour() });
+    this.views.set("tour", this.tourView);
     this.viewsEl = h("div", { id: "views" });
     for (const v of this.views.values()) this.viewsEl.append(v.el);
     this.contentEl = h("div", { id: "content" }, this.header.el, this.viewsEl);
@@ -407,7 +445,190 @@ export class Island {
     return this.pillPinned || State.activeTransfers.length > 0 || State.staging > 0;
   }
 
+  // ── Bob's mood ──────────────────────────────────────────────────────────────
+
+  private mood = { v: 60, last: Date.now() };
+  private loadMood() {
+    try { this.mood = { ...this.mood, ...JSON.parse(localStorage.getItem("cc.mood") ?? "{}") }; } catch { /* fine */ }
+    const days = (Date.now() - this.mood.last) / 864e5;
+    // Left alone for days, he gets a little sad (a day off is fine).
+    if (days > 1) this.mood.v = Math.max(5, this.mood.v - 12 * (days - 1));
+    this.engine.mood = this.mood.v / 100;
+    if (days >= 3) {
+      window.setTimeout(() => {
+        this.engine.triggerEmote("yawn", 1.6);
+        window.setTimeout(() => {
+          this.autoly(() => this.showNote("I missed you! 🥺 Where have you been?", 4200));
+          this.engine.triggerEmote("love");
+          this.moodUp(8);
+        }, 1800);
+      }, 7000);
+    }
+    this.moodUp(0);
+    // Every 10 minutes you're here, he likes you a bit more.
+    window.setInterval(() => this.moodUp(0.5), 10 * 60_000);
+  }
+  moodUp(by: number) {
+    this.mood = { v: Math.max(0, Math.min(100, this.mood.v + by)), last: Date.now() };
+    this.engine.mood = this.mood.v / 100;
+    try { localStorage.setItem("cc.mood", JSON.stringify(this.mood)); } catch { /* fine */ }
+  }
+
+  // ── The tour ────────────────────────────────────────────────────────────────
+
+  private tourAt = 0;
+  private static TOUR: (TourStep & { emote: "happy" | "wink" | "love" | "proud" | "surprised" })[] = [
+    { title: "Hi, I'm Bob! 👋", sub: "I live up here at the top of your screen. Let me show you around — it takes half a minute.", emote: "happy" },
+    { title: "One mouse, two computers", sub: "Push your cursor through the edge of the screen and it jumps to your other computer — keyboard and clipboard too.", emote: "wink" },
+    { title: "Send files by dropping them on me", sub: "Pick up a file, press Space, and drop it on me. It flies over to the other computer.", emote: "surprised" },
+    { title: "Everything is in this bar", sub: "Notes, your music with lyrics, a focus timer, your computers and a little game — the icons up top.", emote: "proud" },
+    { title: "Make it yours", sub: "Liquid Glass or Classic, the bar's colour, my outfit and my colour: it's all in settings. Have fun!", emote: "love" },
+  ];
+  startTour() {
+    this.tourStep(0);
+  }
+  private tourStep(i: number) {
+    const steps = Island.TOUR;
+    if (i >= steps.length) return this.endTour();
+    this.tourAt = i;
+    this.tourView.show(steps[i], i, steps.length);
+    this.engine.triggerEmote(steps[i].emote, 1.4);
+    if (State.view !== "tour" || State.mode !== "expanded") this.autoly(() => this.alert("tour"));
+    Sound.play("blip");
+  }
+  private endTour() {
+    try { localStorage.setItem("cc.tourDone", "1"); } catch { /* fine */ }
+    if (State.view === "tour") this.closeBar();
+  }
+
+  // ── Suggestions ─────────────────────────────────────────────────────────────
+
+  /** Bob suggests something (once per key per day), only when the bar is free. */
+  private suggest(key: string, s: Suggestion) {
+    if (this.quiet || State.mode === "expanded" || State.focus) return;
+    const today = new Date().toDateString();
+    const k = `cc.sg.${key}`;
+    try {
+      if (localStorage.getItem(k) === today) return;
+      localStorage.setItem(k, today);
+    } catch { /* fine */ }
+    this.suggestView.show(s);
+    this.autoly(() => this.alert("suggest"));
+    this.engine.triggerEmote("wink");
+    window.setTimeout(() => {
+      if (State.view === "suggest" && !this.wasInIsland) this.closeBar();
+    }, 12_000);
+  }
+
+  /** Once a minute: is there something worth suggesting? */
+  private think() {
+    const now = new Date(), hr = now.getHours();
+    // You usually start a focus around this hour, and haven't today.
+    let starts: string[] = [];
+    try { starts = JSON.parse(localStorage.getItem("cc.focusStarts") ?? "[]"); } catch { /* fine */ }
+    const days = new Set(starts.filter((s) => new Date(s).getHours() === hr && new Date(s).toDateString() !== now.toDateString()).map((s) => new Date(s).toDateString()));
+    const today = starts.some((s) => new Date(s).toDateString() === now.toDateString());
+    if (days.size >= 3 && !today && now.getMinutes() < 30) {
+      const mins = State.settings.focusMinutes || 25;
+      this.suggest("focus", { title: "Time to focus?", sub: `You usually start one around ${hr}:00. ${mins} minutes, and I'll keep time.`, act: [`Start ${mins} min`, () => this.focusStart(mins)] });
+      return;
+    }
+    // A wet morning.
+    const w = this.weather;
+    if (w && hr >= 7 && hr < 11 && (w.sky === "rain" || w.sky === "storm" || w.sky === "drizzle")) {
+      this.suggest("umbrella", { title: `It's raining in ${w.city} ☔`, sub: "Take an umbrella if you're heading out today." });
+      return;
+    }
+    // A cold one.
+    if (w && hr >= 7 && hr < 11 && w.temp <= 3) {
+      this.suggest("cold", { title: `${w.temp}° in ${w.city} 🧣`, sub: "Wrap up warm if you're going out." });
+      return;
+    }
+    // Late at night.
+    if (hr >= 23 && !State.settings.calm) {
+      this.suggest("late", { title: "It's getting late 🌙", sub: "Want me to be quiet for the night? Calm Bob turns off the drifting and the sounds.", act: ["Calm Bob", () => { State.settings.calm = true; State.saveSettings(); this.applySettings(); }] });
+    }
+  }
+
+  // ── "Hey Bob" ───────────────────────────────────────────────────────────────
+
+  private voiceOn = false;
+  private applyVoice() {
+    const on = !!State.settings.voice;
+    if (on === this.voiceOn) return;
+    this.voiceOn = on;
+    void call("voice_set", { on }).then(
+      () => { if (on) this.autoly(() => this.showNote("I'm listening! Say \"Hey Bob…\" 👂", 3200)); },
+      (e) => {
+        this.voiceOn = false;
+        State.settings.voice = false;
+        State.saveSettings();
+        this.autoly(() => this.showNote(String(e), 6000));
+      },
+    );
+  }
+
+  /** A phrase Bob heard. */
+  onVoice(text: string) {
+    const t = text.toLowerCase().replace(/^hey bob\s*/, "").trim();
+    this.engine.triggerEmote("surprised", 0.6);
+    this.moodUp(0.2);
+    const media = (action: string) => void call("media_control", { action }).catch((e) => this.showNote(String(e)));
+    const open = (v: Parameters<Island["setView"]>[0]) => this.autoly(() => this.alert(v));
+    const peer = State.snap?.paired.find((p) => p.connected);
+    switch (t) {
+      case "": this.autoly(() => this.showNote("Yes? 👂", 2000)); break;
+      case "play": media("play"); break;
+      case "pause": media("pause"); break;
+      case "next song": media("next"); break;
+      case "previous song": media("prev"); break;
+      case "show the lyrics":
+        State.settings.lyrics = true;
+        State.saveSettings();
+        open("media");
+        break;
+      case "start focus": this.focusStart(State.settings.focusMinutes || 25); open("focus"); break;
+      case "open my notes": open("notes"); break;
+      case "show my computers": open("devices"); break;
+      case "play catch": open("game"); this.gameView.start(); break;
+      case "what's the weather": {
+        const w = this.weather;
+        if (!w) this.autoly(() => this.showNote("I don't know the weather yet. Is it on in settings?", 3500));
+        else {
+          this.chargeView.showWeather(w);
+          open("charge");
+          window.setTimeout(() => { if (State.view === "charge") this.closeBar(); }, 4000);
+        }
+        break;
+      }
+      case "jump":
+      case "go to the other computer": fire("engage", { peerId: null }); break;
+      case "play its sound here":
+        if (peer) fire("hear_audio", { peerId: peer.id, on: true });
+        else this.autoly(() => this.showNote("No other computer is connected.", 3000));
+        break;
+      case "stop the sound":
+        if (State.snap?.audio_in) fire("hear_audio", { peerId: State.snap.audio_in, on: false });
+        break;
+      case "close": this.closeBar(); break;
+      case "how are you": {
+        const m = this.mood.v;
+        const say = m > 75 ? "Amazing — I love hanging out with you! 💙" : m > 45 ? "Pretty good! Thanks for asking 😊" : "A bit lonely… but better now you're here 🥺";
+        this.engine.triggerEmote(m > 45 ? "love" : "yawn");
+        this.autoly(() => this.showNote(say, 4000));
+        break;
+      }
+    }
+  }
+
   launch() {
+    this.loadMood();
+    this.applyVoice();
+    window.setInterval(() => this.think(), 60_000);
+    // The tour, the first time CubeCursor runs (after the hello).
+    let toured = "";
+    try { toured = localStorage.getItem("cc.tourDone") ?? ""; } catch { /* fine */ }
+    if (!toured && !this.quiet) window.setTimeout(() => this.startTour(), 6500);
     // Bob says hello once a day, not every time the computer starts. The very first
     // time he does it out loud; after that he waves without a sound.
     const today = new Date().toDateString();
@@ -639,8 +860,9 @@ export class Island {
   private applyTheme() {
     const glass = State.settings.theme !== "dark";
     document.documentElement.dataset.theme = glass ? "glass" : "dark";
-    const carbon = State.settings.barColor === "carbon";
-    if (carbon) document.documentElement.dataset.bar = "carbon";
+    const bar = State.settings.barColor;
+    const carbon = bar === "carbon" || bar === "midnight";
+    if (bar) document.documentElement.dataset.bar = bar;
     else delete document.documentElement.dataset.bar;
     // Carbon glass is dark glass: white words, whatever is behind.
     if (carbon) this.tone = "dark";
@@ -663,6 +885,12 @@ export class Island {
     this.greeting.light = glass && !carbon && !(this.bd && this.tone === "dark");
     this.ambient.light = glass;
     this.dirty = true;
+  }
+
+  /** Where the game's view sits inside the island. */
+  private gameOrigin() {
+    const g = this.gameView.el.getBoundingClientRect(), i = this.islandEl.getBoundingClientRect();
+    return { x: g.left - i.left, y: g.top - i.top };
   }
 
   /** A paper plane: out from Bob to the computer's side, or in from it to Bob. */
@@ -834,6 +1062,7 @@ export class Island {
     // The person's own accent colour and wardrobe pick, on top of the season.
     this.engine.setAccent(State.settings.accent || null);
     this.engine.setWardrobe(State.settings.outfit);
+    this.engine.setSkin(State.settings.bobSkin);
     this.ambient.kind = look && !State.settings.calm ? look.ambient : null;
     this.hideEgg();
     State.greeting = look?.greeting ?? null;
@@ -925,6 +1154,7 @@ export class Island {
       return;
     }
     if (view !== "notes") this.notesView?.stopWriting();
+    if (view !== "game") this.gameBobX = null;
     State.view = view;
     State.lastActivity = performance.now();
     this.animateGeometry(false);
@@ -986,6 +1216,12 @@ export class Island {
   private focusDonePending = false;
 
   private focusStart(min: number) {
+    try {
+      const starts: string[] = JSON.parse(localStorage.getItem("cc.focusStarts") ?? "[]");
+      starts.push(new Date().toISOString());
+      localStorage.setItem("cc.focusStarts", JSON.stringify(starts.slice(-30)));
+    } catch { /* fine */ }
+    this.moodUp(1);
     const total = min * 60_000;
     State.focus = { endsAt: Date.now() + total, total };
     saveFocus(State.focus);
@@ -1647,7 +1883,7 @@ export class Island {
     }
     if (!n) return;
     const lum = sum / n;
-    const tone = State.settings.barColor === "carbon" ? "dark" : this.tone === "light" ? (lum < 0.5 ? "dark" : "light") : lum > 0.6 ? "light" : "dark";
+    const tone = State.settings.barColor === "carbon" || State.settings.barColor === "midnight" ? "dark" : this.tone === "light" ? (lum < 0.5 ? "dark" : "light") : lum > 0.6 ? "light" : "dark";
     if (tone !== this.tone) {
       this.tone = tone;
       document.documentElement.dataset.tone = tone;
@@ -1923,7 +2159,7 @@ export class Island {
 
   private updateBotTargets() {
     const p = botPosition(State.mode, State.view);
-    this.botCx.target = p.cx;
+    this.botCx.target = State.view === "game" && State.mode === "expanded" && this.gameBobX != null ? this.gameBobX : p.cx;
     this.botCy.target = p.cy;
     this.botSize.target = p.diameter / 0.6;
 
@@ -2039,7 +2275,7 @@ export class Island {
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
 
     this.header.sync();
-    this.header.el.style.display = State.view === "moment" || State.view === "charge" || State.view === "nowplaying" || State.view === "video" ? "none" : "";
+    this.header.el.style.display = State.view === "moment" || State.view === "charge" || State.view === "suggest" || State.view === "tour" || State.view === "nowplaying" || State.view === "video" ? "none" : "";
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);
@@ -2073,6 +2309,7 @@ export class Island {
   applySettings() {
     this.refreshLook();
     if (`${State.settings.weather}|${State.settings.city}` !== this.weatherFor) void this.fetchWeather();
+    this.applyVoice();
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;

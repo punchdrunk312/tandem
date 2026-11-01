@@ -20,14 +20,20 @@ export interface IslandSettings {
   weather: boolean;
   /** The city for the weather ("" = from the time zone). */
   city: string;
+  /** "Hey Bob": spoken commands (the microphone listens for a few phrases). */
+  voice: boolean;
   /** Calm Bob: no seasons drifting, quieter moments. */
   calm: boolean;
   /** The look: frosted "glass" (default) or the classic black bar. */
   theme: "glass" | "dark";
   /** Accent colour (hex), or "" for the default teal. Applies to both looks. */
   accent: string;
-  /** The bar's own colour: "" (the look's own) or "carbon". */
+  /** The bar's own colour: "" (the look's own), "carbon", "midnight", "sand" or "rose". */
   barColor: string;
+  /** Bob's colour: "" (teal), "coral", "violet", "gold", "sky", "midnight", "pink". */
+  bobSkin: string;
+  /** The top-bar icons shown, in order (comma list; "" = the usual set). */
+  barIcons: string;
   /** Bob's wardrobe pick (an id, or "none" for seasonal/plain). */
   outfit: string;
   /** Bob shows one tip a day about something CubeCursor can do. */
@@ -99,10 +105,12 @@ export function saveFocus(f: Focus | null) {
 
 const DEFAULTS: IslandSettings = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
-  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false, weather: true, city: "",
+  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false, weather: true, city: "", voice: false,
   theme: "glass",
   accent: "",
   barColor: "",
+  bobSkin: "",
+  barIcons: "",
   outfit: "none",
   tips: true,
   focusMinutes: 25,

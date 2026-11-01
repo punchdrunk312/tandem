@@ -281,6 +281,16 @@ pub enum Msg {
     MirrorAck {
         id: u64,
     },
+    /// "Play your sound on my speakers, please" (or stop).
+    AudioWant {
+        on: bool,
+    },
+    /// 20 ms of the sharing computer's sound (16-bit stereo, 48 kHz).
+    Audio {
+        pcm: Vec<u8>,
+    },
+    /// The sharing computer stopped (or couldn't start).
+    AudioOff,
 }
 
 /// How a computer is doing, as shown on its card in the bar.

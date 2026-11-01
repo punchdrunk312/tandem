@@ -29,9 +29,13 @@ sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+windows-collections = "0.2"
 windows = { version = "0.61", features = [
   "Foundation",
   "Media_Control",
+  "Media_SpeechRecognition",
+  "Foundation_Collections",
+  "Globalization",
   "Storage_Streams",
   "Win32_Foundation",
   "Win32_System_Com",

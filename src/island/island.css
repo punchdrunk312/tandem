@@ -187,6 +187,51 @@ html.dev body { background: #2b2f38; }
 :root[data-bar="carbon"][data-theme="glass"] .btn.primary { background: #fff; color: #15181c; }
 :root[data-bar="carbon"][data-theme="glass"] #compact-label { color: #e8eaee; }
 
+/* ── more bar colours ───────────────────────────────────────────────────── */
+:root[data-bar="midnight"][data-theme="dark"] #island { background: linear-gradient(180deg, #1f2747 0%, #151b35 60%, #10152b 100%); }
+:root[data-bar="midnight"][data-theme="glass"] {
+  color-scheme: dark; --ink: #f2f5ff; --dim: rgba(225, 232, 255, 0.68); --dim-2: rgba(225, 232, 255, 0.45); --red-text: #ffb3bc;
+  --glass-1: rgba(36, 46, 88, 0.9); --glass-2: rgba(20, 26, 54, 0.86);
+}
+:root[data-bar="midnight"][data-theme="glass"][data-liquid="on"] #glass::after { background: rgba(22, 30, 64, 0.6); }
+:root[data-bar="midnight"][data-theme="glass"] .btn.primary { background: #fff; color: #141a33; }
+:root[data-bar="midnight"][data-theme="glass"] .icon-btn:hover, :root[data-bar="midnight"][data-theme="glass"] .icon-btn.on { background: rgba(255, 255, 255, 0.12); color: var(--ink); }
+:root[data-bar="midnight"][data-theme="glass"] #island-clip::before { background: radial-gradient(120% 70% at 18% -20%, rgba(160, 180, 255, 0.22), transparent 60%); }
+
+/* Light bars: dark words, on Classic too. */
+:root[data-bar="sand"], :root[data-bar="rose"] { --ink: #2a2118; --dim: rgba(42, 33, 24, 0.66); --dim-2: rgba(42, 33, 24, 0.45); --red-text: #c0283c; }
+:root[data-bar="rose"] { --ink: #3a1d22; --dim: rgba(58, 29, 34, 0.66); --dim-2: rgba(58, 29, 34, 0.45); }
+:root[data-bar="sand"][data-theme="dark"] #island { background: linear-gradient(180deg, #f3e9d6 0%, #e7d8bb 100%); }
+:root[data-bar="rose"][data-theme="dark"] #island { background: linear-gradient(180deg, #f6d9d0 0%, #e9b9aa 100%); }
+:root[data-bar="sand"][data-theme="glass"] { --glass-1: rgba(250, 242, 226, 0.92); --glass-2: rgba(236, 222, 196, 0.86); }
+:root[data-bar="rose"][data-theme="glass"] { --glass-1: rgba(255, 234, 228, 0.92); --glass-2: rgba(240, 196, 184, 0.86); }
+:root[data-bar="sand"][data-theme="glass"][data-liquid="on"] #glass::after { background: rgba(245, 232, 206, 0.5); }
+:root[data-bar="rose"][data-theme="glass"][data-liquid="on"] #glass::after { background: rgba(246, 210, 200, 0.5); }
+:root[data-bar="sand"] .icon-btn:hover, :root[data-bar="sand"] .icon-btn.on,
+:root[data-bar="rose"] .icon-btn:hover, :root[data-bar="rose"] .icon-btn.on { background: rgba(60, 30, 10, 0.08); color: var(--ink); }
+:root[data-bar="sand"] .btn, :root[data-bar="rose"] .btn { background: rgba(60, 30, 10, 0.07); color: var(--ink); }
+:root[data-bar="sand"] .btn.primary, :root[data-bar="rose"] .btn.primary { background: var(--ink); color: #fff; }
+:root[data-bar="sand"] #compact-label, :root[data-bar="rose"] #compact-label { color: var(--ink); }
+
+/* ── catch ──────────────────────────────────────────────────────────────── */
+.game .g-cv { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.game .g-cv:active { cursor: grabbing; }
+.g-score { position: absolute; right: 18px; top: 4px; font-size: 12px; font-weight: 650; color: var(--dim); font-variant-numeric: tabular-nums; pointer-events: none; }
+.g-hint { position: absolute; left: 0; right: 0; top: 40%; text-align: center; font-size: 12.5px; color: var(--dim); pointer-events: none; transition: opacity 0.4s; }
+.g-hint.off { opacity: 0; }
+
+/* ── a suggestion, the tour ─────────────────────────────────────────────── */
+.suggest, .tour { display: flex; align-items: center; padding: 0 24px 0 112px; }
+.sg-title, .tr-title { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.sg-sub, .tr-sub { font-size: 12.5px; color: var(--dim); margin-top: 4px; line-height: 1.4; }
+.tour { padding-left: 128px; }
+.tr-text.in { animation: tr-in 0.45s cubic-bezier(0.2, 1.1, 0.3, 1) both; }
+@keyframes tr-in { from { opacity: 0; transform: translateX(14px); filter: blur(3px); } }
+.tr-dots { display: flex; gap: 5px; margin-bottom: 8px; }
+.tr-dots i { width: 6px; height: 6px; border-radius: 3px; background: var(--dim-2); opacity: 0.5; transition: width 0.3s cubic-bezier(0.2, 1.2, 0.3, 1), background 0.3s, opacity 0.3s; }
+.tr-dots i.done { opacity: 0.8; }
+.tr-dots i.on { width: 18px; background: var(--teal); opacity: 1; }
+
 /* A file on its way. */
 .plane {
   position: absolute; left: 0; top: 0; pointer-events: none; z-index: 5;

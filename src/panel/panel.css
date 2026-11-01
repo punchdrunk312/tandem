@@ -490,3 +490,11 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
 
 /* A "Beta" tag on an option that is still being tried out. */
 .beta { margin-left: 6px; padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; background: #fde68a; color: #7c4a03; vertical-align: 1px; }
+
+/* Top bar icons: a tick and two arrows per row. */
+.bar-icons { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.bi-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(127, 127, 127, 0.08); }
+.bi-row label { flex: 1; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.bi-row.off label { opacity: 0.55; }
+.bi-mv { width: 26px; height: 24px; border: 0; border-radius: 7px; background: rgba(127, 127, 127, 0.14); color: inherit; cursor: pointer; }
+.bi-mv:disabled { opacity: 0.3; cursor: default; }
