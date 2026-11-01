@@ -509,8 +509,12 @@ pub fn portal_input(ev: &crate::proto::InputEvent) -> bool {
                 let mut last = VLAST_CLICK.lock().unwrap();
                 let quick = Duration::from_millis(unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime() } as u64);
                 if let Some((t0, lx, ly, m)) = *last {
+                    // Only windows that ask for double-clicks get one; others get a second click.
+                    let wants = unsafe { GetClassLongPtrW(t, GCL_STYLE) } as u32 & CS_DBLCLKS.0 != 0;
                     if m == dn && t0.elapsed() <= quick && (lx - x).abs() <= 4 && (ly - y).abs() <= 4 {
-                        msg = dbl;
+                        if wants {
+                            msg = dbl;
+                        }
                         *last = None;
                     } else {
                         *last = Some((Instant::now(), x, y, dn));

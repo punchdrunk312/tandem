@@ -137,7 +137,11 @@ fn lyrics(title: &str, artist: &str, album: &str, duration_ms: u64) -> Result<Op
         match lrclib(t, a, album, duration_ms) {
             Ok(Some(l)) => return Ok(Some(l)),
             Ok(None) => reached = true,
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                // Down or unreachable: asking again with the plain title would only wait again.
+                last_err = Some(e);
+                break;
+            }
         }
     }
     for (t, a) in &tries {
@@ -446,7 +450,7 @@ mod sys {
         read().unwrap_or_default()
     }
 
-    fn read(s: &Session, last: Option<&NowPlaying>) -> Option<NowPlaying> {
+    fn read(s: &Session, last: Option<&NowPlaying>, art_retry: bool) -> Option<NowPlaying> {
         let props = s.TryGetMediaPropertiesAsync().ok()?.get().ok()?;
         let info = s.GetPlaybackInfo().ok()?;
         let controls = info.Controls().ok()?;
@@ -471,7 +475,8 @@ mod sys {
         let artist = props.Artist().map(|h| h.to_string()).unwrap_or_default();
         // The picture only changes with the song: read it once per song.
         let art = match last {
-            Some(l) if l.title == title && l.artist == artist && !l.art.is_empty() => l.art.clone(),
+            // Same song: the same picture (one without a cover is looked at again now and then).
+            Some(l) if l.title == title && l.artist == artist && (!l.art.is_empty() || !art_retry) => l.art.clone(),
             _ => art(&props),
         };
         Some(NowPlaying {
@@ -508,14 +513,16 @@ mod sys {
         let mut last: Option<NowPlaying> = None;
         // Where the island thinks the song is: the position sent, and when.
         let mut sent = (0u64, std::time::Instant::now());
+        let mut polls = 0u32;
         loop {
+            polls = polls.wrapping_add(1);
             if mgr.is_none() {
                 mgr = manager();
             }
             let now = mgr
                 .as_ref()
                 .and_then(session)
-                .and_then(|s| read(&s, last.as_ref()))
+                .and_then(|s| read(&s, last.as_ref(), polls.is_multiple_of(12)))
                 .filter(|n| !n.title.is_empty())
                 .map(|mut n| {
                     let app = n.app.to_lowercase();

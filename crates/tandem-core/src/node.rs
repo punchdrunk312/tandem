@@ -794,6 +794,7 @@ impl Node {
             span_in: None,
             mirrors_out: HashMap::new(),
             frames_out: HashMap::new(),
+            frame_ackers: Default::default(),
             mirrors_in: HashMap::new(),
             mirror_k: HashMap::new(),
             span_view: None,
@@ -1282,6 +1283,8 @@ struct Actor {
     /// Pictures of our windows on their way: when the last one left (not yet acknowledged),
     /// and the newest one taken since, sent as soon as that one arrives.
     frames_out: HashMap<u64, (Instant, Option<Msg>)>,
+    /// Computers that answer window pictures (an older version doesn't: no pacing for it).
+    frame_ackers: std::collections::HashSet<String>,
     /// Other computers' windows shown here (id → that computer).
     mirrors_in: HashMap<u64, String>,
     /// How much bigger each of those is shown here than it really is (screens of other
@@ -1510,6 +1513,23 @@ impl Actor {
         self.sh.save();
         if let Some(s) = self.sessions.get_mut(pid) {
             s.fleet = on;
+        }
+        // Back on the desk: it needs an edge of its own (its stored one may be taken).
+        let side = self.sessions.get(pid).map(|s| s.side);
+        if let (false, Some(side)) = (on, side) {
+            let taken = |e: Edge, me: &Self| me.sessions.iter().any(|(id, s)| id != pid && !s.fleet && s.side == e);
+            if taken(side, self) {
+                if let Some(free) = SIDE_ORDER.into_iter().find(|e| !taken(*e, self)) {
+                    if let Some(s) = self.sessions.get_mut(pid) {
+                        s.side = free;
+                    }
+                    if let Some(p) = self.sh.persisted.lock().unwrap().peers.iter_mut().find(|p| p.id == pid) {
+                        p.side = free;
+                    }
+                    self.sh.save();
+                    self.send_to(pid, Msg::Layout { peer_side: free });
+                }
+            }
         }
         if on {
             // Never keep the mouse or a drag with a computer that just left the desk.
@@ -2351,7 +2371,7 @@ impl Actor {
                     match self.frames_out.get_mut(&id) {
                         // The last one hasn't arrived yet: this one waits (replacing any
                         // older one waiting). A lost answer only holds it up a moment.
-                        Some((at, wait)) if at.elapsed() < Duration::from_millis(400) => *wait = Some(m),
+                        Some((at, wait)) if at.elapsed() < Duration::from_millis(400) && self.frame_ackers.contains(&to) => *wait = Some(m),
                         _ => {
                             self.frames_out.insert(id, (Instant::now(), None));
                             self.send_to(&to, m);
@@ -3351,6 +3371,7 @@ impl Actor {
                 }
             }
             Msg::MirrorAck { id } => {
+                self.frame_ackers.insert(from.to_string());
                 if self.mirrors_out.get(&id).map(String::as_str) != Some(from) {
                     self.frames_out.remove(&id);
                     return;
@@ -3795,6 +3816,18 @@ impl Actor {
                 }
             }
             Cmd::CancelTransfer { id } => {
+                // An incoming send waiting for its computer to come back: dropped.
+                let paused = {
+                    let mut parts = self.sh.partials.lock().unwrap();
+                    let waiting = parts.get(&id).is_some_and(|p| !p.running);
+                    if waiting {
+                        parts.remove(&id);
+                    }
+                    waiting
+                };
+                if paused {
+                    return self.sh.transfer_finish(id, "in", Err("Cancelled".to_string()));
+                }
                 // Flag it so the serve loop stops at its next chunk, and show it as cancelled now.
                 self.sh.cancels.lock().unwrap().insert(id);
                 self.sh

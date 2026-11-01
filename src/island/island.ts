@@ -1006,7 +1006,7 @@ export class Island {
       // The browser window is back (or the video is gone): it takes over again.
       if (!m || m.title !== v.title || !m.video_hidden) this.endVideo(!!m && m.title === v.title);
       // Still playing in the minimised browser too (the first pause missed): pause it again.
-      else if (m.playing && performance.now() - this.videoPausedAt > 1500) {
+      else if (m.playing && /chrome|edge|firefox|brave|opera|vivaldi/i.test(m.app) && !/webview|cubecursor/i.test(m.app) && performance.now() - this.videoPausedAt > 1500) {
         this.videoPausedAt = performance.now();
         void call("media_control", { action: "pause" }).catch(() => {});
       }
