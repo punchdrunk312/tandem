@@ -1,3 +1,4 @@
+import "@fontsource-variable/inter";
 import "./panel.css";
 import { call, onEvent, onFileDrop, onSnapshot } from "./api";
 import type { ElevState, Side, Snapshot, UiOptions } from "../types";
@@ -72,6 +73,7 @@ const paired = h("section", { class: "card" });
 const admin = h("section", { class: "card" });
 const topbar = h("div", { class: "feat-page" });
 const features = h("div", { class: "feat-page" });
+const bobPage = h("div", { class: "feat-page" });
 const veil = h("div", { id: "veil" });
 document.body.append(veil);
 
@@ -83,6 +85,8 @@ const ICONS = {
   features: "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z",
   bar: "M3 4h18v5H3zM7 14h10M9 18h6",
   account: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0",
+  bob: "M6 6h12a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2zM9.5 11.5v1M14.5 11.5v1M10 15.5c1.2.8 2.8.8 4 0",
+  search: "M11 18a7 7 0 100-14 7 7 0 000 14zM20 20l-4-4",
   clipboard: "M9 4h6v3H9zM8 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-2M9 12h6M9 16h4",
   drag: "M7 3h7l4 4v7M7 3a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h4M14 3v4h4M15 15l6 6M21 15v6h-6",
   game: "M6 9h12a4 4 0 0 1 4 4v1a3 3 0 0 1-5.4 1.8L15 14H9l-1.6 1.8A3 3 0 0 1 2 14v-1a4 4 0 0 1 4-4zM7 11v3M5.5 12.5h3M16 12h.01M18 13.5h.01",
@@ -113,12 +117,13 @@ function ico(d: string, size = 18): SVGElement {
   return n;
 }
 
-type PageId = "computers" | "features" | "files" | "bar" | "account";
+type PageId = "computers" | "features" | "files" | "bar" | "bob" | "account";
 const PAGES: { id: PageId; label: string; title: string; sub: string; icon: string }[] = [
   { id: "computers", label: "Computers", title: "Computers", sub: "Pair computers and arrange them around this one.", icon: ICONS.computers },
   { id: "features", label: "Features", title: "Features", sub: "Turn things on and off. Everything is ready to use.", icon: ICONS.features },
   { id: "files", label: "Files", title: "Files", sub: "Send files and folders to your other computers.", icon: ICONS.files },
-  { id: "bar", label: "Bar & Bob", title: "Bar & Bob", sub: "How the bar looks and sounds, and what Bob does.", icon: ICONS.bar },
+  { id: "bar", label: "Top bar", title: "Top bar", sub: "How the bar looks, sounds and behaves.", icon: ICONS.bar },
+  { id: "bob", label: "Bob", title: "Bob", sub: "His colour, his clothes, and what he does for you.", icon: ICONS.bob },
   { id: "account", label: "Account", title: "Account", sub: "Your licence, updates, and getting in touch.", icon: ICONS.account },
 ];
 let page: PageId = "computers";
@@ -149,19 +154,47 @@ bodyOf("computers").append(stage, layout);
 bodyOf("features").append(features);
 bodyOf("files").append(files);
 bodyOf("bar").append(topbar);
+bodyOf("bob").append(bobPage);
 bodyOf("account").append(settings, admin, paired);
 
 function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
   page = id;
   try { sessionStorage.setItem("tandem.page", id); } catch { /* storage unavailable */ }
-  indicator.style.transform = `translateY(${idx * 46}px)`;
+  if (searchIn.value) { searchIn.value = ""; applySearch(); }
+  indicator.style.transform = `translateY(${idx * 42}px)`;
   navBtns.forEach((b, i) => b.classList.toggle("on", i === idx));
   for (const [pid, el] of pageEls) el.classList.toggle("on", pid === id);
   content.scrollTo({ top: 0 });
 }
 
+// ---------------------------------------------------------------- search
+// Typing shows every page at once, with only the settings that match.
+const searchIn = h("input", { type: "search", class: "search-in", placeholder: "Search settings", "aria-label": "Search settings",
+  oninput: () => applySearch(), onkeydown: (e: KeyboardEvent) => { if (e.key === "Escape") { searchIn.value = ""; applySearch(); } } }) as HTMLInputElement;
+const noHits = h("div", { class: "no-hits", hidden: true });
+function applySearch() {
+  const q = searchIn.value.trim().toLowerCase();
+  content.classList.toggle("searching", !!q);
+  const units = content.querySelectorAll<HTMLElement>(".tile, .set, .group:not(:has(.tile, .set)), .card:not(:has(.set))");
+  units.forEach((u) => u.classList.toggle("miss", !!q && !u.textContent!.toLowerCase().includes(q)));
+  content.querySelectorAll<HTMLElement>(".group, .card").forEach((g) => {
+    const hit = !g.classList.contains("miss") && (!g.querySelector(".tile, .set") || !!g.querySelector(".tile:not(.miss), .set:not(.miss)"));
+    g.classList.toggle("miss-group", !!q && !hit);
+  });
+  let any = false;
+  for (const el of pageEls.values()) {
+    const hit = !!el.querySelector(".tile:not(.miss), .set:not(.miss), .group:not(.miss):not(.miss-group), .card:not(.miss):not(.miss-group)");
+    el.classList.toggle("hit", !!q && hit);
+    any ||= hit;
+  }
+  noHits.hidden = !q || any;
+  noHits.textContent = `Nothing matches “${searchIn.value.trim()}”.`;
+}
+content.append(noHits);
+
 const side = h("aside", { class: "side" },
   h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-name" }, "CubeCursor")),
+  h("label", { class: "search" }, ico(ICONS.search, 15), searchIn),
   statusEl, nav,
   h("div", { class: "side-foot" },
     h("div", { class: "foot-row" }, h("kbd", {}, "Ctrl+Alt+Z"), h("span", {}, "control bar")),
@@ -195,6 +228,7 @@ function update(el: HTMLElement, name: string, key: unknown, build: () => Node[]
   if (keys[name] === k) return;
   keys[name] = k;
   el.replaceChildren(...build());
+  if (searchIn.value) applySearch();
 }
 
 // ---------------------------------------------------------------- sections
@@ -1002,65 +1036,60 @@ function renderTopBar() {
     const wardrobe = h("div", { class: "wardrobe", role: "radiogroup", "aria-label": "Bob's outfit" },
       ...OUTFITS.map(([id, label]) =>
         h("button", { class: `wbtn${is.outfit === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.outfit === id), onclick: () => set({ outfit: id }) }, label)));
+    const bobSkins = h("div", { class: "swatches", role: "radiogroup", "aria-label": "Bob's colour" },
+      ...([["", "#2dd4bf", "Teal"], ["coral", "#ec5b54", "Coral"], ["violet", "#7a55eb", "Violet"], ["gold", "#eda11a", "Gold"], ["sky", "#2785ed", "Sky"], ["midnight", "#22296b", "Midnight"], ["pink", "#e5529a", "Pink"], ["lime", "#66bf1f", "Lime"]] as const).map(([id, hex, label]) =>
+        h("button", { class: `sw${is.bobSkin === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.bobSkin === id), title: label, "aria-label": label, style: `--sw:${hex}`, onclick: () => set({ bobSkin: id }) })));
+    const barColours = seg([["", "Standard"], ["carbon", "Carbon"], ["midnight", "Midnight"], ["sand", "Sand"], ["rose", "Rose gold"]] as const,
+      is.barColor as "" | "carbon" | "midnight" | "sand" | "rose", (v) => set({ barColor: v }));
+    const block = (title: string, hint: string | null, control: Node) =>
+      h("div", { class: "set block" }, h("div", { class: "set-text" }, h("div", { class: "set-title" }, title), hint ? h("div", { class: "set-hint" }, hint) : null), control);
+
+    bobPage.replaceChildren(
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Looks"),
+        h("div", { class: "card list" },
+          block("Colour", "Bob's own colour.", bobSkins),
+          block("Outfit", "Stays on all year. Turn on Seasons & holidays to let him dress for the time of year instead.", wardrobe))),
+      group("Bob does",
+        tile({ id: "moments", icon: ICONS.moments, color: "amber", title: "Device moments", line: "Charging, battery low, a computer joins.", on: is.moments,
+          more: "A short card in the bar when a laptop is plugged in, runs low or is full, or when a computer joins or leaves. Each one only once in a while.",
+          control: switchEl(is.moments, (v) => set({ moments: v })) }),
+        tile({ id: "weather", icon: ICONS.weather, color: "blue", title: "Weather", line: "Rain, snow or sun in the bar; Bob dresses for it.", on: is.weather,
+          more: "The weather comes from Open-Meteo for the city you type (or the one in your time zone). Only the city name is sent.",
+          control: h("div", { class: "row" },
+            h("input", { type: "text", class: "city-in", placeholder: "City", value: is.city, maxLength: 60, "aria-label": "City",
+              onchange: (e: Event) => set({ city: (e.target as HTMLInputElement).value.trim() }) }),
+            switchEl(is.weather, (v) => set({ weather: v }))) }),
+        tile({ id: "voice", icon: ICONS.voice, color: "violet", title: "Hey Bob", line: "Say \"Hey Bob, play\", \"…next song\", \"…start focus\".", on: is.voice,
+          more: "Windows listens on this computer for a short list of phrases: Hey Bob, play / pause / next song / previous song / show the lyrics / start focus / open my notes / show my computers / play catch / what's the weather / jump / play its sound here / stop the sound / close / how are you. Nothing leaves your computer.",
+          control: switchEl(is.voice, (v) => set({ voice: v })) }),
+        tile({ id: "tips", icon: ICONS.tips, color: "violet", title: "Daily tips", line: "One thing CubeCursor can do, once a day.", on: is.tips,
+          control: switchEl(is.tips, (v) => set({ tips: v })) }),
+        tile({ id: "seasons", icon: ICONS.seasons, color: "rose", title: "Seasons & holidays", line: "Bob dresses for the time of year.", on: is.seasons,
+          control: switchEl(is.seasons, (v) => set({ seasons: v })) }),
+        tile({ id: "calm", icon: ICONS.calm, color: "slate", title: "Calm Bob", line: "Nothing drifting, quieter cards.", on: is.calm,
+          control: switchEl(is.calm, (v) => set({ calm: v })) }),
+        tile({ id: "bday", icon: ICONS.cake, color: "rose", title: "Your birthday", line: "Bob celebrates with you. It stays here.",
+          control: birthdayEl(is.birthday) })),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Tour"),
+        h("div", { class: "card list" },
+          setting("Show me around again", "Bob's five-step tour of the bar.",
+            h("button", { onclick: () => { try { localStorage.setItem("cc.tourAgain", String(Date.now())); } catch { /* fine */ } } }, "Start the tour")))));
+    if (searchIn.value) applySearch();
+
     return [
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Look"),
         looks,
         h("p", { class: "g-help" }, isMac() ? "Liquid Glass asks once for Screen Recording, so the bar can see what's behind it." : "To see through itself, the Liquid Glass bar stays out of screenshots and screen recordings.")),
       h("section", { class: "group" },
-        h("h2", { class: "g-title" }, "Colour"),
-        swatches,
-        h("p", { class: "g-help" }, "The accent colour of the bar — dots, glow, progress and buttons. Works on both looks, and tints Bob too.")),
+        h("h2", { class: "g-title" }, "Colours"),
+        h("div", { class: "card list" },
+          block("Bar colour", "The bar itself, on Liquid Glass and Classic.", barColours),
+          block("Accent", "Dots, glow, progress and buttons. Tints Bob too.", swatches))),
       h("section", { class: "group" },
-        h("h2", { class: "g-title" }, "Bar colour"),
-        h("div", { class: "wardrobe", role: "radiogroup", "aria-label": "Bar colour" },
-          ...([["", "Standard"], ["carbon", "Carbon"], ["midnight", "Midnight"], ["sand", "Sand"], ["rose", "Rose gold"]] as const).map(([id, label]) =>
-            h("button", { class: `wbtn${is.barColor === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.barColor === id), onclick: () => set({ barColor: id }) }, label))),
-        h("p", { class: "g-help" }, "The bar's own colour, on Liquid Glass and on Classic.")),
-      h("section", { class: "group" },
-        h("h2", { class: "g-title" }, "Bob's colour"),
-        h("div", { class: "swatches", role: "radiogroup", "aria-label": "Bob's colour" },
-          ...([["", "#2dd4bf", "Teal"], ["coral", "#ec5b54", "Coral"], ["violet", "#7a55eb", "Violet"], ["gold", "#eda11a", "Gold"], ["sky", "#2785ed", "Sky"], ["midnight", "#22296b", "Midnight"], ["pink", "#e5529a", "Pink"], ["lime", "#66bf1f", "Lime"]] as const).map(([id, hex, label]) =>
-            h("button", { class: `sw${is.bobSkin === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.bobSkin === id), title: label, "aria-label": label, style: `--sw:${hex}`, onclick: () => set({ bobSkin: id }) }))),
-        h("p", { class: "g-help" }, "Bob's own colour.")),
-      h("section", { class: "group" },
-        h("h2", { class: "g-title" }, "Top bar icons"),
-        barIconsEl(is.barIcons, (v) => set({ barIcons: v })),
-        h("p", { class: "g-help" }, "Tick the icons you want in the bar, and use the arrows to put them in order."),
-        h("button", { class: "btn", text: "Show me around again", onclick: () => { try { localStorage.setItem("cc.tourAgain", String(Date.now())); } catch { /* fine */ } } })),
-      h("section", { class: "group" },
-        h("h2", { class: "g-title" }, "Bob's wardrobe"),
-        wardrobe,
-        h("p", { class: "g-help" }, "What Bob wears. Set here, it stays on over the seasons — turn on Seasons & holidays below to let him dress for the time of year instead.")),
-      group("Sound",
-        tile({ id: "sound", icon: ICONS.sound, color: "teal", title: "Sounds", line: "Soft, calm sounds. Never a beep.", on: is.soundEnabled,
-          more: "A gentle chime when your laptop starts charging or is full, a warm hello when a computer joins, and little noises from Bob. Nothing plays during games or films.",
-          control: h("div", { class: "row" }, volume, switchEl(is.soundEnabled, (v) => set({ soundEnabled: v }))) }),
-        tile({ id: "whoosh", icon: ICONS.whoosh, color: "blue", title: "Whoosh when crossing", line: "A breath of air as you cross.", on: is.crossWhoosh,
-          control: switchEl(is.crossWhoosh, (v) => set({ crossWhoosh: v })) })),
-      group("Bob",
-        tile({ id: "moments", icon: ICONS.moments, color: "amber", title: "Device moments", line: "Charging, battery low, a computer joins.", on: is.moments,
-          more: "A short card in the bar when a laptop is plugged in, runs low or is full, or when a computer joins or leaves. Each one only once in a while.",
-          control: switchEl(is.moments, (v) => set({ moments: v })) }),
-        tile({ id: "tips", icon: ICONS.tips, color: "violet", title: "Daily tips", line: "One thing CubeCursor can do, once a day.", on: is.tips,
-          control: switchEl(is.tips, (v) => set({ tips: v })) }),
-        tile({ id: "seasons", icon: ICONS.seasons, color: "rose", title: "Seasons & holidays", line: "Bob dresses for the time of year.", on: is.seasons,
-          control: switchEl(is.seasons, (v) => set({ seasons: v })) }),
-        tile({ id: "voice", icon: ICONS.voice, color: "violet", title: "Hey Bob", line: "Say \"Hey Bob, play\", \"…next song\", \"…start focus\".", on: is.voice,
-          more: "Windows listens on this computer for a short list of phrases: Hey Bob, play / pause / next song / previous song / show the lyrics / start focus / open my notes / show my computers / play catch / what's the weather / jump / play its sound here / stop the sound / close / how are you. Nothing leaves your computer.",
-          control: switchEl(is.voice, (v) => set({ voice: v })) }),
-        tile({ id: "weather", icon: ICONS.weather, color: "blue", title: "Weather", line: "Rain, snow or sun in the bar; Bob dresses for it.", on: is.weather,
-          more: "The weather comes from Open-Meteo for the city below (or the one in your time zone). Only the city name is sent.",
-          control: h("div", { style: "display:flex;gap:8px;align-items:center" },
-            h("input", { type: "text", class: "name-in", placeholder: "City (optional)", value: is.city, maxLength: 60,
-              onchange: (e: Event) => set({ city: (e.target as HTMLInputElement).value.trim() }) }),
-            switchEl(is.weather, (v) => set({ weather: v }))) }),
-        tile({ id: "calm", icon: ICONS.calm, color: "slate", title: "Calm Bob", line: "Nothing drifting, quieter cards.", on: is.calm,
-          control: switchEl(is.calm, (v) => set({ calm: v })) }),
-        tile({ id: "bday", icon: ICONS.cake, color: "rose", title: "Your birthday", line: "Bob celebrates with you. It stays here.", wide: true,
-          control: birthdayEl(is.birthday) })),
-      h("section", { class: "group" },
-        h("h2", { class: "g-title" }, "The bar"),
+        h("h2", { class: "g-title" }, "Behaviour"),
         h("div", { class: "card list" },
           setting("Show the bar", "At rest it's a thin line at the top of the screen.", switchEl(ui.enabled, (v) => setUi({ enabled: v }))),
           setting("Hide in full-screen apps", "Keeps games and videos clean.", switchEl(ui.hide_fullscreen, (v) => setUi({ hide_fullscreen: v }))),
@@ -1070,6 +1099,17 @@ function renderTopBar() {
           ...(isMac() ? [] : [setting("Explorer right-click menu", "Adds “Send with CubeCursor” to files and folders.", switchEl(shellMenu, (v) => {
             void call("shell_menu_set", { on: v }).then(() => { shellMenu = v; renderTopBar(); }).catch(() => { shellMenu = !v; renderTopBar(); });
           }))]))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Icons in the bar"),
+        h("div", { class: "card list pad" },
+          barIconsEl(is.barIcons, (v) => set({ barIcons: v })),
+          h("p", { class: "g-help" }, "Tick the ones you want; the arrows put them in order."))),
+      group("Sound",
+        tile({ id: "sound", icon: ICONS.sound, color: "teal", title: "Sounds", line: "Soft, calm sounds. Never a beep.", on: is.soundEnabled,
+          more: "A gentle chime when your laptop starts charging or is full, a warm hello when a computer joins, and little noises from Bob. Nothing plays during games or films.",
+          control: h("div", { class: "row" }, volume, switchEl(is.soundEnabled, (v) => set({ soundEnabled: v }))) }),
+        tile({ id: "whoosh", icon: ICONS.whoosh, color: "blue", title: "Whoosh when crossing", line: "A breath of air as you cross.", on: is.crossWhoosh,
+          control: switchEl(is.crossWhoosh, (v) => set({ crossWhoosh: v })) })),
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Shortcuts"),
         h("div", { class: "keys" },
