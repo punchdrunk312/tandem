@@ -795,6 +795,7 @@ impl Node {
             mirrors_out: HashMap::new(),
             frames_out: HashMap::new(),
             frame_ackers: Default::default(),
+            frame_stats: (0, 0, 0, Instant::now()),
             mirrors_in: HashMap::new(),
             mirror_k: HashMap::new(),
             span_view: None,
@@ -1285,6 +1286,8 @@ struct Actor {
     frames_out: HashMap<u64, (Instant, Option<Msg>)>,
     /// Computers that answer window pictures (an older version doesn't: no pacing for it).
     frame_ackers: std::collections::HashSet<String>,
+    /// Pictures sent and held back, and their bytes, since `.3` (logged every few seconds).
+    frame_stats: (u32, u32, usize, Instant),
     /// Other computers' windows shown here (id → that computer).
     mirrors_in: HashMap<u64, String>,
     /// How much bigger each of those is shown here than it really is (screens of other
@@ -2367,15 +2370,33 @@ impl Actor {
             }
             CaptureEvent::MirrorFrame { id, w, h, jpeg } => {
                 if let Some(to) = self.mirrors_out.get(&id).cloned() {
+                    let size = jpeg.len();
                     let m = Msg::MirrorFrame { id, w, h, jpeg };
                     match self.frames_out.get_mut(&id) {
                         // The last one hasn't arrived yet: this one waits (replacing any
                         // older one waiting). A lost answer only holds it up a moment.
-                        Some((at, wait)) if at.elapsed() < Duration::from_millis(400) && self.frame_ackers.contains(&to) => *wait = Some(m),
+                        Some((at, wait)) if at.elapsed() < Duration::from_millis(400) && self.frame_ackers.contains(&to) => {
+                            *wait = Some(m);
+                            self.frame_stats.1 += 1;
+                        }
                         _ => {
                             self.frames_out.insert(id, (Instant::now(), None));
                             self.send_to(&to, m);
+                            self.frame_stats.0 += 1;
+                            self.frame_stats.2 += size;
                         }
+                    }
+                    let (sent, held, bytes, since) = self.frame_stats;
+                    let secs = since.elapsed().as_secs_f32();
+                    if secs >= 3.0 {
+                        log::info!(
+                            "mirror: {:.0} pictures/s sent to {to} ({:.0} KB each, {:.0} held back/s, paced: {})",
+                            sent as f32 / secs,
+                            bytes as f32 / sent.max(1) as f32 / 1024.0,
+                            held as f32 / secs,
+                            self.frame_ackers.contains(&to)
+                        );
+                        self.frame_stats = (0, 0, 0, Instant::now());
                     }
                 }
             }
@@ -2709,12 +2730,18 @@ impl Actor {
             .filter(|_| self.control == Control::Local)
             .and_then(|p| self.sessions.get(&p).map(|s| (p, s.side)));
         let Some((peer, edge)) = target else {
+            log::info!(
+                "portal: our mouse reached mirror {id}, but can't drive it (control {:?}, mirror known: {})",
+                self.control,
+                self.mirrors_in.contains_key(&id)
+            );
             if from_hook {
                 let (x, y) = self.sh.platform.cursor_pos();
                 self.sh.platform.end_capture(x, y);
             }
             return;
         };
+        log::info!("portal: our mouse is on mirror {id}: driving {peer}'s window");
         self.set_control(Control::Remote {
             peer: peer.clone(),
             edge,
@@ -2739,6 +2766,7 @@ impl Actor {
 
     /// The mirror end, driven by the owner's mouse: it went onto the owner's window.
     fn portal_in_controlled(&mut self, from: &str, id: u64, rx: i32, ry: i32) {
+        log::info!("portal: {from}'s mouse reached its window's mirror {id} here");
         self.set_control(Control::Local);
         self.sh.platform.pointer_hidden(true);
         self.portal = Some(Portal {
@@ -2772,6 +2800,7 @@ impl Actor {
         match self.control.clone() {
             // Our own mouse, on their screen, went onto it.
             Control::Remote { peer, .. } if ours && peer == from => {
+                log::info!("portal: our mouse, on {from}'s screen, is on our window {id}");
                 if let Some((x, y)) = plat.portal_begin(id, rx, ry) {
                     plat.end_capture(x, y);
                     // The pointer is seen on the mirror, over there: not here as well.
@@ -2783,6 +2812,7 @@ impl Actor {
             }
             // Their mouse went onto it: it drives this computer from here.
             Control::Local if ours => {
+                log::info!("portal: {from}'s mouse is on our window {id}");
                 let side = self.sessions.get(from).map(|s| s.side);
                 if let (Some(ret), Some((x, y))) = (side, plat.portal_begin(id, rx, ry)) {
                     plat.set_cursor(x, y);
@@ -2798,6 +2828,10 @@ impl Actor {
             _ => {}
         }
         // Not now (or the window is gone): the pointer stays over there.
+        log::info!(
+            "portal: {from} asked to drive window {id}, refused (ours: {ours}, control {:?})",
+            self.control
+        );
         self.send_to(from, Msg::PortalLeave { id, rx, ry });
     }
 
