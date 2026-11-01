@@ -2445,6 +2445,22 @@ impl Actor {
             }
             CaptureEvent::Input(ev) => {
                 self.track_button(&ev);
+                // Our mouse, over there, on the mirror of one of our windows: it drives the
+                // window here directly, until it leaves it.
+                if let (Control::Remote { peer, .. }, Some(p)) = (&self.control, &self.portal) {
+                    if p.owner && p.peer == *peer {
+                        let (peer, id) = (peer.clone(), p.id);
+                        self.sh.platform.inject(&ev);
+                        if matches!(ev, InputEvent::MouseMove { .. }) && !self.left_down {
+                            if let Some((rx, ry)) = self.sh.platform.portal_outside() {
+                                self.portal = None;
+                                self.sh.platform.portal_end();
+                                self.send_to(&peer, Msg::PortalLeave { id, rx, ry });
+                            }
+                        }
+                        return;
+                    }
+                }
                 if let Control::Remote { peer, .. } = &self.control {
                     // Our mouse on another computer's window, shown here: the pointer on it
                     // moves now, not after the round trip (that computer moves the window's
@@ -2801,11 +2817,9 @@ impl Actor {
             // Our own mouse, on their screen, went onto it.
             Control::Remote { peer, .. } if ours && peer == from => {
                 log::info!("portal: our mouse, on {from}'s screen, is on our window {id}");
-                if let Some((x, y)) = plat.portal_begin(id, rx, ry) {
-                    plat.end_capture(x, y);
-                    // The pointer is seen on the mirror, over there: not here as well.
-                    plat.pointer_hidden(true);
-                    self.set_control(Control::Local);
+                if plat.portal_begin(id, rx, ry).is_some() {
+                    // Our mouse stays captured: its moves and clicks go straight to the window
+                    // here (see Input), and the pointer is drawn on the mirror over there.
                     self.portal = Some(portal);
                     return;
                 }

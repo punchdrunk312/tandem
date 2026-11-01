@@ -1529,18 +1529,17 @@ async fn the_owners_mouse_goes_onto_the_mirror_and_drives_the_real_window() {
     b.plat
         .emit(CaptureEvent::Input(InputEvent::MouseMove { dx: 5, dy: 0 }));
     until("the pointer is on B's real window", || {
-        b.node.snapshot().control == "local" && b.plat.st.lock().unwrap().portal_window.is_some()
+        b.plat.st.lock().unwrap().portal_window.is_some()
     })
     .await;
-    assert!(
-        !b.plat.st.lock().unwrap().capturing,
-        "B's mouse is B's again"
-    );
+    // B's mouse stays captured: it drives the window here directly.
+    assert_eq!(b.node.snapshot().control, "remote");
     until("A hides its pointer", || {
         a.plat.st.lock().unwrap().pointer_hidden
     })
     .await;
     assert_eq!(a.node.snapshot().control, "local");
+    let sent = a.plat.st.lock().unwrap().injected.len();
     // A draws the pointer where it is on the window.
     b.plat.emit(CaptureEvent::PortalCursor {
         id: 7,
@@ -1552,8 +1551,15 @@ async fn the_owners_mouse_goes_onto_the_mirror_and_drives_the_real_window() {
         a.plat.st.lock().unwrap().mirror_cursor == Some((7, 40, 60))
     })
     .await;
+    // Moves go to the window here, not to A.
+    b.plat.st.lock().unwrap().cursor = (690, 310);
+    b.plat
+        .emit(CaptureEvent::Input(InputEvent::MouseMove { dx: 5, dy: 0 }));
+    until("B's window got the move", || b.plat.st.lock().unwrap().cursor == (695, 310)).await;
+    assert_eq!(a.plat.st.lock().unwrap().injected.len(), sent);
     // Off the right side of the window: back on A, just right of the mirror.
-    b.plat.user_off_window(401, 60);
+    b.plat
+        .emit(CaptureEvent::Input(InputEvent::MouseMove { dx: 6, dy: 0 }));
     until("A is driven again", || {
         a.node.snapshot().control == "controlled"
     })
