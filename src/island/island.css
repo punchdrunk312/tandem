@@ -251,6 +251,17 @@ html.dev body { background: #2b2f38; }
 @keyframes ch-in { from { opacity: 0; transform: scale(0.7); filter: blur(5px); } }
 .ch-left { display: flex; align-items: center; gap: 10px; transform-origin: left center; }
 .ch-pct { transform-origin: right center; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ch, #34d399); }
+.ch-icon { display: grid; place-items: center; }
+.ch-avatar {
+  width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; color: #04201c;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--c) 70%, white), var(--c));
+}
+.charge.k-online { --ch: var(--c); }
+.charge.k-offline { --ch: var(--dim); }
+.charge.k-offline .ch-avatar { filter: grayscale(0.7) brightness(0.8); }
+.charge .ring .r-fill { filter: none; }
+.ch-word { max-width: 230px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ch-word { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
 .charge { --ch: #34d399; }
 .charge.k-unplug { --ch: var(--ink); }

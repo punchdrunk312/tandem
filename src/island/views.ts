@@ -408,7 +408,8 @@ export function buildMoment(a: MomentActions): ViewHost & { show(m: import("./mo
   };
 }
 
-/** This computer's charger, the way a phone shows it: a battery on the left, the level on the right. */
+/** The phone's slim pill: chargers, computers coming and going, earbuds connecting.
+ *  An icon and a word on the left, the level (or the news) on the right. */
 export function buildCharge(): ViewHost & { show(m: import("./moments").Moment): void } {
   const fill = h("i", { class: "ch-fill" });
   const bolt = svg(BOLT, 12);
@@ -416,17 +417,42 @@ export function buildCharge(): ViewHost & { show(m: import("./moments").Moment):
   const batt = h("div", { class: "ch-batt" }, fill, bolt);
   const word = h("span", { class: "ch-word" });
   const pct = h("span", { class: "ch-pct" });
-  const el = h("div", { class: "view charge" }, h("div", { class: "ch-left" }, batt, word), pct);
+  const icon = h("div", { class: "ch-icon" });
+  const el = h("div", { class: "view charge" }, h("div", { class: "ch-left" }, icon, word), pct);
   return {
     el,
     sync() {},
     show(m) {
-      const level = m.device?.battery ?? 0;
-      const low = level <= 20 && m.kind === "unplug";
+      const me = m.id === "me";
+      const acc = m.kind === "acc-on" ? m.acc : undefined;
+      const level = acc ? acc.battery ?? 0 : m.device?.battery ?? 0;
+      const low = level <= 20 && (m.kind === "unplug" || !!acc);
       el.className = `view charge${State.view === "charge" ? " on" : ""} k-${m.kind}${low ? " low" : ""}`;
+      el.style.setProperty("--c", m.color);
       void el.offsetWidth;
       el.classList.add("enter");
-      word.textContent = m.kind === "plug" ? "Charging" : m.kind === "full" ? "Fully charged" : "On battery";
+      icon.replaceChildren();
+      if (m.kind === "online" || m.kind === "offline") {
+        // A computer arriving or leaving: its letter in its colour, and the news.
+        icon.append(h("div", { class: "ch-avatar", text: Array.from(m.name)[0]?.toUpperCase() ?? "?" }));
+        word.textContent = m.name;
+        pct.textContent = m.kind === "online" ? "Connected" : "Away";
+        return;
+      }
+      if (acc) {
+        // Earbuds: a small ring, the name, and each bud's level.
+        const r = ring(22, 3);
+        r.set(level, low ? "#ff8a5c" : "#34d399", null, "");
+        icon.append(r.el);
+        word.textContent = acc.name;
+        pct.textContent = acc.left != null || acc.right != null
+          ? [acc.left != null ? `L ${acc.left}%` : "", acc.right != null ? `R ${acc.right}%` : ""].filter(Boolean).join("  ")
+          : `${level}%`;
+        return;
+      }
+      icon.append(batt);
+      const what = m.kind === "plug" ? "Charging" : m.kind === "full" ? "Fully charged" : "On battery";
+      word.textContent = me ? what : `${m.name} · ${what.toLowerCase()}`;
       pct.textContent = `${level}%`;
       fill.style.width = "0%";
       // The level fills in once the pill has opened.

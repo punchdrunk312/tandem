@@ -551,8 +551,8 @@ export class Island {
     const m = this.momentQueue.shift();
     if (!m) return;
     State.moment = m;
-    // This computer's charger gets the phone's slim pill; everything else the card.
-    const view = m.id === "me" && isPlug(m) ? "charge" : "moment";
+    // Quick news gets the phone's slim pill; a battery running low keeps the card (and its buttons).
+    const view = isPlug(m) || m.kind === "online" || m.kind === "offline" || m.kind === "acc-on" ? "charge" : "moment";
     (view === "charge" ? this.chargeView : this.momentView).show(m);
     this.autoly(() => this.alert(view));
     this.react(m);
