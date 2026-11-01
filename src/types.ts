@@ -99,6 +99,10 @@ export interface UiOptions {
   monitor_cursor: boolean;
   /** Automatic error reports; null until asked. */
   error_reports?: boolean | null;
+  /** AI agents on the other computers may use this one. */
+  ai_remote?: boolean;
+  /** Keep CLAUDE.md / AGENTS.md the same on every computer. */
+  ai_sync?: boolean;
 }
 
 /** A wireless accessory with a battery: earbuds, a headset, a mouse… */

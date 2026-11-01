@@ -74,6 +74,7 @@ const admin = h("section", { class: "card" });
 const topbar = h("div", { class: "feat-page" });
 const features = h("div", { class: "feat-page" });
 const bobPage = h("div", { class: "feat-page" });
+const aiPage = h("div", { class: "feat-page" });
 const veil = h("div", { id: "veil" });
 document.body.append(veil);
 
@@ -87,6 +88,9 @@ const ICONS = {
   account: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0",
   bob: "M6 6h12a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2zM9.5 11.5v1M14.5 11.5v1M10 15.5c1.2.8 2.8.8 4 0",
   search: "M11 18a7 7 0 100-14 7 7 0 000 14zM20 20l-4-4",
+  ai: "M12 3l1.8 4.6L18.5 9.4l-4.7 1.8L12 16l-1.8-4.8L5.5 9.4l4.7-1.8zM18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z",
+  terminal: "M4 5h16v14H4zM8 10l3 2-3 2M13 15h3",
+  key: "M15 7a4 4 0 11-3.9 4.9L4 19v-3h2v-2h2l2.1-2.1A4 4 0 0115 7z",
   clipboard: "M9 4h6v3H9zM8 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-2M9 12h6M9 16h4",
   drag: "M7 3h7l4 4v7M7 3a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h4M14 3v4h4M15 15l6 6M21 15v6h-6",
   game: "M6 9h12a4 4 0 0 1 4 4v1a3 3 0 0 1-5.4 1.8L15 14H9l-1.6 1.8A3 3 0 0 1 2 14v-1a4 4 0 0 1 4-4zM7 11v3M5.5 12.5h3M16 12h.01M18 13.5h.01",
@@ -117,11 +121,12 @@ function ico(d: string, size = 18): SVGElement {
   return n;
 }
 
-type PageId = "computers" | "features" | "files" | "bar" | "bob" | "account";
+type PageId = "computers" | "features" | "files" | "ai" | "bar" | "bob" | "account";
 const PAGES: { id: PageId; label: string; title: string; sub: string; icon: string }[] = [
   { id: "computers", label: "Computers", title: "Computers", sub: "Pair computers and arrange them around this one.", icon: ICONS.computers },
   { id: "features", label: "Features", title: "Features", sub: "Turn things on and off. Everything is ready to use.", icon: ICONS.features },
   { id: "files", label: "Files", title: "Files", sub: "Send files and folders to your other computers.", icon: ICONS.files },
+  { id: "ai", label: "AI", title: "AI", sub: "Claude Code, Codex and ChatGPT across your computers.", icon: ICONS.ai },
   { id: "bar", label: "Top bar", title: "Top bar", sub: "How the bar looks, sounds and behaves.", icon: ICONS.bar },
   { id: "bob", label: "Bob", title: "Bob", sub: "His colour, his clothes, and what he does for you.", icon: ICONS.bob },
   { id: "account", label: "Account", title: "Account", sub: "Your licence, updates, and getting in touch.", icon: ICONS.account },
@@ -155,6 +160,7 @@ bodyOf("features").append(features);
 bodyOf("files").append(files);
 bodyOf("bar").append(topbar);
 bodyOf("bob").append(bobPage);
+bodyOf("ai").append(aiPage);
 bodyOf("account").append(settings, admin, paired);
 
 function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
@@ -889,7 +895,7 @@ const ISLAND_KEY = "tandem.island";
 interface IslandOpts {
   soundEnabled: boolean; soundVolume: number; autoCloseInterval: number;
   seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
-  weather: boolean; city: string; voice: boolean;
+  weather: boolean; city: string; voice: boolean; aiAgents: boolean; aiErrors: boolean;
   theme: "glass" | "dark";
   accent: string;
   barColor: string;
@@ -902,7 +908,7 @@ interface IslandOpts {
 const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
-  weather: true, city: "", voice: false,
+  weather: true, city: "", voice: false, aiAgents: true, aiErrors: true,
   theme: "glass",
   accent: "",
   barColor: "",
@@ -919,8 +925,8 @@ function islandSettings(): IslandOpts {
     return { ...ISLAND_DEFAULTS };
   }
 }
-const BAR_ICONS: [string, string][] = [["notes", "Notes"], ["music", "Now playing"], ["timer", "Focus timer"], ["devices", "Your computers"], ["game", "Catch with Bob"], ["sound", "Sound"]];
-const DEFAULT_BAR_ICONS = "notes,music,timer,devices,game,sound";
+const BAR_ICONS: [string, string][] = [["ai", "AI agents"], ["notes", "Notes"], ["music", "Now playing"], ["timer", "Focus timer"], ["devices", "Your computers"], ["game", "Catch with Bob"], ["sound", "Sound"]];
+const DEFAULT_BAR_ICONS = "ai,notes,music,timer,devices,game,sound";
 /** The top-bar icons: a tick to show each, arrows to move it. */
 function barIconsEl(v: string, change: (v: string) => void): HTMLElement {
   const shown = (v || DEFAULT_BAR_ICONS).split(",").filter((id) => BAR_ICONS.some(([k]) => k === id));
@@ -1121,6 +1127,94 @@ function renderTopBar() {
   });
 }
 
+// ---------------------------------------------------------------- AI
+interface AiStatus { claude: boolean; codex: boolean; claudeFound: boolean; codexFound: boolean; key: boolean; remote: boolean; sync: boolean; mcp: string }
+interface Prompt { id: string; title: string; text: string; at: number; del?: boolean }
+let aiStat: AiStatus | null = null;
+let aiMsg = "";
+let aiBusy = "";
+const keyIn = h("input", { type: "password", class: "name-in", placeholder: "sk-ant-…", autocomplete: "off", "aria-label": "Anthropic API key" }) as HTMLInputElement;
+const loadPromptsP = (): Prompt[] => { try { return JSON.parse(localStorage.getItem("cc.prompts") || "[]") as Prompt[]; } catch { return []; } };
+const savePromptsP = (list: Prompt[]) => { try { localStorage.setItem("cc.prompts", JSON.stringify(list)); } catch { /* fine */ } };
+function aiRefresh() { void call<AiStatus>("ai_status").then((v) => { aiStat = v; renderAi(); }).catch(() => {}); }
+
+function renderAi() {
+  const is = islandSettings();
+  const st = aiStat;
+  const prompts = loadPromptsP();
+  update(aiPage, "ai", [st, aiMsg, aiBusy, is.aiAgents, is.aiErrors, ui.ai_remote, ui.ai_sync, prompts], () => {
+    const setUi = (patch: Partial<UiOptions>) => { ui = { ...ui, ...patch }; void call("ui_set", { opts: ui }); renderAi(); };
+    const set = (patch: Partial<IslandOpts>) => { saveIsland(patch); renderAi(); };
+    const connect = (tool: "claude" | "codex", on: boolean) => async () => {
+      aiBusy = tool; aiMsg = ""; renderAi();
+      try { aiMsg = await call<string>("ai_connect", { tool, on }); } catch (e) { aiMsg = String(e); }
+      aiBusy = ""; aiRefresh();
+    };
+    const toolTile = (tool: "claude" | "codex", title: string, found: boolean, on: boolean) =>
+      tile({ id: `ai-${tool}`, icon: ICONS.terminal, color: tool === "claude" ? "amber" : "slate", title, on,
+        line: on ? "Connected: status, approvals and the MCP tools." : found ? "Not connected yet." : "Not found on this computer.",
+        more: tool === "claude"
+          ? "Adds CubeCursor's hooks to ~/.claude/settings.json (working, needs you, asks permission, done) and its MCP server to ~/.claude.json. Both files are backed up first (.cubecursor-backup). Disconnect takes them out again."
+          : "Adds a notify program (done messages) and CubeCursor's MCP server to ~/.codex/config.toml, backed up first. Codex has no hook for approvals, so those stay in its terminal.",
+        control: h("button", { class: on ? "" : "primary", disabled: !!aiBusy || (!found && !on), onclick: connect(tool, !on) }, aiBusy === tool ? "…" : on ? "Disconnect" : "Connect") });
+    const promptRows = prompts.filter((p) => !p.del).map((p) => {
+      const t = h("input", { type: "text", class: "pr-title", value: p.title, placeholder: "Name", maxLength: 40 }) as HTMLInputElement;
+      const x = h("textarea", { class: "pr-text", rows: 2, placeholder: "The prompt", maxLength: 8000 }) as HTMLTextAreaElement;
+      x.value = p.text;
+      const save = () => { savePromptsP(loadPromptsP().map((q) => q.id === p.id ? { ...q, title: t.value.trim(), text: x.value, at: Date.now() } : q)); };
+      t.onchange = save;
+      x.onchange = save;
+      return h("div", { class: "pr-row" }, h("div", { class: "pr-fields" }, t, x),
+        h("button", { class: "danger", "aria-label": "Delete prompt", onclick: () => { savePromptsP(loadPromptsP().map((q) => q.id === p.id ? { ...q, del: true, at: Date.now() } : q)); renderAi(); } }, "Delete"));
+    });
+    return [
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Your AI tools"),
+        h("div", { class: "tiles" },
+          toolTile("claude", "Claude Code", !!st?.claudeFound, !!st?.claude),
+          toolTile("codex", "Codex", !!st?.codexFound, !!st?.codex)),
+        aiMsg ? h("p", { class: "g-help" }, aiMsg) : null,
+        h("p", { class: "g-help" }, "Connect each tool on every computer where you use it. Then the bar on any of your computers shows when it's working, needs you, or is done, and you can approve what it asks from wherever you are.")),
+      group("In the bar",
+        tile({ id: "ai-moments", icon: ICONS.ai, color: "violet", title: "Agent moments", line: "Needs you, asks permission, done — on every computer.", on: is.aiAgents,
+          more: "Permission requests wait 60 seconds for Allow or Deny in the bar, then Claude asks in its terminal as usual.",
+          control: switchEl(is.aiAgents, (v) => set({ aiAgents: v })) }),
+        tile({ id: "ai-errors", icon: ICONS.tips, color: "rose", title: "Error catcher", line: "Copy an error and Bob offers to look at it.", on: is.aiErrors,
+          more: "When what you copy looks like a stack trace or compiler error, Bob asks if you want help. Nothing is sent unless you press Ask Bob.",
+          control: switchEl(is.aiErrors, (v) => set({ aiErrors: v })) })),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Ask Bob"),
+        h("div", { class: "card list" },
+          setting("Anthropic API key", st?.key ? "Saved in Windows' credential store. Bob answers with Claude Opus 5.5, billed to your key." : "Bob answers questions in the bar with Claude. Get a key at console.anthropic.com.",
+            h("div", { class: "row" }, keyIn,
+              h("button", { class: "primary", onclick: async () => { try { await call("ai_key_set", { key: keyIn.value }); keyIn.value = ""; aiMsg = "Key saved."; } catch (e) { aiMsg = String(e); } aiRefresh(); } }, "Save"),
+              ...(st?.key ? [h("button", { onclick: async () => { await call("ai_key_set", { key: "" }); aiRefresh(); } }, "Remove")] : []))))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Agents on your other computers"),
+        h("div", { class: "card list" },
+          setting("Let AI agents use this computer", "An agent on another of your computers can run commands, read and write files, take screenshots and open pages here (through CubeCursor's MCP tools). Each use shows in the bar.",
+            switchEl(!!ui.ai_remote, (v) => setUi({ ai_remote: v }))),
+          setting("Same CLAUDE.md and AGENTS.md everywhere", "Your global instructions for Claude Code and Codex stay the same on every computer; the newest one wins, and the old one is kept as .cubecursor-backup.",
+            switchEl(!!ui.ai_sync, (v) => setUi({ ai_sync: v }))),
+          setting("MCP server", st ? `Connect adds it for you. By hand: claude mcp add --transport http cubecursor ${st.mcp}` : null,
+            h("button", { onclick: () => void navigator.clipboard.writeText(`claude mcp add --transport http cubecursor ${st?.mcp ?? ""}`) }, "Copy command")))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Prompt library"),
+        h("div", { class: "card list pad" },
+          ...promptRows,
+          h("button", { onclick: () => { savePromptsP([...loadPromptsP(), { id: Math.random().toString(36).slice(2), title: "", text: "", at: Date.now() }]); renderAi(); } }, "+ Add a prompt"),
+          h("p", { class: "g-help" }, "On every computer, in the bar's AI view: click one to copy it, then paste it into Claude, ChatGPT or Codex."))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Send to the AI on your other computer"),
+        h("div", { class: "keys" },
+          h("div", { class: "key" }, h("kbd", {}, "Ctrl+Alt+A"), h("span", {}, "What you copied, onto the other computer's clipboard")),
+          h("div", { class: "key" }, h("kbd", {}, "Ctrl+Alt+S"), h("span", {}, "A screenshot of this screen, ready to paste there")))),
+    ];
+  });
+}
+aiRefresh();
+window.addEventListener("storage", (e) => { if (e.key === "cc.prompts") { keys.ai = ""; renderAi(); } });
+
 function render(s: Snapshot) {
   snap = s;
   maybeTour(s);
@@ -1132,6 +1226,7 @@ function render(s: Snapshot) {
   renderSettings(s);
   renderAdmin();
   renderTopBar();
+  renderAi();
 }
 
 onSnapshot(render);

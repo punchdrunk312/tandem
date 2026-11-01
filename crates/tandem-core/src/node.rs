@@ -285,7 +285,17 @@ struct Status {
     audio_out: Option<String>,
 }
 
+/// A relay message from another computer, for the app.
+#[derive(Clone, Debug)]
+pub struct RelayIn {
+    pub from: String,
+    pub from_name: String,
+    pub kind: String,
+    pub json: String,
+}
+
 struct Shared {
+    relay_tx: tokio::sync::broadcast::Sender<RelayIn>,
     me: Identity,
     cfg: NodeConfig,
     platform: Arc<dyn Platform>,
@@ -624,6 +634,11 @@ enum Cmd {
     SetName(String),
     NewCode,
     Engage(Option<String>),
+    Relay {
+        to: Option<String>,
+        kind: String,
+        json: String,
+    },
     /// Play that computer's sound here (or stop).
     HearAudio {
         peer_id: String,
@@ -684,6 +699,7 @@ impl Node {
         let (snap_tx, _) = watch::channel(Snapshot::default());
         let no_licence_needed = cfg.license_key.is_none();
         let sh = Arc::new(Shared {
+            relay_tx: tokio::sync::broadcast::channel(256).0,
             me: me.clone(),
             cfg: cfg.clone(),
             platform: platform.clone(),
@@ -828,6 +844,14 @@ impl Node {
         Ok(Node { sh, ev: ev_tx })
     }
 
+    /// Relay messages from the other computers.
+    pub fn relays(&self) -> tokio::sync::broadcast::Receiver<RelayIn> {
+        self.sh.relay_tx.subscribe()
+    }
+    /// Send a relay message to one computer, or to every connected one.
+    pub fn relay(&self, to: Option<String>, kind: String, json: String) {
+        self.cmd(Cmd::Relay { to, kind, json });
+    }
     pub fn subscribe(&self) -> watch::Receiver<Snapshot> {
         self.sh.snap_tx.subscribe()
     }
@@ -3468,6 +3492,10 @@ impl Actor {
                     }
                 }
             }
+            Msg::Relay { kind, json } => {
+                let from_name = self.sessions.get(from).map(|s| s.peer.name.clone()).unwrap_or_default();
+                let _ = self.sh.relay_tx.send(RelayIn { from: from.to_string(), from_name, kind, json });
+            }
             Msg::AudioOff => {
                 if self.audio_in.as_ref().is_some_and(|(p, _)| p == from) {
                     self.audio_in = None;
@@ -3893,6 +3921,14 @@ impl Actor {
                 self.license_changed();
             }
             Cmd::Power { peer_id, action } => self.send_to(&peer_id, Msg::Power(action)),
+            Cmd::Relay { to, kind, json } => match to {
+                Some(p) => self.send_to(&p, Msg::Relay { kind, json }),
+                None => {
+                    for s in self.sessions.values() {
+                        let _ = s.tx.send(Msg::Relay { kind: kind.clone(), json: json.clone() });
+                    }
+                }
+            },
             Cmd::HearAudio { peer_id, on } => {
                 if let Some((was, _)) = self.audio_in.take() {
                     self.send_to(&was, Msg::AudioWant { on: false });

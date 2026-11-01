@@ -16,6 +16,7 @@ use tauri_plugin_global_shortcut::{Code, ShortcutState};
 #[cfg(not(windows))]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 
+mod ai;
 mod elevate;
 mod ghost;
 mod island;
@@ -55,6 +56,12 @@ struct UiOptions {
     /// Send error reports automatically: None until the person has been asked.
     #[serde(default)]
     error_reports: Option<bool>,
+    /// AI agents on the other computers may use this one (commands, files, screenshots).
+    #[serde(default)]
+    ai_remote: bool,
+    /// Keep CLAUDE.md / AGENTS.md the same on every computer.
+    #[serde(default)]
+    ai_sync: bool,
 }
 
 fn yes() -> bool {
@@ -68,6 +75,8 @@ impl Default for UiOptions {
             hide_fullscreen: true,
             monitor_cursor: false,
             error_reports: None,
+            ai_remote: false,
+            ai_sync: false,
         }
     }
 }
@@ -975,11 +984,13 @@ fn spawn_hotkey_poll(app: AppHandle) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU};
     const VK_Z: i32 = 0x5A;
     const VK_U: i32 = 0x55;
+    const VK_A: i32 = 0x41;
+    const VK_S: i32 = 0x53;
     let down = |vk: i32| unsafe { (GetAsyncKeyState(vk) as u16 & 0x8000) != 0 };
     std::thread::Builder::new()
         .name("hotkey-poll".into())
         .spawn(move || {
-            let (mut was_z, mut was_u) = (false, false);
+            let (mut was_z, mut was_u, mut was_a, mut was_s) = (false, false, false, false);
             loop {
                 let mods = down(VK_CONTROL.0 as i32) && down(VK_MENU.0 as i32);
                 let z = mods && down(VK_Z);
@@ -992,6 +1003,18 @@ fn spawn_hotkey_poll(app: AppHandle) {
                     log_line(&app, "hotkey fired (poll): Ctrl+Alt+U (pill)");
                     bar_hotkey(&app, "pill");
                 }
+                // Ctrl+Alt+A: what you copied, Ctrl+Alt+S: a screenshot, onto the other
+                // computer's clipboard for its AI.
+                let a = mods && down(VK_A);
+                let s = mods && down(VK_S);
+                if a && !was_a {
+                    ai::hotkey_send(&app, false);
+                }
+                if s && !was_s {
+                    ai::hotkey_send(&app, true);
+                }
+                was_a = a;
+                was_s = s;
                 was_z = z;
                 was_u = u;
                 std::thread::sleep(std::time::Duration::from_millis(30));
@@ -1239,6 +1262,7 @@ pub fn run() {
                 send_queue: std::sync::Mutex::new(Vec::new()),
                 send_armed: std::sync::atomic::AtomicBool::new(false),
             });
+            ai::start(app.handle(), &cfg_dir);
             gate.hide_fullscreen
                 .store(ui.hide_fullscreen, std::sync::atomic::Ordering::Relaxed);
             gate.monitor_cursor
@@ -1447,6 +1471,14 @@ pub fn run() {
             weather::weather,
             hear_audio,
             voice::voice_set,
+            ai::ai_status,
+            ai::ai_connect,
+            ai::agent_answer,
+            ai::ai_relay,
+            ai::ai_usage,
+            ai::ai_key_set,
+            ai::ai_ask,
+            ai::ai_copy,
             media::media_show_video,
         ])
         .build(tauri::generate_context!())

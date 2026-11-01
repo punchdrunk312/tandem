@@ -33,6 +33,11 @@ async function main() {
   await safe("media listener", () => onEvent<import("./state").NowPlaying | null>("media", (m) => island.onMedia(m)));
   await safe("note listener", () => onEvent<string>("note", (msg) => island.note(msg)));
   await safe("voice listener", () => onEvent<string>("voice", (text) => island.onVoice(text)));
+  await safe("agent listener", () => onEvent<import("./views").AgentEv>("agent", (e) => island.onAgent(e)));
+  await safe("clip-error listener", () => onEvent<{ text: string }>("clip-error", (e) => island.onClipError(e.text)));
+  await safe("ai-in listener", () => onEvent<{ from: string; preview: string; image: boolean }>("ai-in", (m) => island.onAiIn(m)));
+  await safe("ai-sent listener", () => onEvent<{ to: string; shot: boolean }>("ai-sent", (m) => island.onAiSent(m)));
+  await safe("relay listener", () => onEvent<{ kind: string; json: string }>("relay", (m) => island.onRelay(m)));
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));
@@ -70,6 +75,7 @@ async function main() {
     if (e.key === NOTES_KEY) island.reloadNotes();
     // Settings → "Show me around again".
     if (e.key === "cc.tourAgain") island.startTour();
+    if (e.key === "cc.prompts") island.promptsChanged();
     if (e.key === SETTINGS_KEY) {
       State.reloadSettings();
       island.applySettings();

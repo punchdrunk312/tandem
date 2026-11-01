@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai";
 
 export type BotStateName =
   | "idle"
@@ -65,6 +65,10 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   game: { height: 220, botX: 320, botY: 186, botDiameter: 44 },
   // A suggestion: Bob on the left, the idea and a button.
   suggest: { height: 124, botX: 62, botY: 74, botDiameter: 50 },
+  // An AI agent asks to do something, needs you, or is done: Bob on the left, Allow / Deny.
+  agent: { height: 150, botX: 62, botY: 84, botDiameter: 50 },
+  // AI agents: who is working where, today's usage, Ask Bob and your prompts (Bob steps aside).
+  ai: { height: 316, botX: 0, botY: 0, botDiameter: 0 },
   // The tour: Bob shows you round, a step at a time.
   tour: { height: 160, botX: 70, botY: 98, botDiameter: 60 },
   // Notes: a reminder that is due, or the next note and a couple more, or writing one.

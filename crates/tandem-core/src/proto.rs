@@ -291,6 +291,12 @@ pub enum Msg {
     },
     /// The sharing computer stopped (or couldn't start).
     AudioOff,
+    /// Something for the app on the other computer (AI agents, prompts, requests), as
+    /// JSON. The core only carries it.
+    Relay {
+        kind: String,
+        json: String,
+    },
 }
 
 /// How a computer is doing, as shown on its card in the bar.

@@ -15,6 +15,7 @@ pub const PHRASES: &[&str] = &[
     "hey bob open my notes",
     "hey bob show my computers",
     "hey bob play catch",
+    "hey bob show my agents",
     "hey bob what's the weather",
     "hey bob jump",
     "hey bob go to the other computer",

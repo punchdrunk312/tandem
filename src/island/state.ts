@@ -22,6 +22,10 @@ export interface IslandSettings {
   city: string;
   /** "Hey Bob": spoken commands (the microphone listens for a few phrases). */
   voice: boolean;
+  /** AI agents' moments (needs you, asks to do something, done) in the bar. */
+  aiAgents: boolean;
+  /** Offer to ask Bob when you copy an error. */
+  aiErrors: boolean;
   /** Calm Bob: no seasons drifting, quieter moments. */
   calm: boolean;
   /** The look: frosted "glass" (default) or the classic black bar. */
@@ -105,7 +109,7 @@ export function saveFocus(f: Focus | null) {
 
 const DEFAULTS: IslandSettings = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
-  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false, weather: true, city: "", voice: false,
+  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false, weather: true, city: "", voice: false, aiAgents: true, aiErrors: true,
   theme: "glass",
   accent: "",
   barColor: "",

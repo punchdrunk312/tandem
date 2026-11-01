@@ -26,6 +26,7 @@ export interface ViewActions {
   /** The header's notes button: notes and reminders, or back. */
   toggleNotes(): void;
   toggleGame(): void;
+  toggleAi(): void;
   /** Shift-drop menu: prepare the files this way, then send. */
   dropAction(a: "asis" | "zip" | "png" | "jpg"): void;
   /** Shift-drop menu: back out without sending. */
@@ -65,7 +66,7 @@ function keyed(el: HTMLElement, key: string, build: () => (Node | string)[]) {
 
 // ------------------------------------------------------------------ header
 
-export const DEFAULT_ICONS = "notes,music,timer,devices,game,sound";
+export const DEFAULT_ICONS = "ai,notes,music,timer,devices,game,sound";
 
 export function buildHeader(a: ViewActions): ViewHost {
   const dot = h("i", { class: "hd-dot" });
@@ -79,7 +80,9 @@ export function buildHeader(a: ViewActions): ViewHost {
   const notes = h("button", { class: "icon-btn", title: "Notes", "aria-label": "Notes and reminders", onclick: () => { a.blip(); a.toggleNotes(); } }, svg(ICON.notes, 15, { stroke: 1.8 }));
   const game = h("button", { class: "icon-btn", title: "Catch with Bob", "aria-label": "Play catch with Bob", onclick: () => { a.blip(); a.toggleGame(); } },
     svg("M12 3a9 9 0 100 18 9 9 0 000-18zM3.5 9.5h17M3.5 14.5h17M12 3c2.5 2.6 2.5 15.4 0 18", 15, { stroke: 1.8 }));
-  const byId: Record<string, HTMLElement> = { notes, music, timer, devices, game, sound };
+  const ai = h("button", { class: "icon-btn", title: "AI agents", "aria-label": "AI agents", onclick: () => { a.blip(); a.toggleAi(); } },
+    svg("M12 3l1.8 4.6L18.5 9.4l-4.7 1.8L12 16l-1.8-4.8L5.5 9.4l4.7-1.8zM18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z", 15, { stroke: 1.8 }));
+  const byId: Record<string, HTMLElement> = { ai, notes, music, timer, devices, game, sound };
   const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }));
   let order = "-";
   return {
@@ -99,7 +102,9 @@ export function buildHeader(a: ViewActions): ViewHost {
       music.classList.toggle("on", State.view === "media" || !!State.media?.playing);
       notes.classList.toggle("on", State.view === "notes" || !!State.dueNote);
       game.classList.toggle("on", State.view === "game");
-      title.textContent = State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
+      ai.classList.toggle("on", State.view === "ai" || State.view === "agent");
+      ai.classList.toggle("ping", [...agents.values()].some((e) => e.state === "approve" || e.state === "waiting"));
+      title.textContent = State.view === "ai" ? "AI agents" : State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
       sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
     },
   };
@@ -1272,6 +1277,143 @@ export function buildUpdate(a: UpdateActions & { tour(): void }): ViewHost & { s
     busy(text) {
       go.disabled = text != null;
       go.textContent = text ?? "Update now";
+    },
+  };
+}
+
+// ------------------------------------------------------------------ AI agents
+
+/** An event from an AI agent (Claude Code, Codex) on any of your computers. */
+export interface AgentEv {
+  id: string; pc: string; pcName: string; source: string; session: string;
+  project: string; state: string; text: string; tool: string; at: number;
+}
+/** The agents we know of now, by computer + tool + session. */
+export const agents = new Map<string, AgentEv>();
+export const agentKey = (e: AgentEv) => `${e.pc}|${e.source}|${e.session}`;
+export const agentName = (s: string) => (s === "claude" ? "Claude Code" : s === "codex" ? "Codex" : s);
+const STATE_WORDS: Record<string, string> = { working: "Working…", waiting: "Needs you", approve: "Asks to do something", done: "Done", allowed: "Working…", denied: "Working…", terminal: "Asking in the terminal" };
+
+export interface Prompt { id: string; title: string; text: string; at: number; del?: boolean }
+export function loadPrompts(): Prompt[] {
+  try { return JSON.parse(localStorage.getItem("cc.prompts") || "[]") as Prompt[]; } catch { return []; }
+}
+
+/** One agent's moment: it asks to do something (Allow / Deny), needs you, or is done. */
+export function buildAgent(a: { answer(e: AgentEv, allow: boolean): void; close(): void }): ViewHost & { show(e: AgentEv): void; current(): AgentEv | null } {
+  const title = h("div", { class: "sg-title" });
+  const sub = h("div", { class: "sg-sub" });
+  const what = h("div", { class: "ag-what" });
+  const acts = h("div", { class: "m-actions" });
+  const el = h("div", { class: "view suggest agent" }, h("div", { class: "sg-text ag-text" }, title, sub, what, acts));
+  let cur: AgentEv | null = null;
+  let tick = 0;
+  return {
+    el,
+    sync() {},
+    current: () => cur,
+    show(e) {
+      cur = e;
+      window.clearInterval(tick);
+      const who = agentName(e.source);
+      const where = [e.project, e.pcName].filter(Boolean).join(" · on ");
+      sub.textContent = where;
+      what.textContent = e.state === "approve" ? `${e.tool ? e.tool + ": " : ""}${e.text}` : e.text;
+      what.hidden = !e.text;
+      if (e.state === "approve") {
+        title.textContent = `${who} asks to ${e.tool === "Bash" || e.tool === "PowerShell" ? "run a command" : e.tool === "Edit" || e.tool === "Write" || e.tool === "MultiEdit" ? "change a file" : "use " + (e.tool || "a tool")}`;
+        const left = h("span", { class: "ag-left" });
+        const end = Date.now() + 60_000;
+        const count = () => { left.textContent = `${Math.max(0, Math.ceil((end - Date.now()) / 1000))} s`; };
+        count();
+        tick = window.setInterval(count, 1000);
+        acts.replaceChildren(
+          h("button", { class: "btn primary", text: "Allow", onclick: () => { window.clearInterval(tick); a.answer(e, true); } }),
+          h("button", { class: "btn", text: "Deny", onclick: () => { window.clearInterval(tick); a.answer(e, false); } }),
+          left);
+      } else {
+        title.textContent = e.state === "done" ? `${who} is done ✓` : `${who} needs you`;
+        acts.replaceChildren(h("button", { class: "btn", text: "OK", onclick: () => a.close() }));
+      }
+    },
+  };
+}
+
+const fmtTok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+const ago = (t: number) => {
+  const s = Math.round((Date.now() - t) / 1000);
+  return s < 60 ? "now" : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`;
+};
+
+/** AI agents: who is working where, today's usage, Ask Bob and your prompts. */
+export function buildAi(a: {
+  answer(e: AgentEv, allow: boolean): void;
+  ask(q: string): Promise<string>;
+  copy(text: string, what: string): void;
+  usage(): Promise<{ claude: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }; codex: { input: number; output: number } } | null>;
+}): ViewHost & { refresh(): void; askNow(q: string): void } {
+  const list = h("div", { class: "ai-list" });
+  const use = h("div", { class: "ai-use" });
+  const input = h("input", { class: "ai-in", placeholder: "Ask Bob anything…", maxLength: 8000 }) as HTMLInputElement;
+  const out = h("div", { class: "ai-out", hidden: true });
+  const prompts = h("div", { class: "ai-prompts" });
+  let busy = false;
+  const ask = async (q: string) => {
+    if (!q.trim() || busy) return;
+    busy = true;
+    out.hidden = false;
+    out.className = "ai-out thinking";
+    out.textContent = "Bob is thinking…";
+    try {
+      const ans = await a.ask(q);
+      out.className = "ai-out";
+      out.replaceChildren(h("div", { class: "ai-ans", text: ans }), h("button", { class: "btn ai-copy", text: "Copy", onclick: () => a.copy(ans, "The answer") }));
+    } catch (e) {
+      out.className = "ai-out err";
+      out.textContent = String(e);
+    }
+    busy = false;
+  };
+  input.onkeydown = (e) => { if (e.key === "Enter") { void ask(input.value); } };
+  const el = h("div", { class: "view ai" },
+    h("div", { class: "ai-col" }, h("div", { class: "ai-h", text: "Agents" }), list, use),
+    h("div", { class: "ai-col" },
+      h("div", { class: "ai-h", text: "Ask Bob" }),
+      h("div", { class: "ai-ask" }, input, h("button", { class: "btn primary", text: "Ask", onclick: () => void ask(input.value) })),
+      out,
+      h("div", { class: "ai-h", text: "Prompts" }),
+      prompts));
+  const renderList = () => {
+    const all = [...agents.values()].sort((x, y) => y.at - x.at).slice(0, 4);
+    list.replaceChildren(...(all.length ? all.map((e) => h("div", { class: `ai-ag s-${e.state}` },
+      h("i", { class: "ai-dot" }),
+      h("div", { class: "ai-ag-t" },
+        h("b", { text: `${agentName(e.source)}${e.project ? " · " + e.project : ""}` }),
+        h("span", { text: `${STATE_WORDS[e.state] ?? e.state} · ${e.pcName} · ${ago(e.at)}` })),
+      ...(e.state === "approve" ? [h("button", { class: "btn primary", text: "Allow", onclick: () => a.answer(e, true) }), h("button", { class: "btn", text: "Deny", onclick: () => a.answer(e, false) })] : [])))
+      : [h("div", { class: "ai-empty", text: "No agents yet. Connect Claude Code or Codex in Settings → AI, and they show up here from any of your computers." })]));
+    const ps = loadPrompts().filter((p) => !p.del);
+    prompts.replaceChildren(...(ps.length ? ps.slice(0, 8).map((p) => h("button", { class: "ai-chip", text: p.title || p.text.slice(0, 24), title: p.text, onclick: () => a.copy(p.text, `“${p.title || "Prompt"}”`) }))
+      : [h("span", { class: "ai-empty", text: "Save prompts in Settings → AI; they're here on all your computers." })]));
+  };
+  return {
+    el,
+    sync() {},
+    refresh() {
+      renderList();
+      void a.usage().then((u) => {
+        if (!u) return;
+        const c = u.claude, x = u.codex;
+        const parts: string[] = [];
+        if (c.input + c.output + c.cacheRead + c.cacheWrite > 0) parts.push(`Claude Code ${fmtTok(c.input + c.output + c.cacheRead + c.cacheWrite)} tokens ≈ $${c.cost.toFixed(2)}`);
+        if (x.input + x.output > 0) parts.push(`Codex ${fmtTok(x.input + x.output)} tokens`);
+        use.textContent = parts.length ? `Last 24 h on this computer: ${parts.join(" · ")}` : "No AI usage on this computer in the last 24 h.";
+        use.title = "Counted from Claude Code's and Codex's own logs. The cost is at API list prices; on a subscription you don't pay it per token.";
+      });
+    },
+    askNow(q) {
+      input.value = q.length > 300 ? q.slice(0, 300) + "…" : q;
+      void ask(q);
     },
   };
 }

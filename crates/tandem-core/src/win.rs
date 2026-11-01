@@ -2081,57 +2081,7 @@ impl Platform for WinPlatform {
     }
 
     fn clipboard_set(&self, c: &ClipContent) {
-        unsafe {
-            if !open_clipboard() {
-                return;
-            }
-            let _ = EmptyClipboard();
-            match c {
-                ClipContent::Text(t) => {
-                    let mut bytes: Vec<u8> = t
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .flat_map(|u| u.to_le_bytes())
-                        .collect();
-                    bytes.shrink_to_fit();
-                    put(CF_UNICODETEXT, &bytes);
-                }
-                ClipContent::Files(paths) => {
-                    // DROPFILES header: pFiles=20, pt=(0,0), fNC=0, fWide=1
-                    let mut bytes: Vec<u8> = Vec::new();
-                    for v in [20u32, 0, 0, 0, 1] {
-                        bytes.extend_from_slice(&v.to_le_bytes());
-                    }
-                    for p in paths {
-                        for u in p.as_os_str().encode_wide().chain(std::iter::once(0)) {
-                            bytes.extend_from_slice(&u.to_le_bytes());
-                        }
-                    }
-                    bytes.extend_from_slice(&[0, 0]); // list terminator
-                    put(CF_HDROP, &bytes);
-                    // Paste should copy, never move, our temporary files.
-                    let fmt = RegisterClipboardFormatW(w!("Preferred DropEffect"));
-                    if fmt != 0 {
-                        put(fmt, &1u32.to_le_bytes());
-                    }
-                }
-                ClipContent::Image(png) => {
-                    log::info!("clipboard: writing a picture ({} KB)", png.len() / 1024);
-                    // The classic bitmap first: Paint, Word, Discord and most apps
-                    // paste from it, and Windows derives the other bitmap formats.
-                    match crate::image::png_to_dib(png) {
-                        Some(dib) => put(CF_DIB, &dib),
-                        None => log::warn!("clipboard: the received picture could not be decoded"),
-                    }
-                    // And the PNG, for apps that read it (keeps transparency).
-                    let fmt = RegisterClipboardFormatW(w!("PNG"));
-                    if fmt != 0 {
-                        put(fmt, png);
-                    }
-                }
-            }
-            let _ = CloseClipboard();
-        }
+        clip_set(c);
     }
 
     fn set_game_mode(&self, on: bool) {
@@ -2640,4 +2590,88 @@ unsafe fn read_text() -> Option<String> {
     let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
     let _ = GlobalUnlock(g);
     Some(s)
+}
+
+/// What is on the clipboard now (for the app's own features).
+pub fn clip_get() -> Option<ClipContent> {
+    unsafe {
+        if !open_clipboard() {
+            return None;
+        }
+        let r = read_clipboard();
+        let _ = CloseClipboard();
+        r
+    }
+}
+
+/// Changes each time anything is copied.
+pub fn clip_seq() -> u32 {
+    unsafe { windows::Win32::System::DataExchange::GetClipboardSequenceNumber() }
+}
+
+/// Puts this on the clipboard.
+pub fn clip_set(c: &ClipContent) {
+    unsafe {
+        if !open_clipboard() {
+            return;
+        }
+        let _ = EmptyClipboard();
+        match c {
+            ClipContent::Text(t) => {
+                let mut bytes: Vec<u8> = t
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .flat_map(|u| u.to_le_bytes())
+                    .collect();
+                bytes.shrink_to_fit();
+                put(CF_UNICODETEXT, &bytes);
+            }
+            ClipContent::Files(paths) => {
+                // DROPFILES header: pFiles=20, pt=(0,0), fNC=0, fWide=1
+                let mut bytes: Vec<u8> = Vec::new();
+                for v in [20u32, 0, 0, 0, 1] {
+                    bytes.extend_from_slice(&v.to_le_bytes());
+                }
+                for p in paths {
+                    for u in p.as_os_str().encode_wide().chain(std::iter::once(0)) {
+                        bytes.extend_from_slice(&u.to_le_bytes());
+                    }
+                }
+                bytes.extend_from_slice(&[0, 0]); // list terminator
+                put(CF_HDROP, &bytes);
+                // Paste should copy, never move, our temporary files.
+                let fmt = RegisterClipboardFormatW(w!("Preferred DropEffect"));
+                if fmt != 0 {
+                    put(fmt, &1u32.to_le_bytes());
+                }
+            }
+            ClipContent::Image(png) => {
+                log::info!("clipboard: writing a picture ({} KB)", png.len() / 1024);
+                // The classic bitmap first: Paint, Word, Discord and most apps
+                // paste from it, and Windows derives the other bitmap formats.
+                match crate::image::png_to_dib(png) {
+                    Some(dib) => put(CF_DIB, &dib),
+                    None => log::warn!("clipboard: the received picture could not be decoded"),
+                }
+                // And the PNG, for apps that read it (keeps transparency).
+                let fmt = RegisterClipboardFormatW(w!("PNG"));
+                if fmt != 0 {
+                    put(fmt, png);
+                }
+            }
+        }
+        let _ = CloseClipboard();
+    }
+}
+
+/// The main screen as a PNG, at most 2048×1024 (for an AI to look at).
+pub fn screenshot_png() -> Option<Vec<u8>> {
+    let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let s = (2048.0 / w as f32).min(1024.0 / h as f32).min(1.0);
+    let (ow, oh) = (((w as f32 * s) as i32).max(1), ((h as f32 * s) as i32).max(1));
+    let px = backdrop_rgba(0, 0, w, h, ow, oh)?;
+    crate::image::encode_png(&px, ow as u32, oh as u32)
 }

@@ -101,7 +101,7 @@ pub fn trim_png(raw: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-fn encode_png(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+pub fn encode_png(rgba: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(Cursor::new(&mut out), w, h);

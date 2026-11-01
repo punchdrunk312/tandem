@@ -74,9 +74,9 @@ button.link { background: none; border: none; box-shadow: none; color: var(--dim
 button.link:hover:not(:disabled) { background: none; color: var(--ink); }
 button.danger:hover:not(:disabled) { background: var(--red-l); border-color: #f0b4b0; color: var(--red); }
 :focus-visible { outline: 3px solid rgba(20, 184, 166, 0.5); outline-offset: 2px; }
-input[type="text"], select { background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; padding: 8px 12px; min-width: 0; width: 100%; transition: border-color 0.14s, box-shadow 0.14s; }
+input[type="text"], input[type="password"], select { background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; padding: 8px 12px; min-width: 0; width: 100%; transition: border-color 0.14s, box-shadow 0.14s; }
 select { cursor: pointer; font: inherit; color: var(--ink); }
-input[type="text"]:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.16); }
+input[type="text"]:focus, input[type="password"]:focus, select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.16); }
 input.codein { width: 108px; font-family: var(--mono); letter-spacing: 0.12em; text-align: center; flex: none; }
 
 .peer { display: flex; align-items: center; gap: 10px; padding: 11px 13px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; transition: border-color 0.15s, background 0.15s, transform 0.15s; }
@@ -558,3 +558,11 @@ kbd { font: 12px var(--mono); background: var(--surface); border: 1px solid var(
   .tile { grid-template-columns: 34px minmax(0, 1fr); grid-template-areas: "ico title" "ico line" "ctl ctl" "detail detail" "more more"; }
   .t-ctl { justify-content: flex-start; margin-top: 8px; }
 }
+
+/* AI: the prompt library */
+.pr-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.pr-fields { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pr-title { font-weight: 600; }
+.pr-text { font: 12.5px/1.45 var(--mono); color: var(--ink); background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 8px 10px; resize: vertical; min-height: 54px; }
+.pr-text:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.16); }
+.card.list.pad > button { margin-top: 10px; }

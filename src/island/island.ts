@@ -18,6 +18,7 @@ import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
 import { buildGame } from "./game";
 import { buildSuggest, buildTour, type Suggestion, type TourStep } from "./views";
+import { agentKey, agents, buildAgent, buildAi, loadPrompts, type AgentEv, type Prompt } from "./views";
 import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
@@ -174,6 +175,11 @@ export class Island {
       toggleFocus: () => this.setView(State.view === "focus" ? "home" : "focus"),
       toggleMedia: () => this.setView(State.view === "media" ? "home" : "media"),
       toggleNotes: () => this.setView(State.view === "notes" ? "home" : "notes"),
+      toggleAi: () => {
+        if (State.view === "ai") return this.setView("home");
+        this.setView("ai");
+        this.aiView.refresh();
+      },
       toggleGame: () => {
         if (State.view === "game") return this.setView("home");
         this.setView("game");
@@ -378,6 +384,15 @@ export class Island {
     this.views.set("game", this.gameView);
     this.suggestView = buildSuggest(() => this.closeBar());
     this.views.set("suggest", this.suggestView);
+    this.agentView = buildAgent({ answer: (e, allow) => this.agentAnswer(e, allow), close: () => this.closeBar() });
+    this.views.set("agent", this.agentView);
+    this.aiView = buildAi({
+      answer: (e, allow) => this.agentAnswer(e, allow),
+      ask: (q) => call<string>("ai_ask", { question: q }),
+      copy: (text, what) => void call("ai_copy", { text }).then(() => this.showNote(`${what} is copied — paste it with Ctrl+V`, 2600, "home"), (e) => this.showNote(String(e))),
+      usage: () => call("ai_usage").catch(() => null) as never,
+    });
+    this.views.set("ai", this.aiView);
     this.tourView = buildTour({ next: () => this.tourStep(this.tourAt + 1), skip: () => this.endTour() });
     this.views.set("tour", this.tourView);
     this.viewsEl = h("div", { id: "views" });
@@ -501,6 +516,84 @@ export class Island {
     if (State.view === "tour") this.closeBar();
   }
 
+  // ── AI agents ───────────────────────────────────────────────────────────────
+
+  private agentView!: ReturnType<typeof buildAgent>;
+  private aiView!: ReturnType<typeof buildAi>;
+
+  /** Something from an AI agent on any computer. */
+  onAgent(e: AgentEv) {
+    const k = agentKey(e);
+    const shown = this.agentView.current();
+    if (e.state === "ended") agents.delete(k);
+    else if (e.state === "allowed" || e.state === "denied" || e.state === "terminal") {
+      agents.set(k, { ...e, state: e.state === "terminal" ? "waiting" : "working", text: "" });
+      if (shown?.id === e.id && State.view === "agent") this.closeBar();
+    } else agents.set(k, e);
+    if (State.view === "ai") this.aiView.refresh();
+    if (!State.settings.aiAgents || !["approve", "waiting", "done"].includes(e.state)) return;
+    this.agentView.show(e);
+    this.autoly(() => this.alert("agent"));
+    if (e.state === "approve") {
+      this.engine.triggerEmote("surprised", 1);
+      Sound.play("blip");
+    } else if (e.state === "done") {
+      this.engine.gesture("thumbs");
+      window.setTimeout(() => { if (State.view === "agent" && this.agentView.current()?.id === e.id && !this.wasInIsland) this.closeBar(); }, 9000);
+    } else {
+      this.engine.triggerEmote("wink");
+      window.setTimeout(() => { if (State.view === "agent" && this.agentView.current()?.id === e.id && !this.wasInIsland) this.closeBar(); }, 9000);
+    }
+  }
+
+  private agentAnswer(e: AgentEv, allow: boolean) {
+    fire("agent_answer", { id: e.id, pc: e.pc, allow });
+    this.engine.triggerEmote(allow ? "love" : "annoyed", 0.6);
+    if (State.view === "agent") this.closeBar();
+  }
+
+  /** You copied what looks like an error: Bob offers to look at it. */
+  onClipError(text: string) {
+    if (!State.settings.aiErrors || State.mode === "expanded" || State.focus) return;
+    const first = text.split("\n").find((l) => /error|exception|panic|failed|traceback/i.test(l)) ?? text.split("\n")[0];
+    this.suggestView.show({ title: "That looks like an error 🐞", sub: first.trim().slice(0, 110), act: ["Ask Bob", () => window.setTimeout(() => {
+      this.setView("ai");
+      this.aiView.refresh();
+      this.aiView.askNow(`I got this error. What's wrong and how do I fix it?\n\n${text}`);
+    }, 50)] });
+    this.autoly(() => this.alert("suggest"));
+    this.engine.triggerEmote("surprised", 0.6);
+    window.setTimeout(() => { if (State.view === "suggest" && !this.wasInIsland) this.closeBar(); }, 9000);
+  }
+
+  /** Something arrived from the other computer for an AI here. */
+  onAiIn(m: { from: string; preview: string; image: boolean }) {
+    this.engine.triggerEmote("surprised", 0.5);
+    this.autoly(() => this.showNote(`📋 ${m.image ? m.preview : `“${m.preview}”`} from ${m.from} — paste it into your AI with Ctrl+V`, 5000));
+  }
+  onAiSent(m: { to: string; shot: boolean }) {
+    this.autoly(() => this.showNote(`✈️ ${m.shot ? "Screenshot" : "Sent"} to ${m.to} — paste it there with Ctrl+V`, 3200));
+  }
+
+  /** The prompt library changed here (the settings window): to the other computers. */
+  promptsChanged() {
+    fire("ai_relay", { kind: "ui:prompts", json: JSON.stringify(loadPrompts()) });
+  }
+  /** …or there: newest version of each wins. */
+  onRelay(m: { kind: string; json: string }) {
+    if (m.kind !== "ui:prompts") return;
+    let theirs: Prompt[] = [];
+    try { theirs = JSON.parse(m.json) as Prompt[]; } catch { return; }
+    const mine = new Map(loadPrompts().map((p) => [p.id, p]));
+    let changed = false;
+    for (const p of theirs) {
+      const have = mine.get(p.id);
+      if (!have || p.at > have.at) { mine.set(p.id, p); changed = true; }
+    }
+    if (changed) try { localStorage.setItem("cc.prompts", JSON.stringify([...mine.values()])); } catch { /* fine */ }
+    if (State.view === "ai") this.aiView.refresh();
+  }
+
   // ── Suggestions ─────────────────────────────────────────────────────────────
 
   /** Bob suggests something (once per key per day), only when the bar is free. */
@@ -591,6 +684,7 @@ export class Island {
       case "open my notes": open("notes"); break;
       case "show my computers": open("devices"); break;
       case "play catch": open("game"); this.gameView.start(); break;
+      case "show my agents": open("ai"); this.aiView.refresh(); break;
       case "what's the weather": {
         const w = this.weather;
         if (!w) this.autoly(() => this.showNote("I don't know the weather yet. Is it on in settings?", 3500));
