@@ -16,6 +16,10 @@ export interface IslandSettings {
   crossWhoosh: boolean;
   /** "MM-DD", or empty. */
   birthday: string;
+  /** The weather where you are: Bob dresses for it and it falls in the bar. */
+  weather: boolean;
+  /** The city for the weather ("" = from the time zone). */
+  city: string;
   /** Calm Bob: no seasons drifting, quieter moments. */
   calm: boolean;
   /** The look: frosted "glass" (default) or the classic black bar. */
@@ -93,7 +97,7 @@ export function saveFocus(f: Focus | null) {
 
 const DEFAULTS: IslandSettings = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
-  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
+  seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false, weather: true, city: "",
   theme: "glass",
   accent: "",
   outfit: "none",

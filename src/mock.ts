@@ -212,6 +212,12 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       };
     case "media_video_id":
       return "dQw4w9WgXcQ";
+    case "weather": {
+      // "&sky=storm" (rain, snow, fog, clear, clouds) in the address picks it.
+      const sky = location.hash.split("&").find((f) => f.startsWith("sky="))?.slice(4) ?? "rain";
+      const code = ({ clear: 0, clouds: 3, fog: 45, drizzle: 53, rain: 63, snow: 73, storm: 95 } as Record<string, number>)[sky] ?? 63;
+      return { city: "Athens", temp_c: sky === "clear" ? 29 : sky === "snow" ? -2 : 14, code, is_day: true, wind_kmh: 12 };
+    }
     default:
       return;
   }

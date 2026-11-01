@@ -21,6 +21,7 @@ mod ghost;
 mod island;
 mod license_client;
 mod media;
+mod weather;
 mod reports;
 mod shellmenu;
 #[cfg(windows)]
@@ -1436,6 +1437,7 @@ pub fn run() {
             media::media_control,
             media::media_lyrics,
             media::media_video_id,
+            weather::weather,
             media::media_show_video,
         ])
         .build(tauri::generate_context!())

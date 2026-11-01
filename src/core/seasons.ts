@@ -4,7 +4,9 @@
 export type Season = "winter" | "spring" | "summer" | "autumn";
 export type Special = "christmas" | "newyear" | "halloween" | "easter" | "birthday" | "anniversary";
 export type Hat = "none" | "beanie" | "santa" | "party" | "pumpkin";
-export type Ambient = "snow" | "petals" | "leaves" | "sun" | "confetti" | "lights" | "embers";
+export type Ambient = "snow" | "petals" | "leaves" | "sun" | "confetti" | "lights" | "embers" | "rain" | "storm" | "fog";
+/** The sky right now, from the weather code. */
+export type Sky = "clear" | "clouds" | "fog" | "drizzle" | "rain" | "snow" | "storm";
 export type TimeOfDay = "morning" | "day" | "evening" | "night";
 
 /** What Bob wears and what drifts around him. */
@@ -16,6 +18,8 @@ export interface Look {
   glasses: boolean;
   flower: boolean;
   egg: boolean;
+  /** Raining where you are. */
+  umbrella: boolean;
   ambient: Ambient | null;
   /** A short line for the bar, on a special day. */
   greeting: string | null;
@@ -127,6 +131,7 @@ export function lookFor(d: Date, tz: string, me: Personal = {}): Look {
     glasses: s === "summer",
     flower: s === "spring",
     egg: false,
+    umbrella: false,
     ambient: ({ winter: "snow", spring: "petals", summer: "sun", autumn: "leaves" } as const)[s],
     greeting: null,
   };
@@ -153,6 +158,35 @@ export function lookFor(d: Date, tz: string, me: Personal = {}): Look {
     }
   }
   return look;
+}
+
+/** WMO weather code → the sky. */
+export function skyOf(code: number): Sky {
+  if (code >= 95) return "storm";
+  if (code >= 71 && code <= 77) return "snow";
+  if (code === 85 || code === 86) return "snow";
+  if (code >= 61 && code <= 67) return "rain";
+  if (code >= 80 && code <= 82) return "rain";
+  if (code >= 51 && code <= 57) return "drizzle";
+  if (code === 45 || code === 48) return "fog";
+  if (code >= 2) return "clouds";
+  return "clear";
+}
+
+/** The season's look, dressed for the weather outside. A special day keeps its own
+ *  outfit and sparkle; it only gets the umbrella if it rains. */
+export function withWeather(look: Look, sky: Sky, tempC: number, isDay: boolean): Look {
+  const l = { ...look };
+  const wet = sky === "rain" || sky === "drizzle" || sky === "storm";
+  if (wet) l.umbrella = true;
+  if (l.special) return l;
+  if (wet) Object.assign(l, { glasses: false, ambient: sky === "storm" ? "storm" : "rain" });
+  else if (sky === "snow") Object.assign(l, { glasses: false, scarf: true, hat: "beanie", ambient: "snow" });
+  else if (sky === "fog") Object.assign(l, { glasses: false, ambient: "fog" });
+  else if (sky === "clear" && isDay && tempC >= 24) Object.assign(l, { glasses: true, hat: "none", scarf: false, ambient: "sun" });
+  else if (sky === "clouds") Object.assign(l, { glasses: false, ambient: l.ambient === "sun" ? null : l.ambient });
+  if (!wet && sky !== "snow" && tempC <= 4) Object.assign(l, { scarf: true, hat: "beanie", glasses: false });
+  return l;
 }
 
 /** Is it the moment the year turns (to the minute)? Bob throws confetti. */

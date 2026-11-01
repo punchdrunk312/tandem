@@ -10,7 +10,7 @@ interface P {
   r: number; rot: number; vr: number; life: number; age: number; hue: number;
 }
 
-const MAX: Record<Ambient, number> = { snow: 34, petals: 16, leaves: 12, sun: 14, confetti: 40, lights: 0, embers: 18 };
+const MAX: Record<Ambient, number> = { snow: 34, petals: 16, leaves: 12, sun: 14, confetti: 40, lights: 0, embers: 18, rain: 70, storm: 95, fog: 0 };
 const LEAF = ["#d9822b", "#c2552a", "#e3a33a", "#9c4a1f"];
 const CONFETTI = ["#ff6b9a", "#ffd23f", "#2dd4bf", "#7c5cff", "#38bdf8", "#fb923c"];
 const BULBS = ["#ff5a5f", "#ffd23f", "#2dd4bf", "#38bdf8", "#a78bfa"];
@@ -22,6 +22,11 @@ export class AmbientLayer {
   private ps: P[] = [];
   private t = 0;
   private burst = 0;
+  /** Lightning: the flash fading (1 → 0), and when the next one strikes. */
+  private flash = 0;
+  private nextFlash = 4;
+  /** Called on each lightning strike (Bob jumps). */
+  onFlash: (() => void) | null = null;
 
   /** A one-off shower (the year turning, a birthday). */
   celebrate() {
@@ -29,16 +34,26 @@ export class AmbientLayer {
   }
 
   get busy(): boolean {
-    return this.kind != null || this.burst > 0 || this.ps.length > 0;
+    return this.kind != null || this.burst > 0 || this.ps.length > 0 || this.flash > 0;
   }
 
   step(dt: number, w: number, h: number) {
     this.t += dt;
     const kind = this.burst > 0 ? "confetti" : this.kind;
     this.burst = Math.max(0, this.burst - dt);
+    this.flash = Math.max(0, this.flash - dt * 2.6);
+    if (kind === "storm") {
+      this.nextFlash -= dt;
+      if (this.nextFlash <= 0) {
+        // Sometimes a double strike, like the real thing.
+        this.flash = 1;
+        this.nextFlash = Math.random() < 0.3 ? 0.25 : 6 + Math.random() * 9;
+        this.onFlash?.();
+      }
+    }
     if (kind && kind !== "lights") {
       const want = MAX[kind] * (this.burst > 0 ? 2 : 1);
-      const rate = this.burst > 0 ? 60 : want / 5; // per second
+      const rate = this.burst > 0 ? 60 : kind === "rain" || kind === "storm" ? want * 4 : want / 5; // per second
       if (this.ps.length < want && Math.random() < rate * dt) this.ps.push(this.spawn(kind, w, h));
     }
     for (const p of this.ps) {
@@ -65,6 +80,12 @@ export class AmbientLayer {
         return { ...base, x: rnd(w * 0.45, w), y: rnd(0, h), vx: rnd(-4, 4), vy: rnd(-5, -1), r: rnd(0.8, 1.8), life: rnd(3, 6) };
       case "confetti":
         return { ...base, x: rnd(0, w), y: -6, vx: rnd(-20, 20), vy: rnd(40, 90), r: rnd(2, 3.4), life: 8, vr: rnd(-6, 6) };
+      case "rain":
+      case "storm": {
+        // Slanting streaks; a storm's are faster and blown harder.
+        const s = kind === "storm" ? 1.3 : 1;
+        return { ...base, x: rnd(0, w + 40), y: rnd(-20, -4), vx: -40 * s, vy: rnd(300, 380) * s, r: rnd(6, 11), life: 2, rot: 0, vr: 0 };
+      }
       case "embers":
         return { ...base, x: rnd(0, w), y: h + 4, vx: rnd(-6, 6), vy: rnd(-18, -8), r: rnd(0.8, 1.8), life: rnd(4, 8) };
       default:
@@ -85,8 +106,21 @@ export class AmbientLayer {
       x.fillRect(0, 0, w, h);
     }
     if (kind === "lights") this.drawLights(x, w, h);
+    if (kind === "fog") this.drawFog(x, w, h);
+    if (kind === "storm" || kind === "rain") {
+      // A low, grey sky.
+      const g = x.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, this.light ? "rgba(70,85,105,0.10)" : "rgba(120,140,170,0.10)");
+      g.addColorStop(1, "rgba(120,140,170,0)");
+      x.fillStyle = g;
+      x.fillRect(0, 0, w, h);
+    }
+    if (this.flash > 0) {
+      x.fillStyle = `rgba(225,235,255,${0.32 * this.flash * this.flash})`;
+      x.fillRect(0, 0, w, h);
+    }
     for (const p of this.ps) {
-      const fade = Math.min(1, p.age / 0.6, (p.life - p.age) / 0.8);
+      const fade = p.k === "rain" || p.k === "storm" ? 1 : Math.min(1, p.age / 0.6, (p.life - p.age) / 0.8);
       x.save();
       x.globalAlpha = Math.max(0, fade);
       x.translate(p.x, p.y);
@@ -124,6 +158,16 @@ export class AmbientLayer {
           x.globalAlpha *= 0.85;
           x.fillRect(-p.r, -p.r * 0.4, p.r * 2, p.r * 0.8);
           break;
+        case "rain":
+        case "storm":
+          x.rotate(-p.rot);
+          x.strokeStyle = this.light ? "rgba(70,110,160,0.45)" : "rgba(190,215,255,0.42)";
+          x.lineWidth = 1;
+          x.beginPath();
+          x.moveTo(0, 0);
+          x.lineTo(p.vx * 0.022, p.vy * 0.022 * (p.r / 9));
+          x.stroke();
+          break;
         case "embers": {
           const g = x.createRadialGradient(0, 0, 0, 0, 0, p.r * 3);
           g.addColorStop(0, "rgba(255,170,60,0.8)");
@@ -136,6 +180,20 @@ export class AmbientLayer {
         }
       }
       x.restore();
+    }
+  }
+
+  /** Fog: soft bands drifting slowly across. */
+  private drawFog(x: CanvasRenderingContext2D, w: number, h: number) {
+    for (let i = 0; i < 4; i++) {
+      const cx = ((this.t * (8 + i * 4) + i * 230) % (w + 400)) - 200;
+      const cy = h * (0.25 + i * 0.2);
+      const g = x.createRadialGradient(cx, cy, 0, cx, cy, 190);
+      const c = this.light ? "120,130,145" : "210,220,235";
+      g.addColorStop(0, `rgba(${c},0.13)`);
+      g.addColorStop(1, `rgba(${c},0)`);
+      x.fillStyle = g;
+      x.fillRect(0, 0, w, h);
     }
   }
 

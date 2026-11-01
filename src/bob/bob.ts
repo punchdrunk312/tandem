@@ -1558,6 +1558,7 @@ export class Bob {
       glasses: w?.glasses ?? b?.glasses ?? false,
       flower: w?.flower ?? b?.flower ?? false,
       egg: w?.egg ?? b?.egg ?? false,
+      umbrella: w?.umbrella ?? b?.umbrella ?? false,
     };
     x.save();
     x.globalAlpha *= a;
@@ -1566,6 +1567,73 @@ export class Bob {
     if (L.egg) this.drawEgg(x, R, hw, hh);
     if (L.hat !== "none") this.drawHat(x, R, hw, hh, L.hat);
     if (L.flower) this.drawFlower(x);
+    if (L.umbrella) this.drawUmbrella(x, R, hw, hh);
+    x.restore();
+  }
+
+  /** Raining where you are: Bob holds an umbrella, swaying a little, drops running off it. */
+  private drawUmbrella(x: CanvasRenderingContext2D, R: number, hw: number, hh: number) {
+    const t = now();
+    x.save();
+    // Held in his right hand, the canopy over his head, leaning into the wind.
+    x.translate(hw * 0.78, hh * 0.35);
+    x.rotate(-0.22 + Math.sin(t * 1.4) * 0.05);
+    const stem = R * 2.15;
+    x.strokeStyle = "#3a2a20";
+    x.lineWidth = Math.max(1.2, R * 0.055);
+    x.lineCap = "round";
+    // The hook of the handle, then the shaft.
+    x.beginPath();
+    x.arc(-R * 0.1, 0, R * 0.1, 0, Math.PI);
+    x.moveTo(0, 0);
+    x.lineTo(0, -stem);
+    x.stroke();
+    // The canopy: a dome with scalloped edge, in panels.
+    const cw = R * 1.55, top = -stem - R * 0.62, rim = -stem + R * 0.08;
+    const dome = new Path2D();
+    dome.moveTo(-cw, rim);
+    dome.bezierCurveTo(-cw * 0.95, top, cw * 0.95, top, cw, rim);
+    const n = 4;
+    for (let i = n; i > 0; i--) {
+      const x0 = -cw + (2 * cw * i) / n, x1 = -cw + (2 * cw * (i - 1)) / n;
+      dome.quadraticCurveTo((x0 + x1) / 2, rim - R * 0.16, x1, rim);
+    }
+    dome.closePath();
+    const g = x.createLinearGradient(-cw, top, cw, rim);
+    g.addColorStop(0, "#ff7a6b");
+    g.addColorStop(1, "#d93a52");
+    x.fillStyle = g;
+    x.fill(dome);
+    x.save();
+    x.clip(dome);
+    x.fillStyle = "rgba(255,255,255,0.85)";
+    for (let i = 0; i < n; i += 2) {
+      const a = -cw + (2 * cw * i) / n;
+      x.beginPath();
+      x.moveTo(0, top + R * 0.05);
+      x.lineTo(a, rim + R * 0.1);
+      x.lineTo(a + (2 * cw) / n, rim + R * 0.1);
+      x.closePath();
+      x.fill();
+    }
+    x.restore();
+    x.strokeStyle = "rgba(0,0,0,0.25)";
+    x.lineWidth = Math.max(0.8, R * 0.025);
+    x.stroke(dome);
+    // The tip.
+    x.fillStyle = "#3a2a20";
+    x.beginPath();
+    x.arc(0, top + R * 0.12, R * 0.06, 0, Math.PI * 2);
+    x.fill();
+    // Drops running off the edges.
+    x.fillStyle = "rgba(170,205,255,0.85)";
+    for (const [ex, ph] of [[-cw, 0], [cw, 0.5]] as const) {
+      const p = (t * 1.3 + ph) % 1;
+      x.globalAlpha = 1 - p;
+      x.beginPath();
+      x.ellipse(ex, rim + p * R * 1.2, R * 0.045, R * 0.075, 0, 0, Math.PI * 2);
+      x.fill();
+    }
     x.restore();
   }
 

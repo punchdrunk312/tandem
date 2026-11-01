@@ -23,7 +23,7 @@ import { nextTip } from "./tips";
 import { MomentWatcher, panFor, type Moment } from "./moments";
 import { pending } from "../whatsnew";
 import { AmbientLayer } from "./ambient";
-import { isMidnightOfNewYear, lookFor, timeOfDay, timeZone, type Look } from "../core/seasons";
+import { isMidnightOfNewYear, lookFor, skyOf, timeOfDay, timeZone, withWeather, type Look, type Sky } from "../core/seasons";
 
 const BOT_OVERHANG = 40;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
@@ -129,6 +129,12 @@ export class Island {
     this.wireInput();
     this.engine.onDizzy = () => this.handleDizzy();
     this.refreshLook();
+    // The weather outside: now, and every 20 minutes.
+    this.ambient.onFlash = () => {
+      if (State.mode === "expanded") this.engine.triggerEmote("surprised");
+    };
+    if (`${State.settings.weather}|${State.settings.city}` !== this.weatherFor) void this.fetchWeather();
+    window.setInterval(() => void this.fetchWeather(), 20 * 60_000);
     // A focus that was running when CubeCursor closed carries on.
     this.focusTick();
     this.reminderLoop();
@@ -649,6 +655,59 @@ export class Island {
     this.dirty = true;
   }
 
+  /** The weather where you are (null until it is known, or when it's turned off). */
+  private weather: { city: string; temp: number; sky: Sky; day: boolean } | null = null;
+
+  private weatherFor = "";
+
+  private async fetchWeather() {
+    this.weatherFor = `${State.settings.weather}|${State.settings.city}`;
+    if (!State.settings.weather) {
+      if (this.weather) {
+        this.weather = null;
+        this.refreshLook();
+      }
+      return;
+    }
+    // The city typed in settings, or the one in the time zone ("Europe/Athens" → "Athens").
+    const place = State.settings.city.trim() || timeZone().split("/").pop()?.replace(/_/g, " ") || "";
+    if (!place) return;
+    try {
+      const w = (await call("weather", { place })) as { city: string; temp_c: number; code: number; is_day: boolean };
+      const before = this.weather;
+      this.weather = { city: w.city, temp: Math.round(w.temp_c), sky: skyOf(w.code), day: w.is_day };
+      this.refreshLook();
+      if (!before || before.sky !== this.weather.sky) this.weatherNews(!before);
+    } catch (e) {
+      fire("log_js", { msg: `weather: ${e}` });
+    }
+  }
+
+  /** The sky changed (or it's the first look of the day): Bob reacts, and a pill says it. */
+  private weatherNews(first: boolean, retry = false) {
+    const w = this.weather;
+    if (!w || this.quiet || State.focus) return;
+    const emote = ({ storm: "surprised", rain: "annoyed", drizzle: "annoyed", snow: "love", clear: "happy", clouds: null, fog: "yawn" } as const)[w.sky];
+    if (emote && !retry) window.setTimeout(() => this.engine.triggerEmote(emote), 600);
+    // Once a day on its own, and whenever the sky turns — never over someone using the bar.
+    const key = "cc.weatherShown";
+    let seen = "";
+    try { seen = localStorage.getItem(key) ?? ""; } catch { /* fine */ }
+    const today = new Date().toDateString();
+    if (first && seen === today) return;
+    // The bar is busy (the hello, someone using it): say it a little later.
+    if (State.mode === "expanded") {
+      window.setTimeout(() => this.weatherNews(first, true), 5000);
+      return;
+    }
+    try { localStorage.setItem(key, today); } catch { /* fine */ }
+    this.chargeView.showWeather(w);
+    this.autoly(() => this.alert("charge"));
+    window.setTimeout(() => {
+      if (State.view === "charge" && !this.wasInIsland) this.closeBar();
+    }, 3400);
+  }
+
   private refreshLook() {
     this.applyTheme();
     let installedAt = 0;
@@ -665,7 +724,10 @@ export class Island {
     // Browser preview: "&date=2026-12-25T10:00" in the address shows that day's Bob.
     const forced = !IS_TAURI ? location.hash.split("&").find((f) => f.startsWith("date="))?.slice(5) : undefined;
     if (forced && !Number.isNaN(Date.parse(forced))) now = new Date(forced);
-    const look = State.settings.seasons ? lookFor(now, timeZone(), { birthday: State.settings.birthday, installedAt }) : null;
+    const season = State.settings.seasons ? lookFor(now, timeZone(), { birthday: State.settings.birthday, installedAt }) : null;
+    // Dressed for the weather outside too (on its own switch).
+    const w = this.weather;
+    const look = season && w ? withWeather(season, w.sky, w.temp, w.day) : season;
     const changed = JSON.stringify(look) !== JSON.stringify(this.look);
     this.look = look;
     this.engine.look = look;
@@ -1894,6 +1956,7 @@ export class Island {
 
   applySettings() {
     this.refreshLook();
+    if (`${State.settings.weather}|${State.settings.city}` !== this.weatherFor) void this.fetchWeather();
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;

@@ -76,6 +76,7 @@ const veil = h("div", { id: "veil" });
 document.body.append(veil);
 
 const ICONS = {
+  weather: "M7 18a4 4 0 010-8 6 6 0 0111.3 2A3.5 3.5 0 0118 18H7zM9 21l-1 2M13 21l-1 2M17 21l-1 2",
   computers: "M3 5h13v9H3zM8 18h3M9.5 14v4M19 8v10M16 18h6",
   files: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4",
   features: "M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z",
@@ -853,6 +854,7 @@ const ISLAND_KEY = "tandem.island";
 interface IslandOpts {
   soundEnabled: boolean; soundVolume: number; autoCloseInterval: number;
   seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
+  weather: boolean; city: string;
   theme: "glass" | "dark";
   accent: string;
   outfit: string;
@@ -862,6 +864,7 @@ interface IslandOpts {
 const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false,
+  weather: true, city: "",
   theme: "glass",
   accent: "",
   outfit: "none",
@@ -994,6 +997,12 @@ function renderTopBar() {
           control: switchEl(is.tips, (v) => set({ tips: v })) }),
         tile({ id: "seasons", icon: ICONS.seasons, color: "rose", title: "Seasons & holidays", line: "Bob dresses for the time of year.", on: is.seasons,
           control: switchEl(is.seasons, (v) => set({ seasons: v })) }),
+        tile({ id: "weather", icon: ICONS.weather, color: "blue", title: "Weather", line: "Rain, snow or sun in the bar; Bob dresses for it.", on: is.weather,
+          more: "The weather comes from Open-Meteo for the city below (or the one in your time zone). Only the city name is sent.",
+          control: h("div", { style: "display:flex;gap:8px;align-items:center" },
+            h("input", { type: "text", class: "name-in", placeholder: "City (optional)", value: is.city, maxLength: 60,
+              onchange: (e: Event) => set({ city: (e.target as HTMLInputElement).value.trim() }) }),
+            switchEl(is.weather, (v) => set({ weather: v }))) }),
         tile({ id: "calm", icon: ICONS.calm, color: "slate", title: "Calm Bob", line: "Nothing drifting, quieter cards.", on: is.calm,
           control: switchEl(is.calm, (v) => set({ calm: v })) }),
         tile({ id: "bday", icon: ICONS.cake, color: "rose", title: "Your birthday", line: "Bob celebrates with you. It stays here.", wide: true,

@@ -258,6 +258,13 @@ html.dev body { background: #2b2f38; }
   background: linear-gradient(145deg, color-mix(in srgb, var(--c) 70%, white), var(--c));
 }
 .charge.k-online { --ch: var(--c); }
+.charge.k-weather { --ch: var(--ink); }
+.charge.sky-clear { --ch: #ffd36b; }
+.charge.sky-rain, .charge.sky-drizzle, .charge.sky-storm { --ch: #8fc4ff; }
+.charge.sky-snow { --ch: #dff1ff; }
+.ch-emoji { font-size: 19px; line-height: 1; display: block; }
+.charge.on.enter .ch-emoji { animation: sky-in 0.7s cubic-bezier(0.3, 0.7, 0.4, 1.5) 0.15s both; }
+@keyframes sky-in { from { transform: translateY(-10px) rotate(-20deg) scale(0.5); opacity: 0; } }
 .charge.k-offline { --ch: var(--dim); }
 .charge.k-offline .ch-avatar { filter: grayscale(0.7) brightness(0.8); }
 .charge .ring .r-fill { filter: none; }

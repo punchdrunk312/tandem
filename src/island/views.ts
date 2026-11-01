@@ -410,7 +410,15 @@ export function buildMoment(a: MomentActions): ViewHost & { show(m: import("./mo
 
 /** The phone's slim pill: chargers, computers coming and going, earbuds connecting.
  *  An icon and a word on the left, the level (or the news) on the right. */
-export function buildCharge(): ViewHost & { show(m: import("./moments").Moment): void } {
+const SKY: Record<string, [string, string]> = {
+  clear: ["☀️", "Clear"], clouds: ["☁️", "Cloudy"], fog: ["🌫️", "Foggy"], drizzle: ["🌦️", "Drizzle"],
+  rain: ["🌧️", "Raining"], snow: ["❄️", "Snowing"], storm: ["⛈️", "Thunderstorm"],
+};
+
+export function buildCharge(): ViewHost & {
+  show(m: import("./moments").Moment): void;
+  showWeather(w: { city: string; temp: number; sky: string; day: boolean }): void;
+} {
   const fill = h("i", { class: "ch-fill" });
   const bolt = svg(BOLT, 12);
   bolt.classList.add("ch-bolt");
@@ -422,6 +430,15 @@ export function buildCharge(): ViewHost & { show(m: import("./moments").Moment):
   return {
     el,
     sync() {},
+    showWeather(w) {
+      el.className = `view charge${State.view === "charge" ? " on" : ""} k-weather sky-${w.sky}`;
+      void el.offsetWidth;
+      el.classList.add("enter");
+      const [emoji, what] = SKY[w.sky] ?? SKY.clouds;
+      icon.replaceChildren(h("span", { class: "ch-emoji", text: w.sky === "clear" && !w.day ? "🌙" : emoji }));
+      word.textContent = `${w.city} · ${what}`;
+      pct.textContent = `${w.temp}°`;
+    },
     show(m) {
       const me = m.id === "me";
       const acc = m.kind === "acc-on" ? m.acc : undefined;
