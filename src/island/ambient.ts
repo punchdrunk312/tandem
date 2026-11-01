@@ -171,6 +171,13 @@ export class AmbientLayer {
 
   draw(x: CanvasRenderingContext2D, w: number, h: number) {
     x.clearRect(0, 0, w, h);
+    x.save();
+    // On the glass whatever is behind shows through: white with a soft dark edge reads
+    // on a bright wallpaper and a dark one alike.
+    if (this.light) {
+      x.shadowColor = "rgba(10,25,50,0.35)";
+      x.shadowBlur = 2;
+    }
     const kind = this.burst > 0 ? "confetti" : this.kind;
     if (kind === "sun") {
       // Warm light in the top-right corner, breathing slowly.
@@ -185,7 +192,7 @@ export class AmbientLayer {
     if (kind === "night") this.drawNight(x, w, h);
     if (this.bow > 0) this.drawRainbow(x, w, h);
     if (kind === "fog") this.drawFog(x, w, h);
-    if (kind === "storm" || kind === "rain") {
+    if ((kind === "storm" || kind === "rain") && !this.light) {
       // A low, grey sky.
       const g = x.createLinearGradient(0, 0, 0, h);
       g.addColorStop(0, this.light ? "rgba(70,85,105,0.10)" : "rgba(120,140,170,0.10)");
@@ -195,7 +202,7 @@ export class AmbientLayer {
     }
     // Puddles along the bottom while it's wet, and the rings of drops landing in them.
     if (this.wet > 0) {
-      const c = this.light ? "70,110,160" : "170,200,240";
+      const c = this.light ? "255,255,255" : "170,200,240";
       for (const [fx, fw] of [[0.18, 60], [0.52, 90], [0.83, 50]] as const) {
         x.fillStyle = `rgba(${c},${0.12 * this.wet})`;
         x.beginPath();
@@ -214,7 +221,7 @@ export class AmbientLayer {
       x.globalAlpha = 1;
     }
     if (this.pile.some((v) => v > 0.2)) {
-      x.fillStyle = this.light ? "rgba(235,242,252,0.95)" : "rgba(245,250,255,0.9)";
+      x.fillStyle = "rgba(245,250,255,0.92)";
       x.beginPath();
       x.moveTo(0, h);
       this.pile.forEach((v, i) => x.lineTo(i * 8, h - v));
@@ -232,7 +239,8 @@ export class AmbientLayer {
     }
     if (this.bat) this.drawBat(x, this.bat.x, this.bat.y, this.bat.dir);
     if (this.flash > 0) {
-      x.fillStyle = `rgba(225,235,255,${0.32 * this.flash * this.flash})`;
+      x.shadowBlur = 0;
+      x.fillStyle = `rgba(225,235,255,${(this.light ? 0.5 : 0.32) * this.flash * this.flash})`;
       x.fillRect(0, 0, w, h);
     }
     for (const p of this.ps) {
@@ -243,7 +251,7 @@ export class AmbientLayer {
       x.rotate(p.rot);
       switch (p.k) {
         case "snow":
-          x.fillStyle = this.light ? "rgba(110,150,200,0.5)" : "rgba(255,255,255,0.55)";
+          x.fillStyle = this.light ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.55)";
           x.beginPath();
           x.arc(0, 0, p.r, 0, Math.PI * 2);
           x.fill();
@@ -277,7 +285,7 @@ export class AmbientLayer {
         case "rain":
         case "storm":
           x.rotate(-p.rot);
-          x.strokeStyle = this.light ? "rgba(70,110,160,0.45)" : "rgba(190,215,255,0.42)";
+          x.strokeStyle = this.light ? "rgba(255,255,255,0.85)" : "rgba(190,215,255,0.42)";
           x.lineWidth = 1;
           x.beginPath();
           x.moveTo(0, 0);
@@ -297,6 +305,7 @@ export class AmbientLayer {
       }
       x.restore();
     }
+    x.restore();
   }
 
   /** Stars twinkling, the moon in today's phase, and a shooting star now and then. */
@@ -306,7 +315,7 @@ export class AmbientLayer {
       const sx = ((i * 2654435761) % 1000) / 1000 * w;
       const sy = ((i * 40503) % 1000) / 1000 * h * 0.85;
       const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(this.t * (1 + (i % 5) * 0.4) + i));
-      x.fillStyle = this.light ? `rgba(80,90,130,${a})` : `rgba(255,255,240,${a})`;
+      x.fillStyle = `rgba(255,255,240,${this.light ? Math.min(1, a + 0.3) : a})`;
       x.fillRect(sx, sy, i % 4 === 0 ? 1.6 : 1, i % 4 === 0 ? 1.6 : 1);
     }
     // The moon: lit by today's phase (a 29.53-day cycle from a known new moon).
@@ -382,8 +391,8 @@ export class AmbientLayer {
       const cx = ((this.t * (8 + i * 4) + i * 230) % (w + 400)) - 200;
       const cy = h * (0.25 + i * 0.2);
       const g = x.createRadialGradient(cx, cy, 0, cx, cy, 190);
-      const c = this.light ? "120,130,145" : "210,220,235";
-      g.addColorStop(0, `rgba(${c},0.13)`);
+      const c = this.light ? "255,255,255" : "210,220,235";
+      g.addColorStop(0, `rgba(${c},${this.light ? 0.3 : 0.13})`);
       g.addColorStop(1, `rgba(${c},0)`);
       x.fillStyle = g;
       x.fillRect(0, 0, w, h);

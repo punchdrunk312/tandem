@@ -13,7 +13,7 @@ import { Sound } from "../core/sound";
 import { Bob } from "../bob/bob";
 import { Greeting } from "../bob/hello";
 import type { Snapshot } from "../types";
-import { h, svg } from "./dom";
+import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
 import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
@@ -639,6 +639,11 @@ export class Island {
   private applyTheme() {
     const glass = State.settings.theme !== "dark";
     document.documentElement.dataset.theme = glass ? "glass" : "dark";
+    const carbon = State.settings.barColor === "carbon";
+    if (carbon) document.documentElement.dataset.bar = "carbon";
+    else delete document.documentElement.dataset.bar;
+    // Carbon glass is dark glass: white words, whatever is behind.
+    if (carbon) this.tone = "dark";
     // The accent colour the person picked recolours the bar (dots, glow, progress, buttons).
     const accent = State.settings.accent;
     if (accent) document.documentElement.style.setProperty("--teal", accent);
@@ -655,7 +660,7 @@ export class Island {
     document.documentElement.dataset.tone = this.tone;
     this.engine.glass = glass;
     // The hello is drawn, not styled: its words follow what is behind the glass too.
-    this.greeting.light = glass && !(this.bd && this.tone === "dark");
+    this.greeting.light = glass && !carbon && !(this.bd && this.tone === "dark");
     this.ambient.light = glass;
     this.dirty = true;
   }
@@ -663,24 +668,50 @@ export class Island {
   /** A paper plane: out from Bob to the computer's side, or in from it to Bob. */
   private paperPlane(out: boolean, dir: number) {
     if (this.quiet || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const plane = svg("M2 12L22 3l-7 19-3-8-10-2zM12 14l10-11", 22, { stroke: 1.6 });
-    plane.classList.add("plane");
-    this.islandEl.append(plane);
+    const NS = "http://www.w3.org/2000/svg";
+    const mk = <K extends keyof SVGElementTagNameMap>(tag: K, at: Record<string, string>) => {
+      const e = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(at)) e.setAttribute(k, v);
+      return e;
+    };
     const w = this.width.value, hh = Math.max(40, this.height.value);
     const bot = this.botCanvas.getBoundingClientRect(), isl = this.islandEl.getBoundingClientRect();
-    const bx = bot.width ? bot.left - isl.left + bot.width / 2 : w / 2, by = bot.height ? bot.top - isl.top + bot.height / 2 : hh / 2;
-    const ex = dir > 0 ? w + 30 : -30, ey = hh * 0.25;
-    const pts = out ? [[bx, by], [(bx + ex) / 2, ey - 26], [ex, ey]] : [[ex, ey], [(bx + ex) / 2, ey - 26], [bx, by]];
-    const flip = (out ? dir : -dir) < 0 ? -1 : 1;
+    const bx = bot.width ? bot.left - isl.left + bot.width / 2 : w / 2, by = bot.height ? bot.top - isl.top + bot.height * 0.35 : hh / 2;
+    const ex = dir > 0 ? w + 40 : -40, ey = hh * 0.3;
+    const [x0, y0, x1, y1] = out ? [bx, by, ex, ey] : [ex, ey, bx, by];
+    // A loop-free arc that rises over the bar and comes down at the end.
+    const d = `M${x0} ${y0} C${x0 + (x1 - x0) * 0.25} ${Math.min(y0, y1) - 46}, ${x0 + (x1 - x0) * 0.7} ${Math.min(y0, y1) - 30}, ${x1} ${y1}`;
+    // The dotted trail it leaves.
+    const layer = mk("svg", { class: "plane-trail", width: String(w), height: String(hh), viewBox: `0 0 ${w} ${hh}` });
+    const trail = mk("path", { d, pathLength: "100", "stroke-dasharray": "1.4 2.6" });
+    layer.append(trail);
+    // Folded paper: the wing in light, the fold in shade.
+    const plane = mk("svg", { class: "plane", width: "26", height: "26", viewBox: "0 0 24 24" });
+    plane.append(
+      mk("path", { d: "M1.5 11.2L22.5 3 11.6 13.2z", fill: "#ffffff" }),
+      mk("path", { d: "M11.6 13.2L22.5 3 14.6 21z", fill: "#e3e9f2" }),
+      mk("path", { d: "M11.6 13.2L14.6 21 9.6 17.4z", fill: "#b9c5d4" }),
+      mk("path", { d: "M11.6 13.2L22.5 3", stroke: "#9fb0c4", "stroke-width": "0.5", fill: "none" }),
+    );
+    plane.style.offsetPath = `path("${d}")`;
+    this.islandEl.append(layer, plane);
+    const ease = "cubic-bezier(0.5, 0, 0.35, 1)";
     const a = plane.animate(
-      pts.map(([px, py], i) => ({
-        transform: `translate(${px - 11}px, ${py - 11}px) scale(${flip}, 1) rotate(${i === 1 ? -8 : i === 0 ? -20 : 14}deg) scale(${i === (out ? 0 : 2) ? 0.4 : 1})`,
-        opacity: i === (out ? 2 : 0) ? 0 : 1,
-      })),
-      { duration: 1100, easing: "cubic-bezier(0.45, 0, 0.3, 1)" },
+      [
+        { offsetDistance: "0%", scale: out ? "0.3" : "1", opacity: out ? 0.4 : 0 },
+        { offsetDistance: "12%", scale: "1", opacity: 1, offset: 0.15 },
+        { offsetDistance: "88%", scale: "1", opacity: 1, offset: 0.85 },
+        { offsetDistance: "100%", scale: out ? "0.8" : "0.3", opacity: out ? 0 : 0.4 },
+      ],
+      { duration: 1300, easing: ease, fill: "forwards" },
+    );
+    trail.animate(
+      [{ strokeDashoffset: "100", opacity: 0.55 }, { strokeDashoffset: "0", opacity: 0.55, offset: 0.85 }, { strokeDashoffset: "0", opacity: 0 }],
+      { duration: 1700, easing: ease, fill: "forwards" },
     );
     a.onfinish = () => {
       plane.remove();
+      window.setTimeout(() => layer.remove(), 450);
       if (!out) this.engine.triggerEmote("happy");
     };
     if (out) this.engine.triggerEmote("wink");
@@ -1616,7 +1647,7 @@ export class Island {
     }
     if (!n) return;
     const lum = sum / n;
-    const tone = this.tone === "light" ? (lum < 0.5 ? "dark" : "light") : lum > 0.6 ? "light" : "dark";
+    const tone = State.settings.barColor === "carbon" ? "dark" : this.tone === "light" ? (lum < 0.5 ? "dark" : "light") : lum > 0.6 ? "light" : "dark";
     if (tone !== this.tone) {
       this.tone = tone;
       document.documentElement.dataset.tone = tone;

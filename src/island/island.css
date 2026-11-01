@@ -157,8 +157,44 @@ html.dev body { background: #2b2f38; }
 }
 #island:hover #island-clip::after { opacity: 1; }
 
+/* ── Carbon: a charcoal bar ─────────────────────────────────────────────── */
+:root[data-bar="carbon"][data-theme="dark"] #island {
+  background: linear-gradient(180deg, #35383d 0%, #2a2d31 55%, #24272b 100%);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.06), 0 14px 34px -16px rgba(0, 0, 0, 0.6);
+}
+:root[data-bar="carbon"][data-theme="glass"] {
+  color-scheme: dark;
+  --ink: #f5f6f8;
+  --dim: rgba(255, 255, 255, 0.66);
+  --dim-2: rgba(255, 255, 255, 0.45);
+  --red-text: #ffb3bc;
+  --glass-1: rgba(56, 59, 64, 0.9);
+  --glass-2: rgba(36, 39, 43, 0.86);
+}
+:root[data-bar="carbon"][data-theme="glass"] #island-clip::before {
+  background:
+    radial-gradient(120% 70% at 18% -20%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 60%),
+    radial-gradient(70% 55% at 85% 115%, rgba(150, 200, 255, 0.1), rgba(150, 200, 255, 0) 70%);
+}
+:root[data-bar="carbon"][data-theme="glass"] #island::after {
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.08) 40%, rgba(255, 255, 255, 0.08) 60%, rgba(255, 255, 255, 0.3));
+}
+:root[data-bar="carbon"][data-theme="glass"][data-liquid="on"] #island { background: rgba(40, 43, 48, 0.4); }
+:root[data-bar="carbon"][data-theme="glass"][data-liquid="on"] #glass::after { background: rgba(38, 41, 46, 0.6); }
+:root[data-bar="carbon"][data-theme="glass"] .icon-btn:hover,
+:root[data-bar="carbon"][data-theme="glass"] .icon-btn.on { background: rgba(255, 255, 255, 0.12); color: var(--ink); }
+:root[data-bar="carbon"][data-theme="glass"] .btn { background: rgba(255, 255, 255, 0.12); color: var(--ink); }
+:root[data-bar="carbon"][data-theme="glass"] .btn.primary { background: #fff; color: #15181c; }
+:root[data-bar="carbon"][data-theme="glass"] #compact-label { color: #e8eaee; }
+
 /* A file on its way. */
-.plane { position: absolute; left: 0; top: 0; color: var(--teal); pointer-events: none; z-index: 5; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35)); }
+.plane {
+  position: absolute; left: 0; top: 0; pointer-events: none; z-index: 5;
+  offset-rotate: auto 40deg; offset-anchor: 50% 50%;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.3));
+}
+.plane-trail { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 4; overflow: visible; }
+.plane-trail path { fill: none; stroke: var(--teal); stroke-width: 1.6; stroke-linecap: round; }
 
 /* Easter: an egg hidden in the bar. */
 .egg {

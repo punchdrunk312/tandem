@@ -26,6 +26,8 @@ export interface IslandSettings {
   theme: "glass" | "dark";
   /** Accent colour (hex), or "" for the default teal. Applies to both looks. */
   accent: string;
+  /** The bar's own colour: "" (the look's own) or "carbon". */
+  barColor: string;
   /** Bob's wardrobe pick (an id, or "none" for seasonal/plain). */
   outfit: string;
   /** Bob shows one tip a day about something CubeCursor can do. */
@@ -100,6 +102,7 @@ const DEFAULTS: IslandSettings = {
   seasons: true, moments: true, crossWhoosh: false, birthday: "", calm: false, weather: true, city: "",
   theme: "glass",
   accent: "",
+  barColor: "",
   outfit: "none",
   tips: true,
   focusMinutes: 25,

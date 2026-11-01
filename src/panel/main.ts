@@ -857,6 +857,7 @@ interface IslandOpts {
   weather: boolean; city: string;
   theme: "glass" | "dark";
   accent: string;
+  barColor: string;
   outfit: string;
   tips: boolean;
   accCards: boolean;
@@ -867,6 +868,7 @@ const ISLAND_DEFAULTS: IslandOpts = {
   weather: true, city: "",
   theme: "glass",
   accent: "",
+  barColor: "",
   outfit: "none",
   tips: true,
   accCards: true,
@@ -979,6 +981,12 @@ function renderTopBar() {
         h("h2", { class: "g-title" }, "Colour"),
         swatches,
         h("p", { class: "g-help" }, "The accent colour of the bar — dots, glow, progress and buttons. Works on both looks, and tints Bob too.")),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Bar colour"),
+        h("div", { class: "wardrobe", role: "radiogroup", "aria-label": "Bar colour" },
+          ...([["", "Standard"], ["carbon", "Carbon"]] as const).map(([id, label]) =>
+            h("button", { class: `wbtn${is.barColor === id ? " on" : ""}`, role: "radio", "aria-checked": String(is.barColor === id), onclick: () => set({ barColor: id }) }, label))),
+        h("p", { class: "g-help" }, "Carbon is a charcoal bar, on Liquid Glass and on Classic.")),
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Bob's wardrobe"),
         wardrobe,
