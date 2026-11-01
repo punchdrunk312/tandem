@@ -350,19 +350,29 @@ mod sys {
         Manager::RequestAsync().ok()?.get().ok()
     }
 
-    /// The player to show: the one Windows calls current, unless that is the bar itself
-    /// (playing a video), then the first other one.
+    /// The player to show and control: never the bar itself (playing a video). One that is
+    /// playing comes first (Windows' "current" one can be a paused app opened last), then
+    /// the current one, then any.
     fn session(m: &Manager) -> Option<Session> {
+        let own = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+            .unwrap_or_default();
         let ours = |s: &Session| {
             let id = s.SourceAppUserModelId().map(|h| h.to_string().to_lowercase()).unwrap_or_default();
-            id.contains("cubecursor") || id.contains("webview")
+            id.contains("cubecursor") || id.contains("webview") || (!own.is_empty() && id.contains(&own))
         };
-        if let Ok(s) = m.GetCurrentSession() {
-            if !ours(&s) {
-                return Some(s);
-            }
+        let playing = |s: &Session| {
+            s.GetPlaybackInfo()
+                .and_then(|i| i.PlaybackStatus())
+                .is_ok_and(|st| st == Status::Playing)
+        };
+        let all: Vec<Session> = m.GetSessions().ok()?.into_iter().filter(|s| !ours(s)).collect();
+        let current = m.GetCurrentSession().ok().filter(|s| !ours(s));
+        if let Some(c) = current.as_ref().filter(|c| playing(c)) {
+            return Some(c.clone());
         }
-        m.GetSessions().ok()?.into_iter().find(|s| !ours(s))
+        all.iter().find(|s| playing(s)).cloned().or(current).or_else(|| all.into_iter().next())
     }
 
     /// The browser window showing the YouTube video with this title, and whether it is minimised.
@@ -538,6 +548,8 @@ mod sys {
         let s = manager().as_ref().and_then(session).ok_or("Nothing is playing.")?;
         let op = match action {
             "play_pause" => s.TryTogglePlayPauseAsync(),
+            "pause" => s.TryPauseAsync(),
+            "play" => s.TryPlayAsync(),
             "next" => s.TrySkipNextAsync(),
             "prev" => s.TrySkipPreviousAsync(),
             seek if seek.starts_with("seek:") => {

@@ -995,6 +995,7 @@ export class Island {
   /** The video the person closed in the bar (it doesn't come back until another one). */
   private videoClosedFor = "";
   private videoLooking = "";
+  private videoPausedAt = 0;
 
   /** A YouTube video's browser was minimised while it played: it plays on in the bar.
    *  The browser is paused; brought back, it carries on from where the bar got to.
@@ -1004,6 +1005,11 @@ export class Island {
     if (v) {
       // The browser window is back (or the video is gone): it takes over again.
       if (!m || m.title !== v.title || !m.video_hidden) this.endVideo(!!m && m.title === v.title);
+      // Still playing in the minimised browser too (the first pause missed): pause it again.
+      else if (m.playing && performance.now() - this.videoPausedAt > 1500) {
+        this.videoPausedAt = performance.now();
+        void call("media_control", { action: "pause" }).catch(() => {});
+      }
       return !!State.video;
     }
     if (!m?.video_hidden || before?.video_hidden || !m.playing || !State.settings.videoPopup) return false;
@@ -1018,7 +1024,8 @@ export class Island {
         if (!id || !now || now.title !== title || !now.video_hidden) return;
         const startMs = now.playing ? mediaPosition() : at;
         // The browser pauses; the bar plays.
-        if (now.playing) void call("media_control", { action: "play_pause" }).catch(() => {});
+        this.videoPausedAt = performance.now();
+        void call("media_control", { action: "pause" }).catch(() => {});
         State.video = { id, title, startMs, nowMs: startMs };
         State.isPinned = true;
         this.autoly(() => this.alert("video"));
@@ -1035,7 +1042,7 @@ export class Island {
     State.video = null;
     void call("media_control", { action: `seek:${v.nowMs}` })
       .catch(() => {})
-      .then(() => { if (resume) void call("media_control", { action: "play_pause" }).catch(() => {}); });
+      .then(() => { if (resume) void call("media_control", { action: "play" }).catch(() => {}); });
     State.notify();
     if (State.view === "video") this.closeBar();
   }
