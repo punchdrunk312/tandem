@@ -244,6 +244,27 @@ html.dev body { background: #2b2f38; }
   from { opacity: 0; transform: translate(var(--dx, 0), var(--dy, 10px)) scale(0.96); filter: blur(4px); }
   to { opacity: 1; transform: none; filter: none; }
 }
+/* ── this computer's charger: the phone's slim pill ───────────────────────── */
+.charge { display: flex; align-items: center; justify-content: space-between; padding: 0 18px 0 16px; }
+.charge.on.enter .ch-left, .charge.on.enter .ch-pct { animation: ch-in 0.5s cubic-bezier(0.2, 1.2, 0.32, 1) 0.08s both; }
+.charge.on.enter .ch-pct { animation-delay: 0.14s; }
+@keyframes ch-in { from { opacity: 0; transform: scale(0.7); filter: blur(5px); } }
+.ch-left { display: flex; align-items: center; gap: 10px; transform-origin: left center; }
+.ch-pct { transform-origin: right center; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--ch, #34d399); }
+.ch-word { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.charge { --ch: #34d399; }
+.charge.k-unplug { --ch: var(--ink); }
+.charge.low { --ch: #ff8a5c; }
+.ch-batt {
+  position: relative; width: 30px; height: 15px; border-radius: 4.5px; padding: 2px;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ch) 45%, transparent);
+}
+.ch-batt::after { content: ""; position: absolute; right: -3.5px; top: 4.5px; width: 2px; height: 6px; border-radius: 0 1.5px 1.5px 0; background: color-mix(in srgb, var(--ch) 45%, transparent); }
+.ch-fill { display: block; height: 100%; width: 0; border-radius: 2.5px; background: var(--ch); transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.2s; }
+.ch-bolt { position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); color: #fff; filter: drop-shadow(0 0 1px #000); display: none; }
+.charge.k-plug .ch-bolt { display: block; animation: icon-pop 0.4s cubic-bezier(0.3, 0.7, 0.4, 1.5) 0.35s both; }
+.charge.k-plug .ch-fill { box-shadow: 0 0 8px color-mix(in srgb, var(--ch) 60%, transparent); }
+
 .m-vis { flex: 0 0 68px; height: 68px; display: grid; place-items: center; position: relative; }
 .m-vis::before {
   /* A soft halo in the computer's colour. */

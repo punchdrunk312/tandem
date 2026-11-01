@@ -16,7 +16,7 @@ import type { Snapshot } from "../types";
 import { h } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -74,6 +74,7 @@ export class Island {
   // The device moments, one at a time.
   private watcher = new MomentWatcher();
   private momentView!: ReturnType<typeof buildMoment>;
+  private chargeView!: ReturnType<typeof buildCharge>;
   private momentQueue: Moment[] = [];
   private momentTimer: number | null = null;
   // The season drifting behind the bar, and what Bob wears.
@@ -197,6 +198,8 @@ export class Island {
       jump: (id) => { fire("engage", { peerId: id }); this.closeBar(); },
     });
     this.views.set("moment", this.momentView);
+    this.chargeView = buildCharge();
+    this.views.set("charge", this.chargeView);
     this.views.set("devices", buildDevices({
       blip: () => Sound.play("blip"),
       jump: (id) => { fire("engage", { peerId: id }); this.closeBar(); },
@@ -541,20 +544,22 @@ export class Island {
       if (!(State.focus && !this.quiet && this.momentQueue.length)) return;
     }
     // Never take the bar away from someone using it.
-    if (State.mode === "expanded" && State.view !== "moment" && this.wasInIsland) {
+    if (State.mode === "expanded" && State.view !== "moment" && State.view !== "charge" && this.wasInIsland) {
       this.momentTimer = window.setTimeout(() => { this.momentTimer = null; this.nextMoment(); }, 2500);
       return;
     }
     const m = this.momentQueue.shift();
     if (!m) return;
     State.moment = m;
-    this.momentView.show(m);
-    this.autoly(() => this.alert("moment"));
+    // This computer's charger gets the phone's slim pill; everything else the card.
+    const view = m.id === "me" && isPlug(m) ? "charge" : "moment";
+    (view === "charge" ? this.chargeView : this.momentView).show(m);
+    this.autoly(() => this.alert(view));
     this.react(m);
-    const dur = m.kind === "low" && m.id !== "me" ? 8000 : m.kind === "plug" ? 4800 : 3800;
+    const dur = view === "charge" ? 2600 : m.kind === "low" && m.id !== "me" ? 8000 : m.kind === "plug" ? 4800 : 3800;
     const done = () => {
       this.momentTimer = null;
-      if (State.view === "moment") {
+      if (State.view === "moment" || State.view === "charge") {
         // Still being looked at: wait a little longer.
         if (this.wasInIsland) {
           this.momentTimer = window.setTimeout(done, 1500);
@@ -1372,9 +1377,9 @@ export class Island {
       this.height.curveTowards(h);
       this.radius.curveTowards(r);
     } else {
-      this.width.springTo(w);
-      this.height.springTo(h);
-      this.radius.springTo(r);
+      this.width.springTo(w, 0.46, 0.66);
+      this.height.springTo(h, 0.5, 0.7);
+      this.radius.springTo(r, 0.5, 0.8);
     }
     this.ensureRunning();
   }
@@ -1856,7 +1861,7 @@ export class Island {
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
 
     this.header.sync();
-    this.header.el.style.display = State.view === "moment" || State.view === "nowplaying" || State.view === "video" ? "none" : "";
+    this.header.el.style.display = State.view === "moment" || State.view === "charge" || State.view === "nowplaying" || State.view === "video" ? "none" : "";
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);

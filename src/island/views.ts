@@ -408,6 +408,33 @@ export function buildMoment(a: MomentActions): ViewHost & { show(m: import("./mo
   };
 }
 
+/** This computer's charger, the way a phone shows it: a battery on the left, the level on the right. */
+export function buildCharge(): ViewHost & { show(m: import("./moments").Moment): void } {
+  const fill = h("i", { class: "ch-fill" });
+  const bolt = svg(BOLT, 12);
+  bolt.classList.add("ch-bolt");
+  const batt = h("div", { class: "ch-batt" }, fill, bolt);
+  const word = h("span", { class: "ch-word" });
+  const pct = h("span", { class: "ch-pct" });
+  const el = h("div", { class: "view charge" }, h("div", { class: "ch-left" }, batt, word), pct);
+  return {
+    el,
+    sync() {},
+    show(m) {
+      const level = m.device?.battery ?? 0;
+      const low = level <= 20 && m.kind === "unplug";
+      el.className = `view charge${State.view === "charge" ? " on" : ""} k-${m.kind}${low ? " low" : ""}`;
+      void el.offsetWidth;
+      el.classList.add("enter");
+      word.textContent = m.kind === "plug" ? "Charging" : m.kind === "full" ? "Fully charged" : "On battery";
+      pct.textContent = `${level}%`;
+      fill.style.width = "0%";
+      // The level fills in once the pill has opened.
+      requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = `${Math.max(4, level)}%`)));
+    },
+  };
+}
+
 // ------------------------------------------------------------------ device cards
 
 export interface DeviceActions {
