@@ -10,7 +10,7 @@ interface P {
   r: number; rot: number; vr: number; life: number; age: number; hue: number;
 }
 
-const MAX: Record<Ambient, number> = { snow: 34, petals: 16, leaves: 12, sun: 14, confetti: 40, lights: 0, embers: 18, rain: 70, storm: 95, fog: 0 };
+const MAX: Record<Ambient, number> = { snow: 34, petals: 16, leaves: 12, sun: 14, confetti: 40, lights: 0, embers: 18, rain: 70, storm: 95, fog: 0, night: 0, fireworks: 0 };
 const LEAF = ["#d9822b", "#c2552a", "#e3a33a", "#9c4a1f"];
 const CONFETTI = ["#ff6b9a", "#ffd23f", "#2dd4bf", "#7c5cff", "#38bdf8", "#fb923c"];
 const BULBS = ["#ff5a5f", "#ffd23f", "#2dd4bf", "#38bdf8", "#a78bfa"];
@@ -27,6 +27,28 @@ export class AmbientLayer {
   private nextFlash = 4;
   /** Called on each lightning strike (Bob jumps). */
   onFlash: (() => void) | null = null;
+  /** How windy (0 … 1): everything drifts sideways. */
+  wind = 0;
+  /** Rings where raindrops land, and the puddles they make. */
+  private splashes: { x: number; age: number }[] = [];
+  private wet = 0;
+  /** Snow settling along the bottom edge (heights in px, one per 8 px). */
+  private pile: number[] = [];
+  /** Seconds of rainbow left (after the rain stops). */
+  private bow = 0;
+  /** A shooting star crossing, and when the next one comes. */
+  private shoot: { x: number; y: number; age: number } | null = null;
+  private nextShoot = 5;
+  /** Fireworks: rockets going up, then sparks. */
+  private rockets: { x: number; y: number; vy: number; top: number; hue: number }[] = [];
+  private sparks: { x: number; y: number; vx: number; vy: number; age: number; hue: number }[] = [];
+  /** A bat flapping across (Halloween). */
+  private bat: { x: number; y: number; dir: number } | null = null;
+
+  /** The rain has stopped: a rainbow for a minute. */
+  rainbow() {
+    this.bow = 60;
+  }
 
   /** A one-off shower (the year turning, a birthday). */
   celebrate() {
@@ -34,7 +56,7 @@ export class AmbientLayer {
   }
 
   get busy(): boolean {
-    return this.kind != null || this.burst > 0 || this.ps.length > 0 || this.flash > 0;
+    return this.kind != null || this.burst > 0 || this.ps.length > 0 || this.flash > 0 || this.bow > 0 || this.wet > 0 || this.sparks.length > 0 || this.pile.some((v) => v > 0.2);
   }
 
   step(dt: number, w: number, h: number) {
@@ -42,6 +64,51 @@ export class AmbientLayer {
     const kind = this.burst > 0 ? "confetti" : this.kind;
     this.burst = Math.max(0, this.burst - dt);
     this.flash = Math.max(0, this.flash - dt * 2.6);
+    this.bow = Math.max(0, this.bow - dt);
+    const raining = kind === "rain" || kind === "storm";
+    this.wet = Math.max(0, Math.min(1, this.wet + (raining ? dt / 20 : -dt / 60)));
+    for (const s of this.splashes) s.age += dt;
+    this.splashes = this.splashes.filter((s) => s.age < 0.45);
+    // Snow piles up while it snows (a little on each flake that lands), and melts after.
+    const cols = Math.ceil(w / 8) + 1;
+    if (this.pile.length !== cols) this.pile = Array.from({ length: cols }, (_, i) => this.pile[i] ?? 0);
+    if (kind !== "snow") this.pile = this.pile.map((v) => Math.max(0, v - dt * 0.4));
+    if (kind === "night") {
+      this.nextShoot -= dt;
+      if (this.nextShoot <= 0 && !this.shoot) {
+        this.shoot = { x: w * (0.3 + Math.random() * 0.6), y: 4 + Math.random() * h * 0.3, age: 0 };
+        this.nextShoot = 8 + Math.random() * 14;
+      }
+    }
+    if (this.shoot && (this.shoot.age += dt) > 0.9) this.shoot = null;
+    if (kind === "fireworks" && Math.random() < dt * 0.9 && this.rockets.length < 3) {
+      this.rockets.push({ x: w * (0.1 + Math.random() * 0.8), y: h + 4, vy: -(170 + Math.random() * 60), top: h * (0.15 + Math.random() * 0.35), hue: Math.random() * 360 });
+    }
+    for (const r of this.rockets) r.y += r.vy * dt;
+    for (const r of this.rockets.filter((r) => r.y <= r.top)) {
+      for (let i = 0; i < 28; i++) {
+        const a = (i / 28) * Math.PI * 2, sp = 50 + Math.random() * 40;
+        this.sparks.push({ x: r.x, y: r.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, hue: r.hue + Math.random() * 30 });
+      }
+    }
+    this.rockets = this.rockets.filter((r) => r.y > r.top);
+    for (const s of this.sparks) {
+      s.age += dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.vy += 60 * dt;
+      s.vx *= 1 - dt * 1.5;
+    }
+    this.sparks = this.sparks.filter((s) => s.age < 1.4);
+    if (kind === "embers" && !this.bat && Math.random() < dt / 12) {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      this.bat = { x: dir > 0 ? -20 : w + 20, y: h * (0.2 + Math.random() * 0.4), dir };
+    }
+    if (this.bat) {
+      this.bat.x += this.bat.dir * 90 * dt;
+      this.bat.y += Math.sin(this.t * 4) * 12 * dt;
+      if (this.bat.x < -30 || this.bat.x > w + 30) this.bat = null;
+    }
     if (kind === "storm") {
       this.nextFlash -= dt;
       if (this.nextFlash <= 0) {
@@ -58,8 +125,17 @@ export class AmbientLayer {
     }
     for (const p of this.ps) {
       p.age += dt;
-      p.x += p.vx * dt;
+      p.x += (p.vx + this.wind * (p.k === "rain" || p.k === "storm" ? 120 : 45)) * dt;
       p.y += p.vy * dt;
+      // A drop hitting the bottom splashes; a flake settles on the pile.
+      if ((p.k === "rain" || p.k === "storm") && p.y >= h - 3 && p.age < p.life) {
+        if (this.splashes.length < 24) this.splashes.push({ x: p.x, age: 0 });
+        p.age = p.life;
+      } else if (p.k === "snow" && p.y >= h - 2 - (this.pile[Math.floor(p.x / 8)] ?? 0) && p.age < p.life) {
+        const i = Math.floor(p.x / 8);
+        for (const j of [i - 1, i, i + 1]) if (this.pile[j] != null) this.pile[j] = Math.min(9, this.pile[j] + (j === i ? 0.9 : 0.45));
+        p.age = p.life;
+      }
       p.rot += p.vr * dt;
       if (kind === "leaves" || kind === "petals") p.vx += Math.sin(this.t * 1.3 + p.hue) * 6 * dt; // a little sway
     }
@@ -106,6 +182,8 @@ export class AmbientLayer {
       x.fillRect(0, 0, w, h);
     }
     if (kind === "lights") this.drawLights(x, w, h);
+    if (kind === "night") this.drawNight(x, w, h);
+    if (this.bow > 0) this.drawRainbow(x, w, h);
     if (kind === "fog") this.drawFog(x, w, h);
     if (kind === "storm" || kind === "rain") {
       // A low, grey sky.
@@ -115,6 +193,44 @@ export class AmbientLayer {
       x.fillStyle = g;
       x.fillRect(0, 0, w, h);
     }
+    // Puddles along the bottom while it's wet, and the rings of drops landing in them.
+    if (this.wet > 0) {
+      const c = this.light ? "70,110,160" : "170,200,240";
+      for (const [fx, fw] of [[0.18, 60], [0.52, 90], [0.83, 50]] as const) {
+        x.fillStyle = `rgba(${c},${0.12 * this.wet})`;
+        x.beginPath();
+        x.ellipse(w * fx, h - 2, fw * this.wet, 3, 0, 0, Math.PI * 2);
+        x.fill();
+      }
+      x.strokeStyle = `rgba(${c},0.5)`;
+      x.lineWidth = 1;
+      for (const s of this.splashes) {
+        const k = s.age / 0.45;
+        x.globalAlpha = 1 - k;
+        x.beginPath();
+        x.ellipse(s.x, h - 3, 2 + k * 8, 1 + k * 2, 0, 0, Math.PI * 2);
+        x.stroke();
+      }
+      x.globalAlpha = 1;
+    }
+    if (this.pile.some((v) => v > 0.2)) {
+      x.fillStyle = this.light ? "rgba(235,242,252,0.95)" : "rgba(245,250,255,0.9)";
+      x.beginPath();
+      x.moveTo(0, h);
+      this.pile.forEach((v, i) => x.lineTo(i * 8, h - v));
+      x.lineTo(w, h);
+      x.closePath();
+      x.fill();
+    }
+    for (const s of this.sparks) {
+      x.fillStyle = `hsla(${s.hue},95%,65%,${Math.max(0, 1 - s.age / 1.4)})`;
+      x.fillRect(s.x - 1, s.y - 1, 2, 2);
+    }
+    for (const r of this.rockets) {
+      x.fillStyle = `hsla(${r.hue},90%,75%,0.9)`;
+      x.fillRect(r.x - 1, r.y, 2, 6);
+    }
+    if (this.bat) this.drawBat(x, this.bat.x, this.bat.y, this.bat.dir);
     if (this.flash > 0) {
       x.fillStyle = `rgba(225,235,255,${0.32 * this.flash * this.flash})`;
       x.fillRect(0, 0, w, h);
@@ -181,6 +297,83 @@ export class AmbientLayer {
       }
       x.restore();
     }
+  }
+
+  /** Stars twinkling, the moon in today's phase, and a shooting star now and then. */
+  private drawNight(x: CanvasRenderingContext2D, w: number, h: number) {
+    for (let i = 0; i < 26; i++) {
+      // Fixed places (a cheap hash), each twinkling at its own pace.
+      const sx = ((i * 2654435761) % 1000) / 1000 * w;
+      const sy = ((i * 40503) % 1000) / 1000 * h * 0.85;
+      const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(this.t * (1 + (i % 5) * 0.4) + i));
+      x.fillStyle = this.light ? `rgba(80,90,130,${a})` : `rgba(255,255,240,${a})`;
+      x.fillRect(sx, sy, i % 4 === 0 ? 1.6 : 1, i % 4 === 0 ? 1.6 : 1);
+    }
+    // The moon: lit by today's phase (a 29.53-day cycle from a known new moon).
+    const phase = (((Date.now() - Date.UTC(2000, 0, 6, 18, 14)) / 864e5) % 29.53) / 29.53;
+    const mx = w - 46, my = 22, r = 9;
+    x.save();
+    x.fillStyle = this.light ? "rgba(250,240,200,0.9)" : "rgba(255,246,214,0.92)";
+    x.shadowColor = "rgba(255,240,200,0.6)";
+    x.shadowBlur = 10;
+    x.beginPath();
+    x.arc(mx, my, r, 0, Math.PI * 2);
+    x.fill();
+    x.shadowBlur = 0;
+    // The dark part: a disc slid across.
+    x.globalCompositeOperation = "destination-out";
+    const off = (phase < 0.5 ? 1 - phase * 4 : -(1 - (phase - 0.5) * 4)) * r * 2;
+    x.beginPath();
+    x.arc(mx + off, my, r, 0, Math.PI * 2);
+    x.fill();
+    x.restore();
+    if (this.shoot) {
+      const s = this.shoot, k = s.age / 0.9;
+      const hx = s.x - k * 140, hy = s.y + k * 50;
+      const g = x.createLinearGradient(hx, hy, hx + 40, hy - 14);
+      g.addColorStop(0, `rgba(255,255,255,${0.9 * (1 - k)})`);
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      x.strokeStyle = g;
+      x.lineWidth = 1.5;
+      x.beginPath();
+      x.moveTo(hx, hy);
+      x.lineTo(hx + 40, hy - 14);
+      x.stroke();
+    }
+  }
+
+  /** A soft rainbow arcing behind, fading in and out. */
+  private drawRainbow(x: CanvasRenderingContext2D, w: number, h: number) {
+    const a = Math.min(1, this.bow / 4, (60 - this.bow) / 3) * 0.22;
+    const cols = ["#ff5a5f", "#ff9f40", "#ffd23f", "#4ade80", "#38bdf8", "#818cf8", "#c084fc"];
+    x.save();
+    x.globalAlpha = a;
+    x.lineWidth = 4;
+    cols.forEach((c, i) => {
+      x.strokeStyle = c;
+      x.beginPath();
+      x.arc(w * 0.68, h + 30, 150 - i * 4, Math.PI * 1.05, Math.PI * 1.95);
+      x.stroke();
+    });
+    x.restore();
+  }
+
+  private drawBat(x: CanvasRenderingContext2D, bx: number, by: number, dir: number) {
+    const f = Math.sin(this.t * 18) * 5;
+    x.save();
+    x.translate(bx, by);
+    x.scale(dir, 1);
+    x.fillStyle = this.light ? "rgba(40,30,50,0.75)" : "rgba(20,12,28,0.9)";
+    x.beginPath();
+    x.moveTo(0, 0);
+    x.quadraticCurveTo(-6, -4 - f, -12, -2 - f);
+    x.quadraticCurveTo(-8, 0, -9, 3);
+    x.quadraticCurveTo(-4, 1, 0, 3);
+    x.quadraticCurveTo(4, 1, 9, 3);
+    x.quadraticCurveTo(8, 0, 12, -2 - f);
+    x.quadraticCurveTo(6, -4 - f, 0, 0);
+    x.fill();
+    x.restore();
   }
 
   /** Fog: soft bands drifting slowly across. */

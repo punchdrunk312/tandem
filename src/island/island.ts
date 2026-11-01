@@ -13,7 +13,7 @@ import { Sound } from "../core/sound";
 import { Bob } from "../bob/bob";
 import { Greeting } from "../bob/hello";
 import type { Snapshot } from "../types";
-import { h } from "./dom";
+import { h, svg } from "./dom";
 import { IslandStateMachine } from "./fsm";
 import { State } from "./state";
 import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
@@ -458,6 +458,9 @@ export class Island {
       for (const t of s.transfers) {
         const before = prev.transfers.find((p) => p.id === t.id && p.direction === t.direction);
         if (!before) {
+          // A paper plane flies to (or from) the computer's side.
+          const side = s.paired.find((p) => p.name === t.peer || p.id === t.peer)?.side ?? "Right";
+          this.paperPlane(t.direction === "out", /left/i.test(side) ? -1 : 1);
           // A new transfer brings the pill back, even if it was closed by hand.
           this.pillSuppressed = false;
           this.reveal();
@@ -468,7 +471,7 @@ export class Island {
           if (!s.transfers.some((x) => x.state === "active")) {
             this.flashState("finished", 2200);
             this.ping("finish");
-            this.engine.triggerEmote("proud");
+            this.engine.gesture("thumbs");
           }
           this.reveal();
         } else if (before.state !== "error" && t.state === "error") {
@@ -655,6 +658,63 @@ export class Island {
     this.dirty = true;
   }
 
+  /** A paper plane: out from Bob to the computer's side, or in from it to Bob. */
+  private paperPlane(out: boolean, dir: number) {
+    if (this.quiet || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const plane = svg("M2 12L22 3l-7 19-3-8-10-2zM12 14l10-11", 22, { stroke: 1.6 });
+    plane.classList.add("plane");
+    this.islandEl.append(plane);
+    const w = this.width.value, hh = Math.max(40, this.height.value);
+    const bot = this.botCanvas.getBoundingClientRect(), isl = this.islandEl.getBoundingClientRect();
+    const bx = bot.width ? bot.left - isl.left + bot.width / 2 : w / 2, by = bot.height ? bot.top - isl.top + bot.height / 2 : hh / 2;
+    const ex = dir > 0 ? w + 30 : -30, ey = hh * 0.25;
+    const pts = out ? [[bx, by], [(bx + ex) / 2, ey - 26], [ex, ey]] : [[ex, ey], [(bx + ex) / 2, ey - 26], [bx, by]];
+    const flip = (out ? dir : -dir) < 0 ? -1 : 1;
+    const a = plane.animate(
+      pts.map(([px, py], i) => ({
+        transform: `translate(${px - 11}px, ${py - 11}px) scale(${flip}, 1) rotate(${i === 1 ? -8 : i === 0 ? -20 : 14}deg) scale(${i === (out ? 0 : 2) ? 0.4 : 1})`,
+        opacity: i === (out ? 2 : 0) ? 0 : 1,
+      })),
+      { duration: 1100, easing: "cubic-bezier(0.45, 0, 0.3, 1)" },
+    );
+    a.onfinish = () => {
+      plane.remove();
+      if (!out) this.engine.triggerEmote("happy");
+    };
+    if (out) this.engine.triggerEmote("wink");
+  }
+
+  /** Easter: an egg hidden somewhere in the bar. Found, it hatches confetti. */
+  private egg: HTMLElement | null = null;
+  private hideEgg() {
+    const on = this.look?.special === "easter";
+    if (!on) {
+      this.egg?.remove();
+      this.egg = null;
+      return;
+    }
+    if (this.egg) return;
+    const egg = h("button", { class: "egg", title: "An egg!", "aria-label": "Easter egg" });
+    egg.style.left = `${30 + Math.random() * 560}px`;
+    egg.style.top = `${60 + Math.random() * 70}px`;
+    egg.onclick = (e) => {
+      e.stopPropagation();
+      egg.classList.add("found");
+      Sound.play("approve");
+      this.ambient.celebrate();
+      this.engine.triggerEmote("love");
+      this.ensureRunning();
+      window.setTimeout(() => {
+        egg.remove();
+        if (this.egg === egg) this.egg = null;
+        // Another one, somewhere else, a bit later.
+        window.setTimeout(() => this.hideEgg(), 90_000);
+      }, 600);
+    };
+    this.egg = egg;
+    this.contentEl.append(egg);
+  }
+
   /** The weather where you are (null until it is known, or when it's turned off). */
   private weather: { city: string; temp: number; sky: Sky; day: boolean } | null = null;
 
@@ -673,9 +733,16 @@ export class Island {
     const place = State.settings.city.trim() || timeZone().split("/").pop()?.replace(/_/g, " ") || "";
     if (!place) return;
     try {
-      const w = (await call("weather", { place })) as { city: string; temp_c: number; code: number; is_day: boolean };
+      const w = (await call("weather", { place })) as { city: string; temp_c: number; code: number; is_day: boolean; wind_kmh: number };
       const before = this.weather;
       this.weather = { city: w.city, temp: Math.round(w.temp_c), sky: skyOf(w.code), day: w.is_day };
+      // Windy from about 20 km/h, a gale at 60.
+      const wind = Math.max(0, Math.min(1, (w.wind_kmh - 20) / 40));
+      this.ambient.wind = wind;
+      this.engine.wind = wind;
+      this.engine.snowing = this.weather.sky === "snow";
+      const wet = (s?: Sky) => s === "rain" || s === "drizzle" || s === "storm";
+      if (before && wet(before.sky) && !wet(this.weather.sky) && this.weather.day) this.ambient.rainbow();
       this.refreshLook();
       if (!before || before.sky !== this.weather.sky) this.weatherNews(!before);
     } catch (e) {
@@ -735,6 +802,7 @@ export class Island {
     this.engine.setAccent(State.settings.accent || null);
     this.engine.setWardrobe(State.settings.outfit);
     this.ambient.kind = look && !State.settings.calm ? look.ambient : null;
+    this.hideEgg();
     State.greeting = look?.greeting ?? null;
     if (changed) {
       // A special day: say so once, the first time Bob is seen that day.
@@ -786,6 +854,13 @@ export class Island {
     // Opened by you: a soft open and close. Opened by itself (a card, a note): silent,
     // the card's own sound (if any) is enough.
     if (mode === "expanded") {
+      // Like a drop of jelly: a squash, a stretch, and it settles.
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        this.islandEl.animate(
+          [{ scale: "1 1" }, { scale: "1.035 0.93", offset: 0.28 }, { scale: "0.985 1.03", offset: 0.6 }, { scale: "1.005 0.995", offset: 0.82 }, { scale: "1 1" }],
+          { duration: 620, easing: "ease-out" },
+        );
+      }
       this.autoOpened = this.auto;
       if (!this.auto) Sound.play("open");
     }
@@ -1000,7 +1075,7 @@ export class Island {
 
   private focusDone() {
     Sound.play("finish");
-    this.engine.triggerEmote("proud");
+    this.engine.gesture("trophy", 4);
     this.ambient.celebrate();
     this.ensureRunning();
     this.showNote("Focus done! Nice work. Time for a short break.", 5200);
@@ -1585,6 +1660,12 @@ export class Island {
   // ── Input ───────────────────────────────────────────────────────────────────
 
   private wireInput() {
+    // A soft light follows the cursor across the glass.
+    this.islandEl.addEventListener("mousemove", (e) => {
+      const r = this.islandEl.getBoundingClientRect();
+      this.islandEl.style.setProperty("--mx", `${e.clientX - r.left}px`);
+      this.islandEl.style.setProperty("--my", `${e.clientY - r.top}px`);
+    });
     this.islandEl.addEventListener("mousedown", (e) => {
       Sound.resume();
       State.lastActivity = performance.now();
@@ -1755,6 +1836,8 @@ export class Island {
     this.botSize.step(dt);
 
     const ambientOn = State.mode === "expanded" && State.view !== "greeting" && this.ambient.busy;
+    this.engine.music = !!State.media?.playing && !this.quiet;
+    this.engine.headband = !!State.focus;
     if (ambientOn || this.ambientPx.w) this.drawAmbient(dt, ambientOn);
 
     const greetingActive = State.mode === "expanded" && State.view === "greeting";

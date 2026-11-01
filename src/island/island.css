@@ -137,15 +137,41 @@ html.dev body { background: #2b2f38; }
   inset: 0;
   opacity: 0;
   transform: scale(0.97) translateY(4px);
+  filter: blur(6px);
   pointer-events: none;
-  transition: opacity 0.16s ease-in, transform 0.16s ease-in;
+  transition: opacity 0.16s ease-in, transform 0.16s ease-in, filter 0.16s ease-in;
 }
 .view.on {
   opacity: 1;
   transform: none;
   pointer-events: auto;
-  transition: opacity 0.22s ease-out 0.06s, transform 0.36s cubic-bezier(0.2, 0.9, 0.25, 1.05) 0.04s;
+  filter: none;
+  transition: opacity 0.22s ease-out 0.06s, transform 0.36s cubic-bezier(0.2, 0.9, 0.25, 1.05) 0.04s, filter 0.3s ease-out 0.04s;
 }
+
+/* The light under the cursor. */
+#island-clip::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(160px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.09), transparent 70%);
+  transition: opacity 0.3s;
+}
+#island:hover #island-clip::after { opacity: 1; }
+
+/* A file on its way. */
+.plane { position: absolute; left: 0; top: 0; color: var(--teal); pointer-events: none; z-index: 5; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35)); }
+
+/* Easter: an egg hidden in the bar. */
+.egg {
+  position: absolute; width: 14px; height: 18px; border: 0; padding: 0; cursor: pointer; z-index: 4;
+  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  background: repeating-linear-gradient(170deg, #ffd0e6 0 4px, #c8f2ff 4px 8px, #fff1b8 8px 12px);
+  opacity: 0.55; transition: opacity 0.2s, transform 0.2s;
+  animation: egg-wobble 3s ease-in-out infinite;
+}
+.egg:hover { opacity: 1; transform: scale(1.2); }
+.egg.found { animation: egg-hatch 0.6s cubic-bezier(0.3, 0.7, 0.4, 1.4) forwards; }
+@keyframes egg-wobble { 0%, 86%, 100% { rotate: 0deg; } 90% { rotate: -12deg; } 95% { rotate: 10deg; } }
+@keyframes egg-hatch { 40% { transform: scale(1.6); opacity: 1; } to { transform: scale(0); opacity: 0; } }
 
 /* Buttons give a little under the finger; a swapped icon (play ↔ pause) pops in. */
 .icon-btn:active, .btn:active { transform: scale(0.9); transition-duration: 0.06s; }
@@ -609,7 +635,8 @@ html.dev body { background: #2b2f38; }
 .m-bar { margin-top: 10px; }
 .m-btn.m-jump { width: 30px; }
 @media (prefers-reduced-motion: reduce) {
-  .view, .view.on { transform: none; transition: opacity 0.15s; }
+  .view, .view.on { transform: none; filter: none; transition: opacity 0.15s; }
+  .egg { animation: none; }
   .np-btn svg, .m-btn svg, .video.on .vd-frame { animation: none; }
   .icon-btn:active, .btn:active { transform: none; }
 }

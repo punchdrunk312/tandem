@@ -4,7 +4,7 @@
 export type Season = "winter" | "spring" | "summer" | "autumn";
 export type Special = "christmas" | "newyear" | "halloween" | "easter" | "birthday" | "anniversary";
 export type Hat = "none" | "beanie" | "santa" | "party" | "pumpkin";
-export type Ambient = "snow" | "petals" | "leaves" | "sun" | "confetti" | "lights" | "embers" | "rain" | "storm" | "fog";
+export type Ambient = "snow" | "petals" | "leaves" | "sun" | "confetti" | "lights" | "embers" | "rain" | "storm" | "fog" | "night" | "fireworks";
 /** The sky right now, from the weather code. */
 export type Sky = "clear" | "clouds" | "fog" | "drizzle" | "rain" | "snow" | "storm";
 export type TimeOfDay = "morning" | "day" | "evening" | "night";
@@ -140,7 +140,7 @@ export function lookFor(d: Date, tz: string, me: Personal = {}): Look {
       Object.assign(look, { hat: "santa", scarf: true, glasses: false, ambient: "lights", greeting: "Merry Christmas!" });
       break;
     case "newyear":
-      Object.assign(look, { hat: "party", glasses: false, ambient: "confetti", greeting: "Happy New Year!" });
+      Object.assign(look, { hat: "party", glasses: false, ambient: "fireworks", greeting: "Happy New Year!" });
       break;
     case "halloween":
       Object.assign(look, { hat: "pumpkin", scarf: false, glasses: false, ambient: "embers", greeting: "Happy Halloween!" });
@@ -185,6 +185,8 @@ export function withWeather(look: Look, sky: Sky, tempC: number, isDay: boolean)
   else if (sky === "fog") Object.assign(l, { glasses: false, ambient: "fog" });
   else if (sky === "clear" && isDay && tempC >= 24) Object.assign(l, { glasses: true, hat: "none", scarf: false, ambient: "sun" });
   else if (sky === "clouds") Object.assign(l, { glasses: false, ambient: l.ambient === "sun" ? null : l.ambient });
+  // A clear (or lightly cloudy) night: stars, the moon, a shooting star now and then.
+  if (!isDay && (sky === "clear" || sky === "clouds")) Object.assign(l, { glasses: false, ambient: "night" });
   if (!wet && sky !== "snow" && tempC <= 4) Object.assign(l, { scarf: true, hat: "beanie", glasses: false });
   return l;
 }

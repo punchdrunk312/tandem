@@ -257,6 +257,30 @@ export class Bob {
   /** Fired when three slaps land inside 1.7 s (→ dizzy + confused view). */
   onDizzy: (() => void) | null = null;
 
+  /** A song is playing: headphones on, nodding to the beat, notes floating up. */
+  music = false;
+  /** A focus is running: a sweatband on his forehead. */
+  headband = false;
+  /** How windy it is outside (0 calm … 1 gale): he and his things lean with it. */
+  wind = 0;
+  /** It is snowing: snow settles on his head (0 … 1), and he shakes it off. */
+  snowing = false;
+  snow = 0;
+  /** A gesture held for a moment: a facepalm, a thumbs up, a trophy over his head. */
+  gestureKind: "facepalm" | "thumbs" | "trophy" | null = null;
+  private gestureAt = 0;
+  private gestureFor = 0;
+  private nextNote = 0;
+
+  /** Holds up a gesture for a few seconds. */
+  gesture(kind: "facepalm" | "thumbs" | "trophy", secs = 2.4) {
+    this.gestureKind = kind;
+    this.gestureAt = now();
+    this.gestureFor = secs;
+    if (kind === "facepalm") this.triggerEmote("annoyed");
+    else this.triggerEmote(kind === "trophy" ? "proud" : "happy");
+  }
+
   /** What he wears (the season, a special day), or null for plain Bob. */
   look: Look | null = null;
   /** A user-chosen outfit (the wardrobe), drawn over any seasonal look. */
@@ -583,6 +607,20 @@ export class Bob {
   update(dt: number) {
     const n = now();
     const nowMs = performance.now();
+    if (this.music && n > this.nextNote) {
+      this.emit("note", 1);
+      this.nextNote = n + 0.9 + Math.random() * 0.8;
+    }
+    if (this.gestureKind && n - this.gestureAt > this.gestureFor) this.gestureKind = null;
+    if (this.snowing) {
+      this.snow = Math.min(1, this.snow + dt / 40);
+      if (this.snow >= 1) {
+        // Too much: a shake, and it's gone.
+        this.snow = 0;
+        this.anim("ox", [[0.05, 50, Ease.out], [-0.05, 70, Ease.inOut], [0.04, 70, Ease.inOut], [-0.03, 70, Ease.inOut], [0, 90, Ease.out]]);
+        this.emit("spark", 4);
+      }
+    } else this.snow = Math.max(0, this.snow - dt / 8);
 
     for (const tw of [...this.tweens.values()]) {
       const k = tw.keys[tw.index];
@@ -882,7 +920,10 @@ export class Bob {
     x.save();
     // He leans a little towards whatever he is looking at.
     x.translate(cx + this.yaw * R * 0.05, cy - this.pitch * R * 0.03);
-    const lean = this.tilt + this.yaw * 0.05;
+    const tt = now();
+    // Nodding to the beat (about 112 bpm), and leaning into the wind.
+    if (this.music) x.translate(0, -Math.abs(Math.sin(tt * Math.PI * 1.87)) * R * 0.07);
+    const lean = this.tilt + this.yaw * 0.05 + (this.music ? Math.sin(tt * Math.PI * 0.93) * 0.05 : 0) + this.wind * (0.05 + Math.sin(tt * 2.3) * 0.03);
     if (lean !== 0) x.rotate(lean);
     x.scale(this.sx, this.sy);
 
@@ -962,6 +1003,7 @@ export class Bob {
     if (m > 0.05) this.drawSlot(x, body, R, hh);
     else this.drawMouth(x, R, hh);
     if ((this.look || this.wardrobe) && m < 0.5 && R >= 10) this.drawOutfit(x, R, hw, hh, 1 - m * 2);
+    if (m < 0.5 && R >= 10) this.drawExtras(x, R, hw, hh, 1 - m * 2);
 
     x.restore();
 
@@ -1571,13 +1613,142 @@ export class Bob {
     x.restore();
   }
 
+  /** Headphones, the sweatband, snow on his head, and the gesture he is making. */
+  private drawExtras(x: CanvasRenderingContext2D, R: number, hw: number, hh: number, a: number) {
+    x.save();
+    x.globalAlpha *= a;
+    if (this.snow > 0.02) {
+      // A white cap that grows, lumpy on top.
+      const s = this.snow, top = -hh - R * 0.02;
+      const cap = new Path2D();
+      cap.moveTo(-hw * 0.9, top + R * 0.08);
+      for (let i = 0; i <= 6; i++) {
+        const px = -hw * 0.9 + (hw * 1.8 * i) / 6;
+        cap.quadraticCurveTo(px - hw * 0.15, top - R * 0.32 * s * (0.7 + 0.3 * Math.sin(i * 2.1)), px, top - R * 0.12 * s);
+      }
+      cap.lineTo(hw * 0.9, top + R * 0.08);
+      cap.closePath();
+      x.fillStyle = "#f4f9ff";
+      x.shadowColor = "rgba(160,190,230,0.6)";
+      x.shadowBlur = R * 0.08;
+      x.fill(cap);
+      x.shadowBlur = 0;
+    }
+    if (this.headband) {
+      const y = -hh * 0.66, bh = R * 0.2;
+      const band = new Path2D();
+      pathRoundRect(band, -hw * 1.02, y, hw * 2.04, bh, bh * 0.4);
+      x.fillStyle = "#f4505e";
+      x.fill(band);
+      x.fillStyle = "rgba(255,255,255,0.85)";
+      x.fillRect(-hw * 1.02, y + bh * 0.42, hw * 2.04, bh * 0.16);
+      // The knot's tails, flapping.
+      const f = Math.sin(now() * 7) * R * 0.05;
+      x.fillStyle = "#d93a4a";
+      for (const [dy, len] of [[0, 0.42], [bh * 0.5, 0.34]] as const) {
+        x.beginPath();
+        x.moveTo(hw * 0.98, y + dy);
+        x.lineTo(hw * 0.98 + R * len, y + dy + R * 0.12 + f);
+        x.lineTo(hw * 0.98 + R * len * 0.9, y + dy + R * 0.24 + f);
+        x.lineTo(hw * 0.98, y + dy + bh * 0.6);
+        x.closePath();
+        x.fill();
+      }
+    }
+    if (this.music) {
+      // Headphones: the band over his head, a cup on each side with a glowing ring.
+      x.strokeStyle = "#1d2430";
+      x.lineWidth = Math.max(2, R * 0.11);
+      x.lineCap = "round";
+      x.beginPath();
+      x.ellipse(0, -hh * 0.05, hw * 1.04, hh * 1.12, 0, Math.PI * 1.06, Math.PI * 1.94);
+      x.stroke();
+      for (const sd of [-1, 1]) {
+        const cup = new Path2D();
+        pathRoundRect(cup, sd * hw * 1.04 - R * 0.16, -hh * 0.28, R * 0.32, R * 0.56, R * 0.14);
+        x.fillStyle = "#232b38";
+        x.fill(cup);
+        x.strokeStyle = rgba(this.col, 0.9);
+        x.lineWidth = Math.max(1, R * 0.04);
+        x.stroke(cup);
+      }
+    }
+    const g = this.gestureKind;
+    if (g) {
+      // Pops in, and settles.
+      const p = Math.min(1, (now() - this.gestureAt) / 0.25);
+      const out = Math.max(0, Math.min(1, (this.gestureAt + this.gestureFor - now()) / 0.25));
+      const k = Math.min(p * (1.15 - 0.15 * p), out);
+      x.save();
+      x.fillStyle = rgba(AMBER);
+      x.strokeStyle = rgba(AMBER_DEEP);
+      x.lineWidth = Math.max(1, R * 0.04);
+      if (g === "facepalm") {
+        // A hand over his eyes, sliding down a little.
+        x.translate(hw * 0.12, -hh * 0.02 + (now() - this.gestureAt) * R * 0.04);
+        x.scale(k, k);
+        const palm = new Path2D();
+        pathRoundRect(palm, -R * 0.42, -R * 0.2, R * 0.7, R * 0.42, R * 0.2);
+        x.fill(palm);
+        x.stroke(palm);
+        for (let i = 0; i < 3; i++) {
+          x.beginPath();
+          x.moveTo(-R * 0.24 + i * R * 0.17, -R * 0.2);
+          x.lineTo(-R * 0.24 + i * R * 0.17, R * 0.05);
+          x.stroke();
+        }
+      } else if (g === "thumbs") {
+        x.translate(hw * 1.3, hh * 0.05 - (1 - k) * R * 0.3);
+        x.scale(k, k);
+        const fist = new Path2D();
+        pathRoundRect(fist, -R * 0.2, -R * 0.08, R * 0.4, R * 0.36, R * 0.12);
+        x.fill(fist);
+        x.stroke(fist);
+        const thumb = new Path2D();
+        pathRoundRect(thumb, -R * 0.15, -R * 0.42, R * 0.15, R * 0.38, R * 0.075);
+        x.fill(thumb);
+        x.stroke(thumb);
+      } else {
+        // A gold cup held high, with a glint.
+        x.translate(0, -hh - R * 0.75 - Math.sin(now() * 5) * R * 0.04);
+        x.scale(k, k);
+        const cup = new Path2D();
+        cup.moveTo(-R * 0.32, -R * 0.3);
+        cup.lineTo(R * 0.32, -R * 0.3);
+        cup.quadraticCurveTo(R * 0.3, R * 0.12, 0, R * 0.16);
+        cup.quadraticCurveTo(-R * 0.3, R * 0.12, -R * 0.32, -R * 0.3);
+        const gg = x.createLinearGradient(-R * 0.3, 0, R * 0.3, 0);
+        gg.addColorStop(0, "#ffe27a");
+        gg.addColorStop(0.5, "#ffc93a");
+        gg.addColorStop(1, "#d99a12");
+        x.fillStyle = gg;
+        x.fill(cup);
+        x.strokeStyle = "#b07a08";
+        x.stroke(cup);
+        x.beginPath();
+        x.arc(-R * 0.34, -R * 0.12, R * 0.12, Math.PI * 0.5, Math.PI * 1.5);
+        x.arc(R * 0.34, -R * 0.12, R * 0.12, Math.PI * 1.5, Math.PI * 0.5);
+        x.stroke();
+        x.fillStyle = gg;
+        x.fillRect(-R * 0.05, R * 0.14, R * 0.1, R * 0.16);
+        x.fillRect(-R * 0.2, R * 0.28, R * 0.4, R * 0.08);
+        x.fillStyle = "rgba(255,255,255,0.8)";
+        x.beginPath();
+        x.ellipse(-R * 0.14, -R * 0.14, R * 0.04, R * 0.1, 0.3, 0, Math.PI * 2);
+        x.fill();
+      }
+      x.restore();
+    }
+    x.restore();
+  }
+
   /** Raining where you are: Bob holds an umbrella, swaying a little, drops running off it. */
   private drawUmbrella(x: CanvasRenderingContext2D, R: number, hw: number, hh: number) {
     const t = now();
     x.save();
     // Held in his right hand, the canopy over his head, leaning into the wind.
     x.translate(hw * 0.78, hh * 0.35);
-    x.rotate(-0.22 + Math.sin(t * 1.4) * 0.05);
+    x.rotate(-0.22 + Math.sin(t * 1.4) * 0.05 - this.wind * (0.18 + Math.sin(t * 3.1) * 0.08));
     const stem = R * 2.15;
     x.strokeStyle = "#3a2a20";
     x.lineWidth = Math.max(1.2, R * 0.055);
@@ -1663,7 +1834,7 @@ export class Bob {
     }
     x.restore();
     // The tail hanging down on his right, swaying a little.
-    const sw = Math.sin(now() * 1.6) * R * 0.03;
+    const sw = Math.sin(now() * (1.6 + this.wind * 4)) * R * 0.03 * (1 + this.wind * 2) + this.wind * R * 0.18;
     const tail = new Path2D();
     tail.moveTo(hw * 0.45, top + h * 0.7);
     tail.lineTo(hw * 0.78, top + h * 0.75);
