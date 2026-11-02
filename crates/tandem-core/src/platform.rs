@@ -154,6 +154,10 @@ pub trait Platform: Send + Sync + 'static {
     fn drop_dir_at(&self, _x: i32, _y: i32) -> Option<std::path::PathBuf> {
         None
     }
+    /// Hands these files to the program under the cursor, as a drag and drop would.
+    fn drop_into_app(&self, _paths: Vec<std::path::PathBuf>) -> bool {
+        false
+    }
     /// The files picked up by the drag in progress (read when its button went down), once.
     fn take_drag_files(&self) -> Option<Vec<std::path::PathBuf>> {
         None

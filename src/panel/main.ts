@@ -1004,7 +1004,7 @@ const LOOKS = [
 ] as const;
 
 // Spotify: the person's own Spotify app (Client ID), signed in with PKCE.
-interface SpotifyStatus { connected: boolean; clientId: string; redirect: string }
+interface SpotifyStatus { connected: boolean; clientId: string; redirect: string; builtin?: boolean }
 let spot: SpotifyStatus | null = null;
 let spotMsg = "";
 const spotId = h("input", { type: "text", class: "name-in", placeholder: "Client ID", maxLength: 64, "aria-label": "Spotify Client ID" }) as HTMLInputElement;
@@ -1018,21 +1018,23 @@ function spotifyGroup(): HTMLElement {
     h("li", {}, "Open developer.spotify.com/dashboard and sign in, then Create app (any name and description)."),
     h("li", {}, `Redirect URI: ${s?.redirect ?? "http://127.0.0.1:47821/spotify/callback"} — and tick Web API.`),
     h("li", {}, "Save, copy the Client ID from the app's page, paste it here and press Connect."));
+  const connectBtn = (label: string) => h("button", { class: "primary", onclick: async () => {
+    try { await call("spotify_connect", { clientId: s?.builtin ? null : spotId.value }); spotMsg = "Spotify opened in your browser: press Agree there."; } catch (e) { spotMsg = String(e); }
+    renderTopBar();
+  } }, label);
   return h("section", { class: "group" },
     h("h2", { class: "g-title" }, "Spotify"),
     h("div", { class: "card list" },
-      s?.connected
+      s?.builtin && !s.connected
+        ? setting("Connect Spotify", "Like songs, add them to playlists and see what's next, from the bar. Spotify opens in your browser: press Agree.", connectBtn("Connect Spotify"))
+        : s?.connected
         ? setting("Spotify is connected", "Like songs, add them to playlists and see what's next, from the bar.",
             h("button", { class: "danger", onclick: async () => { await call("spotify_disconnect"); spotMsg = ""; spotRefresh(); } }, "Disconnect"))
         : h("div", { class: "set block" },
             h("div", { class: "set-text" }, h("div", { class: "set-title" }, "Connect Spotify"),
               h("div", { class: "set-hint" }, "For the like button, add to playlist and Up next. Spotify asks for your own free developer app (about two minutes):")),
             steps,
-            h("div", { class: "row" }, spotId,
-              h("button", { class: "primary", onclick: async () => {
-                try { await call("spotify_connect", { clientId: spotId.value }); spotMsg = "Spotify opened in your browser: press Agree there."; } catch (e) { spotMsg = String(e); }
-                renderTopBar();
-              } }, "Connect"),
+            h("div", { class: "row" }, spotId, connectBtn("Connect"),
               h("button", { onclick: () => void call("spotify_connect_page").catch(() => { window.open("https://developer.spotify.com/dashboard", "_blank"); }) }, "Open dashboard"))),
       spotMsg ? h("p", { class: "g-help" }, spotMsg) : null));
 }

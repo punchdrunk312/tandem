@@ -164,8 +164,10 @@ mod imp {
         stop: Arc<AtomicBool>,
     }
 
-    const PREBUFFER: usize = (RATE as usize * CHANNELS as usize) * 60 / 1000;
-    const MAX_BUFFER: usize = (RATE as usize * CHANNELS as usize) * 160 / 1000;
+    // Wi-Fi and phone hotspots stall for a moment now and then: keep enough in hand
+    // to ride that out instead of cutting.
+    const PREBUFFER: usize = (RATE as usize * CHANNELS as usize) * 120 / 1000;
+    const MAX_BUFFER: usize = (RATE as usize * CHANNELS as usize) * 400 / 1000;
 
     impl Player {
         pub fn start() -> Result<Player, String> {

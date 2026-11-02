@@ -165,6 +165,13 @@ async fn pair_cross_clipboard_and_files() {
         a.plat.clipboard_get() == Some(ClipContent::Image(png.clone()))
     })
     .await;
+    // A big one goes across in pieces and comes out whole.
+    let big: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    b.plat.user_copy(ClipContent::Image(big.clone()));
+    until("A has the big image", || {
+        a.plat.clipboard_get() == Some(ClipContent::Image(big.clone()))
+    })
+    .await;
     a.plat.user_copy(ClipContent::Text("reply from A".into()));
     until("B has text again", || {
         b.plat.clipboard_get() == Some(ClipContent::Text("reply from A".into()))

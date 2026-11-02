@@ -310,6 +310,9 @@ export class Island {
         if (on) { this.engine.triggerEmote("love", 1); Sound.play("blip"); }
       }, (e) => { this.showNote(String(e), 3000, "home"); throw e; }),
       playlists: () => call("spotify_playlists"),
+      connectSpotify: () => void call("spotify_connect", { clientId: null }).then(
+        () => this.showNote("Spotify opened in your browser — press Agree", 3500, "home"),
+        (e) => this.showNote(String(e), 4000, "home")),
       addTo: (playlist, id, name) => void call("spotify_add", { playlist, id }).then(
         () => { this.engine.triggerEmote("happy", 0.8); this.showNote(`➕ Added to ${name}`, 2200, "home"); },
         (e) => this.showNote(String(e), 3000, "home")),

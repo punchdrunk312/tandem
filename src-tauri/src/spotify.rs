@@ -32,9 +32,19 @@ pub fn start(app: &AppHandle, cfg_dir: &std::path::Path) {
     let _ = SP.set(Sp { app: app.clone(), file: cfg_dir.join("spotify.json"), pending: Mutex::new(None), token: Mutex::new(None), me: Mutex::new(None) });
 }
 
+/// CubeCursor's own Spotify app, built in (like stats.fm's): with it, connecting is
+/// one click. Set when building (CUBECURSOR_SPOTIFY_ID); empty means "bring your own".
+const BUILTIN_ID: &str = match option_env!("CUBECURSOR_SPOTIFY_ID") {
+    Some(id) => id,
+    None => "",
+};
+
 fn client_id() -> Option<String> {
-    let v: Value = serde_json::from_slice(&std::fs::read(&sp().ok()?.file).ok()?).ok()?;
-    v["client_id"].as_str().map(String::from).filter(|s| !s.is_empty())
+    let saved = || -> Option<String> {
+        let v: Value = serde_json::from_slice(&std::fs::read(&sp().ok()?.file).ok()?).ok()?;
+        v["client_id"].as_str().map(String::from).filter(|s| !s.is_empty())
+    };
+    saved().or_else(|| (!BUILTIN_ID.is_empty()).then(|| BUILTIN_ID.to_string()))
 }
 
 // The refresh token: Windows' credential store (a file elsewhere).
@@ -103,18 +113,26 @@ fn agent() -> ureq::Agent {
 
 #[tauri::command]
 pub fn spotify_status() -> Value {
-    json!({ "connected": refresh_get().is_some(), "clientId": client_id().unwrap_or_default(), "redirect": REDIRECT })
+    json!({ "connected": refresh_get().is_some(), "clientId": client_id().unwrap_or_default(), "redirect": REDIRECT, "builtin": !BUILTIN_ID.is_empty() })
 }
 
 /// Opens Spotify's "Allow CubeCursor?" page in the browser.
 #[tauri::command]
-pub fn spotify_connect(client_id: String) -> Result<(), String> {
+pub fn spotify_connect(client_id: Option<String>) -> Result<(), String> {
     let s = sp()?;
-    let id = client_id.trim().to_string();
-    if id.len() < 16 || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err("That doesn't look like a Client ID (32 letters and numbers, from your app's page on developer.spotify.com).".into());
-    }
-    std::fs::write(&s.file, json!({ "client_id": id }).to_string()).map_err(|e| e.to_string())?;
+    let given = client_id.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    let id = match given {
+        Some(id) => {
+            if id.len() < 16 || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err("That doesn't look like a Client ID (32 letters and numbers, from your app's page on developer.spotify.com).".into());
+            }
+            if id != BUILTIN_ID {
+                std::fs::write(&s.file, json!({ "client_id": id }).to_string()).map_err(|e| e.to_string())?;
+            }
+            id
+        }
+        None => self::client_id().ok_or("Set up Spotify once in Settings → Top bar → Spotify.")?,
+    };
     let verifier = b64url(&random());
     let state = b64url(&random()[..16]);
     let challenge = b64url(&sha2::Sha256::digest(verifier.as_bytes()));

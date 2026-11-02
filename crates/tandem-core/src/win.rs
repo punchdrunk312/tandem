@@ -2259,6 +2259,10 @@ impl Platform for WinPlatform {
         dir.is_dir().then_some(dir)
     }
 
+    fn drop_into_app(&self, paths: Vec<PathBuf>) -> bool {
+        crate::windrop::drop_here(paths)
+    }
+
     fn device_info(&self) -> crate::proto::DeviceInfo {
         crate::windevice::device_info()
     }
@@ -2599,6 +2603,18 @@ pub fn clip_get() -> Option<ClipContent> {
             return None;
         }
         let r = read_clipboard();
+        let _ = CloseClipboard();
+        r
+    }
+}
+
+/// The copied text, if text is what was copied (pictures aren't read).
+pub fn clip_text() -> Option<String> {
+    unsafe {
+        if IsClipboardFormatAvailable(CF_UNICODETEXT).is_err() || !open_clipboard() {
+            return None;
+        }
+        let r = read_text();
         let _ = CloseClipboard();
         r
     }

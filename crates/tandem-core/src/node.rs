@@ -808,6 +808,8 @@ impl Node {
             my_pass: None,
             carry: None,
             drops: HashMap::new(),
+            app_drops: HashSet::new(),
+            clip_parts: HashMap::new(),
             early_release: None,
             held: None,
             called_off: HashSet::new(),
@@ -1149,11 +1151,36 @@ async fn writer_task<W: tokio::io::AsyncWrite + Unpin>(
     mut w: SecureWriter<W>,
     mut rx: UnboundedReceiver<Msg>,
 ) {
-    while let Some(first) = rx.recv().await {
-        let mut batch = vec![first];
+    // Big copied pictures wait here in pieces; one piece goes out with each round,
+    // after the pointer, the keys and the sound.
+    let mut bulk: VecDeque<Msg> = VecDeque::new();
+    loop {
+        let first = if bulk.is_empty() {
+            match rx.recv().await {
+                Some(m) => Some(m),
+                None => return,
+            }
+        } else {
+            rx.try_recv().ok()
+        };
+        let mut batch: Vec<Msg> = first.into_iter().collect();
         while let Ok(m) = rx.try_recv() {
             batch.push(m);
         }
+        let mut kept = Vec::with_capacity(batch.len());
+        for m in batch {
+            match m {
+                Msg::ClipImage(png) if png.len() > CLIP_PART => {
+                    let id: u64 = rand::random();
+                    let total = png.len().div_ceil(CLIP_PART) as u32;
+                    for (idx, data) in png.chunks(CLIP_PART).enumerate() {
+                        bulk.push_back(Msg::ClipImagePart { id, idx: idx as u32, total, data: data.to_vec() });
+                    }
+                }
+                m => kept.push(m),
+            }
+        }
+        let batch = kept;
         let mut out: Vec<Msg> = Vec::with_capacity(batch.len());
         for m in batch {
             match (out.last_mut(), &m) {
@@ -1182,11 +1209,17 @@ async fn writer_task<W: tokio::io::AsyncWrite + Unpin>(
         }
         // Window pictures are big: everything else (the pointer, keys) goes out first.
         out.sort_by_key(|m| matches!(m, Msg::MirrorFrame { .. }));
-        if w.send_many(&out).await.is_err() {
+        if let Some(p) = bulk.pop_front() {
+            out.push(p);
+        }
+        if !out.is_empty() && w.send_many(&out).await.is_err() {
             return;
         }
     }
 }
+
+/// The size of one piece of a copied picture.
+const CLIP_PART: usize = 32 * 1024;
 
 async fn dial(
     sh: Arc<Shared>,
@@ -1301,6 +1334,10 @@ struct Actor {
     carry: Option<Carry>,
     /// Carries that were let go before they finished arriving: id -> folder to drop in.
     drops: HashMap<u64, PathBuf>,
+    /// Drops let go over a program (not a folder): handed to it once they're here.
+    app_drops: HashSet<u64>,
+    /// A copied picture coming in pieces, per computer: (id, next piece, so far).
+    clip_parts: HashMap<String, (u64, u32, Vec<u8>)>,
     /// The button went up before the offer for the files reached us (folder under the
     /// cursor at that moment); applies to the offer that follows in the same crossing.
     early_release: Option<PathBuf>,
@@ -1961,6 +1998,14 @@ impl Actor {
             Ev::CarryFetched { id, paths } => self.on_carry_fetched(id, paths),
             Ev::CarryDropped { id, dir, res } => match res {
                 Ok(paths) => {
+                    if self.app_drops.remove(&id) {
+                        let plat = self.sh.platform.clone();
+                        let given = paths.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let ok = plat.drop_into_app(given);
+                            log::info!("drop: the program under the cursor {} the files", if ok { "took" } else { "didn't take" });
+                        });
+                    }
                     if let Some(from) = self.carry_from.remove(&id) {
                         self.received_files(id, from, paths);
                     }
@@ -3337,6 +3382,23 @@ impl Actor {
                     self.send_desk_but(Some(from), &Msg::ClipText(t));
                 }
             }
+            Msg::ClipImagePart { id, idx, total, data } => {
+                let e = self.clip_parts.entry(from.to_string()).or_insert((id, 0, Vec::new()));
+                if e.0 != id || idx == 0 {
+                    *e = (id, 0, Vec::new());
+                }
+                if e.1 != idx || e.2.len() + data.len() > MAX_CLIP_IMAGE {
+                    self.clip_parts.remove(from);
+                    return;
+                }
+                e.1 += 1;
+                e.2.extend_from_slice(&data);
+                if idx + 1 >= total {
+                    if let Some((_, _, png)) = self.clip_parts.remove(from) {
+                        self.on_msg(from, Msg::ClipImage(png));
+                    }
+                }
+            }
             Msg::ClipImage(png) => {
                 log::info!("clipboard: received a picture ({} KB)", png.len() / 1024);
                 let on = self.sh.persisted.lock().unwrap().clipboard_sync;
@@ -4397,11 +4459,11 @@ impl Actor {
     /// files, they land in the folder under the cursor.
     fn on_carry_release(&mut self, from: &str) {
         let (x, y) = self.sh.platform.cursor_pos();
-        let dir = || {
-            self.sh
-                .platform
-                .drop_dir_at(x, y)
-                .unwrap_or_else(|| self.sh.cfg.download_dir.clone())
+        // A folder or the desktop under the cursor; over a program, the files wait in
+        // Downloads and are then handed to it.
+        let dir = || match self.sh.platform.drop_dir_at(x, y) {
+            Some(d) => (d, false),
+            None => (self.sh.cfg.download_dir.clone(), true),
         };
         let taken = self.carry.take();
         self.sync_carry();
@@ -4410,7 +4472,10 @@ impl Actor {
         }
         match taken {
             Some(c) if c.peer == from => {
-                let dir = dir();
+                let (dir, into_app) = dir();
+                if into_app {
+                    self.app_drops.insert(c.id);
+                }
                 match c.staged {
                     Some(paths) => self.finish_drop(c.id, paths, dir),
                     None => {
@@ -4423,7 +4488,7 @@ impl Actor {
                 self.sync_carry();
                 // Perhaps the offer is still on its way.
                 if self.carry.is_none() {
-                    self.early_release = Some(dir());
+                    self.early_release = Some(dir().0);
                 }
             }
         }

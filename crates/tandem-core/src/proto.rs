@@ -297,6 +297,14 @@ pub enum Msg {
         kind: String,
         json: String,
     },
+    /// A piece of a big copied picture: pictures go across in pieces, between the
+    /// pointer and the sound, so neither waits for them.
+    ClipImagePart {
+        id: u64,
+        idx: u32,
+        total: u32,
+        data: Vec<u8>,
+    },
 }
 
 /// How a computer is doing, as shown on its card in the bar.

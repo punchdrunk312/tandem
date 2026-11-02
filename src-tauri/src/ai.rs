@@ -1024,7 +1024,7 @@ fn watch_clipboard() {
                 continue;
             }
             last_seq = seq;
-            if let Some(tandem_core::platform::ClipContent::Text(t)) = tandem_core::win::clip_get() {
+            if let Some(t) = tandem_core::win::clip_text() {
                 if t != last_text && looks_like_error(&t) {
                     last_text = t.clone();
                     to_bar("clip-error", &json!({ "text": trunc(&t, 8000) }));

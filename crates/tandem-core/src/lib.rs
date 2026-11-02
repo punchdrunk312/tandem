@@ -34,6 +34,8 @@ mod windevice;
 mod winmirror;
 #[cfg(windows)]
 mod winspan;
+#[cfg(windows)]
+mod windrop;
 
 pub use error::{Error, Result};
 

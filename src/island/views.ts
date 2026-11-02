@@ -740,6 +740,8 @@ export interface MediaMore {
   like(id: string, on: boolean): Promise<void>;
   playlists(): Promise<{ id: string; name: string }[]>;
   addTo(playlist: string, id: string, name: string): void;
+  /** Opens Spotify's sign-in in the browser. */
+  connectSpotify(): void;
 }
 export interface SpotifyNow { id: string; name: string; artist: string; liked: boolean; next: { name: string; artist: string }[] }
 
@@ -970,7 +972,10 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   // Spotify: the heart, "add to a playlist", and what's next (beside the app's name).
   let sp: SpotifyNow | null = null;
   const heart = h("button", { class: "icon-btn m-btn m-heart", hidden: true, title: "Save to your Liked Songs", "aria-label": "Like", onclick: () => {
-    if (!sp) return;
+    if (!sp) {
+      a.connectSpotify();
+      return;
+    }
     const s = sp;
     a.blip();
     s.liked = !s.liked;
@@ -980,6 +985,7 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const paintHeart = () => {
     heart.replaceChildren(svg("M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z", 17, sp?.liked ? { fill: "#1ed760", stroke: 0 } : { stroke: 1.9 }));
     heart.classList.toggle("on", !!sp?.liked);
+    heart.title = sp ? "Save to your Liked Songs" : "Connect Spotify to like songs and add them to playlists";
   };
   const plist = h("select", { class: "m-pl", hidden: true, title: "Add this song to a playlist", "aria-label": "Add to playlist" }) as HTMLSelectElement;
   plist.onfocus = () => {
@@ -1001,11 +1007,19 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
     spAt = performance.now();
     void a.spotify().then((n) => {
       sp = n;
-      heart.hidden = plist.hidden = !n;
+      heart.hidden = false;
+      plist.hidden = !n;
       paintHeart();
       upnext.textContent = n?.next[0] ? ` · Up next: ${n.next[0].name} — ${n.next[0].artist}` : "";
       upnext.title = n?.next.map((x, i) => `${i + 1}. ${x.name} — ${x.artist}`).join("\n") ?? "";
-    }, () => { sp = null; heart.hidden = plist.hidden = true; upnext.textContent = ""; });
+    }, (e) => {
+      // Not signed in yet: the heart stays, and pressing it signs in.
+      sp = null;
+      heart.hidden = !/isn't connected/.test(String(e));
+      plist.hidden = true;
+      upnext.textContent = "";
+      paintHeart();
+    });
   };
   const row2 = h("div", { class: "m-row2" }, svg("M4 9v6h4l5 4V5L8 9H4z", 14, { stroke: 1.8 }), vol, out, speed, sleep, full, stats);
   let wasOpen = false;
