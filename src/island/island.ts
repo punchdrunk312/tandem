@@ -305,6 +305,14 @@ export class Island {
         this.setView("lyrics");
       },
       openStats: () => this.setView("stats"),
+      spotify: () => call("spotify_now"),
+      like: (id, on) => call<void>("spotify_like", { id, on }).then(() => {
+        if (on) { this.engine.triggerEmote("love", 1); Sound.play("blip"); }
+      }, (e) => { this.showNote(String(e), 3000, "home"); throw e; }),
+      playlists: () => call("spotify_playlists"),
+      addTo: (playlist, id, name) => void call("spotify_add", { playlist, id }).then(
+        () => { this.engine.triggerEmote("happy", 0.8); this.showNote(`➕ Added to ${name}`, 2200, "home"); },
+        (e) => this.showNote(String(e), 3000, "home")),
     }));
     this.views.set("lyrics", buildLyrics({ back: () => this.setView("media") }));
     this.views.set("stats", buildStats({ back: () => this.setView("media") }));

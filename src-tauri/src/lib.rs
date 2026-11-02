@@ -17,6 +17,7 @@ use tauri_plugin_global_shortcut::{Code, ShortcutState};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 
 mod ai;
+mod spotify;
 mod elevate;
 mod ghost;
 mod island;
@@ -1263,6 +1264,7 @@ pub fn run() {
                 send_armed: std::sync::atomic::AtomicBool::new(false),
             });
             ai::start(app.handle(), &cfg_dir);
+            spotify::start(app.handle(), &cfg_dir);
             gate.hide_fullscreen
                 .store(ui.hide_fullscreen, std::sync::atomic::Ordering::Relaxed);
             gate.monitor_cursor
@@ -1480,6 +1482,14 @@ pub fn run() {
             ai::ai_ask,
             ai::ai_copy,
             ai::media_play_on,
+            spotify::spotify_status,
+            spotify::spotify_connect,
+            spotify::spotify_connect_page,
+            spotify::spotify_disconnect,
+            spotify::spotify_now,
+            spotify::spotify_like,
+            spotify::spotify_playlists,
+            spotify::spotify_add,
             media::media_outputs,
             media::media_set_output,
             media::media_volume,

@@ -735,7 +735,13 @@ export interface MediaMore {
   cycleSleep(): void;
   openLyrics(): void;
   openStats(): void;
+  /** Spotify (if connected): the song, liked or not, and what's next. */
+  spotify(): Promise<SpotifyNow | null>;
+  like(id: string, on: boolean): Promise<void>;
+  playlists(): Promise<{ id: string; name: string }[]>;
+  addTo(playlist: string, id: string, name: string): void;
 }
+export interface SpotifyNow { id: string; name: string; artist: string; liked: boolean; next: { name: string; artist: string }[] }
 
 /** Where the song is now: the last position Windows gave, moved on while it plays. */
 export function mediaPosition(): number {
@@ -961,6 +967,46 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const sleep = h("button", { class: "btn m-chip", title: "Sleep timer: the music stops by itself", onclick: () => { a.blip(); a.cycleSleep(); } });
   const full = h("button", { class: "btn m-chip", text: "All lyrics", title: "The whole song's words", onclick: () => { a.blip(); a.openLyrics(); } });
   const stats = h("button", { class: "btn m-chip", text: "📊", title: "What you listened to this week", onclick: () => { a.blip(); a.openStats(); } });
+  // Spotify: the heart, "add to a playlist", and what's next (beside the app's name).
+  let sp: SpotifyNow | null = null;
+  const heart = h("button", { class: "icon-btn m-btn m-heart", hidden: true, title: "Save to your Liked Songs", "aria-label": "Like", onclick: () => {
+    if (!sp) return;
+    const s = sp;
+    a.blip();
+    s.liked = !s.liked;
+    paintHeart();
+    void a.like(s.id, s.liked).catch(() => { s.liked = !s.liked; paintHeart(); });
+  } });
+  const paintHeart = () => {
+    heart.replaceChildren(svg("M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z", 17, sp?.liked ? { fill: "#1ed760", stroke: 0 } : { stroke: 1.9 }));
+    heart.classList.toggle("on", !!sp?.liked);
+  };
+  const plist = h("select", { class: "m-pl", hidden: true, title: "Add this song to a playlist", "aria-label": "Add to playlist" }) as HTMLSelectElement;
+  plist.onfocus = () => {
+    if (plist.options.length > 1) return;
+    void a.playlists().then((ls) => plist.append(...ls.map((p) => h("option", { value: p.id, text: p.name }))), () => {});
+  };
+  plist.onchange = () => {
+    if (sp && plist.value) a.addTo(plist.value, sp.id, plist.selectedOptions[0]?.text ?? "");
+    plist.value = "";
+  };
+  plist.append(h("option", { value: "", text: "＋", hidden: true }));
+  const upnext = h("span", { class: "m-next" });
+  let spFor = "";
+  let spAt = 0;
+  const loadSpotify = (m: NonNullable<typeof State.media>) => {
+    const key = `${m.title}|${m.artist}`;
+    if (!/spotify/i.test(m.app) || (key === spFor && performance.now() - spAt < 30_000)) return;
+    spFor = key;
+    spAt = performance.now();
+    void a.spotify().then((n) => {
+      sp = n;
+      heart.hidden = plist.hidden = !n;
+      paintHeart();
+      upnext.textContent = n?.next[0] ? ` · Up next: ${n.next[0].name} — ${n.next[0].artist}` : "";
+      upnext.title = n?.next.map((x, i) => `${i + 1}. ${x.name} — ${x.artist}`).join("\n") ?? "";
+    }, () => { sp = null; heart.hidden = plist.hidden = true; upnext.textContent = ""; });
+  };
   const row2 = h("div", { class: "m-row2" }, svg("M4 9v6h4l5 4V5L8 9H4z", 14, { stroke: 1.8 }), vol, out, speed, sleep, full, stats);
   let wasOpen = false;
   const loadAudio = () => void a.audio().then(({ volume, outputs }) => {
@@ -973,7 +1019,7 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
       ...peers.map((p) => h("option", { value: `pc:${p.id}`, text: `🖥 ${p.name}` })));
     out.value = sel;
   });
-  const body = h("div", { class: "m-text" }, app, title, artist, h("div", { class: "m-row" }, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext, row2);
+  const body = h("div", { class: "m-text" }, h("div", { class: "m-app-row" }, app, upnext), title, artist, h("div", { class: "m-row" }, heart, plist, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext, row2);
   const el = h("div", { class: "view media" }, body, empty);
   const mmss = (ms: number) => {
     const s = Math.floor(ms / 1000);
@@ -990,6 +1036,8 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
       if (open && !wasOpen) loadAudio();
       wasOpen = open;
       if (!m) return;
+      if (open) loadSpotify(m);
+      if (!/spotify/i.test(m.app) && !heart.hidden) { heart.hidden = plist.hidden = true; upnext.textContent = ""; sp = null; }
       const r = a.speed();
       speed.textContent = `${r}×`;
       speed.classList.toggle("on", r !== 1);

@@ -329,6 +329,10 @@ fn handle(mut s: TcpStream) -> std::io::Result<()> {
     s.set_read_timeout(None)?;
     match (method.as_str(), path.as_str()) {
         ("GET", "/health") => reply(&mut s, 200, "text/plain", "ok"),
+        ("GET", p) if p.starts_with("/spotify/callback") => {
+            let page = crate::spotify::callback(p.split_once('?').map(|x| x.1).unwrap_or(""));
+            reply(&mut s, 200, "text/html; charset=utf-8", &page)
+        }
         ("POST", "/mcp") => match mcp(&body) {
             Some(out) => reply(&mut s, 200, "application/json", &out),
             None => reply(&mut s, 202, "text/plain", ""),

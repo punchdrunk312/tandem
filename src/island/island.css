@@ -898,3 +898,12 @@ html.dev body { background: #2b2f38; }
 .st-row span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-row small { color: var(--dim); font-size: 11px; white-space: nowrap; }
 .vd-away[hidden] { display: none; }
+
+/* Spotify: the heart, add to a playlist, up next */
+.m-app-row { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+.m-next { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.m-heart.on { color: #1ed760; }
+.m-heart[hidden], .m-pl[hidden] { display: none; }
+.m-pl { appearance: none; -webkit-appearance: none; width: 30px; height: 30px; border: none; border-radius: 50%; background: transparent; color: var(--ink); font: 600 17px/30px inherit; text-align: center; text-align-last: center; cursor: pointer; }
+.m-pl:hover { background: rgba(255, 255, 255, 0.12); }
+.m-pl option { color: #000; font-size: 13px; text-align: left; }
