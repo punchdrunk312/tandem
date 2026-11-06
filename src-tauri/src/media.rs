@@ -114,6 +114,60 @@ pub fn media_show_video(title: String) {
     let _ = title;
 }
 
+/// What the floating video window plays (it asks when it opens).
+static VIDEO_INFO: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+/// Which window is the current one: an old one going away says nothing.
+static VIDEO_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[tauri::command]
+pub fn video_window_info() -> Option<serde_json::Value> {
+    VIDEO_INFO.lock().unwrap().clone()
+}
+
+/// Opens the floating video window, or replaces the one that is open. Async: on Windows,
+/// a window can't be created from a command that runs on the main thread.
+#[tauri::command]
+pub async fn video_window_open(app: tauri::AppHandle, id: String, title: String, ms: u64, peer: Option<String>, peer_name: Option<String>) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    use tauri::{Emitter, Manager};
+    let gen = VIDEO_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Some(w) = app.get_webview_window("video") {
+        let _ = w.destroy();
+    }
+    *VIDEO_INFO.lock().unwrap() = Some(serde_json::json!({ "id": id, "title": title, "ms": ms, "peer": peer, "peerName": peer_name }));
+    let b = tauri::WebviewWindowBuilder::new(&app, "video", tauri::WebviewUrl::App("video.html".into()))
+        .title(&title)
+        .inner_size(480.0, 308.0)
+        .min_inner_size(240.0, 170.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(true)
+        .maximizable(false)
+        .visible(false)
+        .disable_drag_drop_handler();
+    #[cfg(windows)]
+    let b = b.additional_browser_args(crate::WEBVIEW_ARGS);
+    let w = b.build().map_err(|e| e.to_string())?;
+    let app2 = app.clone();
+    w.on_window_event(move |e| {
+        if matches!(e, tauri::WindowEvent::Destroyed) && VIDEO_GEN.load(Ordering::SeqCst) == gen {
+            let _ = app2.emit("video-action", serde_json::json!({ "action": "gone", "ms": 0 }));
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn video_window_close(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("video") {
+        let _ = w.destroy();
+    }
+}
+
 fn video_id(title: &str, artist: &str) -> Result<Option<String>, String> {
     let page = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(8))

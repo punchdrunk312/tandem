@@ -16,6 +16,7 @@ export default defineConfig({
         island: resolve(__dirname, "index.html"),
         settings: resolve(__dirname, "settings.html"),
         ghost: resolve(__dirname, "ghost.html"),
+        video: resolve(__dirname, "video.html"),
       },
     },
   },

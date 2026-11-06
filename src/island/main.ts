@@ -31,6 +31,7 @@ async function main() {
   await safe("cursor listener", () => onEvent<{ x: number; y: number }>("cursor", ({ x, y }) => island.onCursor(x, y)));
   await safe("hotkey listener", () => onEvent<"bar" | "pill">("hotkey", (what) => island.hotkey(what)));
   await safe("media listener", () => onEvent<import("./state").NowPlaying | null>("media", (m) => island.onMedia(m)));
+  await safe("video listener", () => onEvent<{ action: string; ms: number; peer?: string }>("video-action", (e) => island.onVideoAction(e)));
   await safe("note listener", () => onEvent<string>("note", (msg) => island.note(msg)));
   await safe("voice listener", () => onEvent<string>("voice", (text) => island.onVoice(text)));
   await safe("agent listener", () => onEvent<import("./views").AgentEv>("agent", (e) => island.onAgent(e)));

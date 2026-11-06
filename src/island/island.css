@@ -718,7 +718,7 @@ html.dev body { background: #2b2f38; }
 @media (prefers-reduced-motion: reduce) {
   .view, .view.on { transform: none; filter: none; transition: opacity 0.15s; }
   .egg { animation: none; }
-  .np-btn svg, .m-btn svg, .video.on .vd-frame { animation: none; }
+  .np-btn svg, .m-btn svg { animation: none; }
   .icon-btn:active, .btn:active { transform: none; }
 }
 .m-times { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-top: 3px; font-variant-numeric: tabular-nums; }
@@ -756,15 +756,6 @@ html.dev body { background: #2b2f38; }
 .np-btn { width: 26px; height: 26px; }
 .np-btn:disabled { opacity: 0.35; pointer-events: none; }
 .seek.np-seek { position: absolute; left: 54px; right: 18px; bottom: -5px; }
-
-/* ── a video playing on in the bar ───────────────────────────────────────── */
-.vd-frame { position: absolute; inset: 0; border-radius: 14px; overflow: hidden; background: #000; }
-.video.on .vd-frame { animation: vd-in 0.42s cubic-bezier(0.2, 0.9, 0.25, 1.05) both; }
-@keyframes vd-in { from { opacity: 0; transform: scale(0.92); border-radius: 22px; } }
-.vd-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
-.vd-row { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.2s ease; }
-.video:hover .vd-row { opacity: 1; }
-#island .vd-btn { width: 26px; height: 26px; border-radius: 13px; background: rgba(0, 0, 0, 0.55); color: #fff; backdrop-filter: blur(6px); }
 
 /* ── sung lyrics ──────────────────────────────────────────────────────────── */
 .kar { position: relative; overflow: hidden; white-space: nowrap; -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent); mask-image: linear-gradient(90deg, #000 92%, transparent); }

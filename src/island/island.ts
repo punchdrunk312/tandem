@@ -20,7 +20,7 @@ import { buildGame } from "./game";
 import { buildSuggest, buildTour, type Suggestion, type TourStep } from "./views";
 import { agentKey, agents, buildAgent, buildAi, loadPrompts, type AgentEv, type Prompt } from "./views";
 import { appName, buildLyrics, buildStats, dayKey, hoursText, listenWeek, loadListen } from "./views";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, buildVideo, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -343,28 +343,6 @@ export class Island {
       cancel: () => {
         this.pendingDrop = null;
         this.closeBar();
-      },
-    }));
-    this.views.set("video", buildVideo({
-      blip: () => Sound.play("blip"),
-      back: () => {
-        const v = State.video;
-        if (v) void call("media_show_video", { title: v.title }).catch(() => {});
-        this.endVideo(true);
-      },
-      close: () => {
-        if (State.video) this.videoClosedFor = State.video.title;
-        this.endVideo(false);
-      },
-      sendTo: (peerId) => {
-        const v = State.video;
-        if (!v) return;
-        const peer = State.connectedPeers.find((p) => p.id === peerId);
-        fire("ai_relay", { kind: "ui:video", json: JSON.stringify({ id: v.id, title: v.title, ms: v.nowMs }), to: peerId });
-        this.videoClosedFor = v.title;
-        this.endVideo(false);
-        this.paperPlane(true, /left/i.test(peer?.side ?? "") ? -1 : 1);
-        this.autoly(() => this.showNote(`📺 Playing on ${peer?.name ?? "your other computer"}`, 2600));
       },
     }));
     this.views.set("nowplaying", buildNowPlaying({
@@ -693,9 +671,8 @@ export class Island {
       try {
         const v = JSON.parse(m.json) as { id: string; title: string; ms: number };
         State.video = { id: v.id, title: v.title, startMs: v.ms, nowMs: v.ms };
-        State.isPinned = true;
         this.engine.triggerEmote("surprised", 0.6);
-        this.autoly(() => this.alert("video"));
+        this.openVideoWindow();
         State.notify();
       } catch { /* not for us */ }
       return;
@@ -1651,12 +1628,42 @@ export class Island {
         this.videoPausedAt = performance.now();
         void call("media_control", { action: "pause" }).catch(() => {});
         State.video = { id, title, startMs, nowMs: startMs };
-        State.isPinned = true;
-        this.autoly(() => this.alert("video"));
+        this.openVideoWindow();
         State.notify();
       })
       .catch(() => { this.videoLooking = ""; });
     return false;
+  }
+
+  private openVideoWindow() {
+    const v = State.video;
+    if (!v) return;
+    const peer = State.connectedPeers.find((p) => !p.fleet);
+    void call("video_window_open", { id: v.id, title: v.title, ms: v.startMs, peer: peer?.id ?? null, peerName: peer?.name ?? null }).catch((e) => this.showNote(String(e), 3000, "home"));
+  }
+
+  /** The floating video window's buttons. */
+  onVideoAction(e: { action: string; ms: number; peer?: string }) {
+    const v = State.video;
+    if (!v) return;
+    if (e.action !== "gone") v.nowMs = e.ms;
+    if (e.action === "time") return;
+    Sound.play("blip");
+    if (e.action === "back") {
+      void call("media_show_video", { title: v.title }).catch(() => {});
+      this.endVideo(true);
+    } else if (e.action === "send" && e.peer) {
+      const peer = State.connectedPeers.find((p) => p.id === e.peer);
+      fire("ai_relay", { kind: "ui:video", json: JSON.stringify({ id: v.id, title: v.title, ms: v.nowMs }), to: e.peer });
+      this.videoClosedFor = v.title;
+      this.endVideo(false);
+      this.paperPlane(true, /left/i.test(peer?.side ?? "") ? -1 : 1);
+      this.autoly(() => this.showNote(`📺 Playing on ${peer?.name ?? "your other computer"}`, 2600));
+    } else {
+      // Its close button, or the window went away some other way.
+      this.videoClosedFor = v.title;
+      this.endVideo(false);
+    }
   }
 
   /** The bar lets go of the video; `resume`: the browser carries on from where it got to. */
@@ -1664,11 +1671,11 @@ export class Island {
     const v = State.video;
     if (!v) return;
     State.video = null;
+    void call("video_window_close").catch(() => {});
     void call("media_control", { action: `seek:${v.nowMs}` })
       .catch(() => {})
       .then(() => { if (resume) void call("media_control", { action: "play" }).catch(() => {}); });
     State.notify();
-    if (State.view === "video") this.closeBar();
   }
 
   private pausedAt = 0;
@@ -1805,8 +1812,6 @@ export class Island {
 
   private closeBar() {
     this.notesView?.stopWriting();
-    // Closing the bar over a video stops it in the bar (the browser keeps it, paused).
-    if (State.video && State.view === "video") return this.endVideo(false);
     // Something else had the bar (a card, a note, the control bar): the song strip returns.
     const strip = State.view !== "nowplaying" && this.wantsStrip();
     if (strip) window.setTimeout(() => { if (State.mode !== "expanded") this.popNowPlaying(); }, 900);

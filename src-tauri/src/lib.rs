@@ -1495,6 +1495,9 @@ pub fn run() {
             media::media_volume,
             media::media_set_volume,
             media::media_show_video,
+            media::video_window_info,
+            media::video_window_open,
+            media::video_window_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building CubeCursor")

@@ -1136,50 +1136,6 @@ export function buildRecipients(a: RecipientActions): ViewHost {
 /** A YouTube video playing on in the bar (its browser is minimised): the video, and
  *  buttons to send it back to the browser, on to another computer, or close it. Reports
  *  how far it has got. */
-export function buildVideo(a: { blip(): void; back(): void; close(): void; sendTo(peerId: string): void }): ViewHost {
-  const frame = h("div", { class: "vd-frame" });
-  const back = h("button", { class: "icon-btn vd-btn", title: "Back to the browser", "aria-label": "Back to the browser", onclick: () => { a.blip(); a.back(); } },
-    svg("M4 5h16v11H4zM8 20h8M12 16v4", 14, { stroke: 2 }));
-  const close = h("button", { class: "icon-btn vd-btn", title: "Close (stays paused in the browser)", "aria-label": "Close", onclick: () => { a.blip(); a.close(); } },
-    svg("M6 6l12 12M18 6L6 18", 12, { stroke: 2 }));
-  const away = h("button", { class: "icon-btn vd-btn vd-away", "aria-label": "Play it on another computer", onclick: () => {
-    const p = State.connectedPeers.find((x) => !x.fleet);
-    if (p) { a.blip(); a.sendTo(p.id); }
-  } }, svg("M3 5h12v9H3zM7 18h4M9 14v4M15 12h6m-3-3 3 3-3 3", 14, { stroke: 2 }));
-  const el = h("div", { class: "view video" }, frame, h("div", { class: "vd-row" }, away, back, close));
-  let shown = "";
-  let player: HTMLIFrameElement | null = null;
-  // The YouTube player says where it is when asked to "listen".
-  window.addEventListener("message", (e) => {
-    if (!player || e.source !== player.contentWindow || typeof e.data !== "string") return;
-    try {
-      const d = JSON.parse(e.data) as { event?: string; info?: { currentTime?: number } };
-      const t = d.info?.currentTime;
-      if (d.event === "infoDelivery" && typeof t === "number" && State.video) State.video.nowMs = Math.round(t * 1000);
-    } catch { /* not ours */ }
-  });
-  return {
-    el,
-    sync() {
-      const peer = State.connectedPeers.find((x) => !x.fleet);
-      away.hidden = !peer;
-      away.title = peer ? `Play it on ${peer.name}` : "";
-      const v = State.video;
-      const key = v ? `${v.id}@${v.startMs}` : "";
-      if (key === shown) return;
-      shown = key;
-      player = null;
-      frame.replaceChildren();
-      if (!v) return;
-      const src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(v.id)}?autoplay=1&playsinline=1&enablejsapi=1&start=${Math.floor(v.startMs / 1000)}&origin=${encodeURIComponent(location.origin)}`;
-      const f = h("iframe", { src, title: v.title, allow: "autoplay; encrypted-media; picture-in-picture; fullscreen", referrerpolicy: "strict-origin-when-cross-origin", allowfullscreen: "" }) as HTMLIFrameElement;
-      f.addEventListener("load", () => f.contentWindow?.postMessage(JSON.stringify({ event: "listening", id: 1 }), "*"));
-      player = f;
-      frame.append(f);
-    },
-  };
-}
-
 /** The slim strip that stays while a song plays: the song (or the words being sung),
  *  15 s back, play/pause, next, lyrics on/off, hide, and a thin bar to jump along it. */
 export function buildNowPlaying(a: MediaActions & { open(): void; close(): void }): ViewHost {
