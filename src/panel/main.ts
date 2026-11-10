@@ -180,7 +180,7 @@ function go(id: PageId, idx = PAGES.findIndex((x) => x.id === id)) {
   page = id;
   try { sessionStorage.setItem("tandem.page", id); } catch { /* storage unavailable */ }
   if (searchIn.value) { searchIn.value = ""; applySearch(); }
-  indicator.style.transform = `translateY(${idx * 42}px)`;
+  indicator.style.transform = `translateY(${navBtns[idx]?.offsetTop ?? 0}px)`;
   navBtns.forEach((b, i) => b.classList.toggle("on", i === idx));
   for (const [pid, el] of pageEls) el.classList.toggle("on", pid === id);
   content.scrollTo({ top: 0 });
