@@ -216,7 +216,13 @@ export async function call(cmd: string, args?: Record<string, unknown>): Promise
       // "&sky=storm" (rain, snow, fog, clear, clouds) in the address picks it.
       const sky = location.hash.split("&").find((f) => f.startsWith("sky="))?.slice(4) ?? "rain";
       const code = ({ clear: 0, clouds: 3, fog: 45, drizzle: 53, rain: 63, snow: 73, storm: 95 } as Record<string, number>)[sky] ?? 63;
-      return { city: "Athens", temp_c: sky === "clear" ? 29 : sky === "snow" ? -2 : 14, code, is_day: true, wind_kmh: 12 };
+      const night = location.hash.includes("night");
+      const t = sky === "clear" ? 29 : sky === "snow" ? -2 : 14;
+      return {
+        city: "Patras", temp_c: t, code, is_day: !night, wind_kmh: 12, feels_c: t - 2, high_c: t + 3, low_c: t - 6,
+        sunrise: "06:52", sunset: "17:31", source: "device",
+        hours: Array.from({ length: 6 }, (_, i) => ({ hour: String((new Date().getHours() + 1 + i) % 24).padStart(2, "0"), temp_c: t - i * 0.6, code: i > 3 ? 3 : code, is_day: !night })),
+      };
     }
     default:
       return;

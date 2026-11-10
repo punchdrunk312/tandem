@@ -20,6 +20,8 @@ import { buildGame } from "./game";
 import { buildSuggest, buildTour, type Suggestion, type TourStep } from "./views";
 import { agentKey, agents, buildAgent, buildAi, loadPrompts, type AgentEv, type Prompt } from "./views";
 import { appName, buildLyrics, buildStats, dayKey, hoursText, listenWeek, loadListen } from "./views";
+import { buildWeather, DEFAULT_ICONS } from "./views";
+import type { BotStateName } from "../core/layout";
 import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
@@ -175,6 +177,10 @@ export class Island {
       toggleDevices: () => this.setView(State.view === "devices" ? "home" : "devices"),
       toggleFocus: () => this.setView(State.view === "focus" ? "home" : "focus"),
       toggleMedia: () => this.setView(State.view === "media" ? "home" : "media"),
+      toggleWeather: () => {
+        if (State.view !== "weather" && Date.now() - (State.weather?.at ?? 0) > 10 * 60_000) void this.fetchWeather();
+        this.setView(State.view === "weather" ? "home" : "weather");
+      },
       toggleNotes: () => this.setView(State.view === "notes" ? "home" : "notes"),
       toggleAi: () => {
         if (State.view === "ai") return this.setView("home");
@@ -223,6 +229,7 @@ export class Island {
       jump: (id) => { fire("engage", { peerId: id }); this.closeBar(); },
     });
     this.views.set("moment", this.momentView);
+    this.views.set("weather", buildWeather({ refresh: () => void this.fetchWeather() }));
     this.chargeView = buildCharge();
     this.views.set("charge", this.chargeView);
     this.views.set("devices", buildDevices({
@@ -1167,9 +1174,11 @@ export class Island {
   }
 
   /** The weather where you are (null until it is known, or when it's turned off). */
-  private weather: { city: string; temp: number; sky: Sky; day: boolean } | null = null;
+  private get weather() { return State.weather; }
+  private set weather(w) { State.weather = w; }
 
   private weatherFor = "";
+  private weatherRetry = 0;
 
   private async fetchWeather() {
     this.weatherFor = `${State.settings.weather}|${State.settings.city}`;
@@ -1180,13 +1189,31 @@ export class Island {
       }
       return;
     }
-    // The city typed in settings, or the one in the time zone ("Europe/Athens" → "Athens").
-    const place = State.settings.city.trim() || timeZone().split("/").pop()?.replace(/_/g, " ") || "";
-    if (!place) return;
+    // Shown at once from last time (offline, or while the new one comes).
+    if (!this.weather) {
+      try {
+        const kept = JSON.parse(localStorage.getItem("cc.weather") ?? "null");
+        if (kept && Date.now() - kept.at < 6 * 3600_000 && kept.cityFor === State.settings.city) this.weather = kept;
+      } catch { /* fine */ }
+    }
+    // Where: the city typed in settings, or this computer's own location (Windows); the
+    // time zone's city only if Windows won't say.
+    const fallback = timeZone().split("/").pop()?.replace(/_/g, " ") || "";
     try {
-      const w = (await call("weather", { place })) as { city: string; temp_c: number; code: number; is_day: boolean; wind_kmh: number };
+      const w = (await call("weather", { place: State.settings.city.trim(), fallback, lang: navigator.language || "en" })) as {
+        city: string; temp_c: number; code: number; is_day: boolean; wind_kmh: number; feels_c: number; high_c: number; low_c: number;
+        sunrise: string; sunset: string; hours: { hour: string; temp_c: number; code: number; is_day: boolean }[]; source: string;
+      };
       const before = this.weather;
-      this.weather = { city: w.city, temp: Math.round(w.temp_c), sky: skyOf(w.code), day: w.is_day };
+      this.weather = {
+        city: w.city, temp: Math.round(w.temp_c), sky: skyOf(w.code), day: w.is_day,
+        feels: Math.round(w.feels_c), high: Math.round(w.high_c), low: Math.round(w.low_c), wind: w.wind_kmh,
+        sunrise: w.sunrise, sunset: w.sunset, source: w.source, at: Date.now(),
+        hours: w.hours.map((x) => ({ hour: x.hour, temp: Math.round(x.temp_c), sky: skyOf(x.code), day: x.is_day })),
+      };
+      this.weatherRetry = 0;
+      try { localStorage.setItem("cc.weather", JSON.stringify({ ...this.weather, cityFor: State.settings.city })); } catch { /* fine */ }
+      State.notify();
       // Windy from about 20 km/h, a gale at 60.
       const wind = Math.max(0, Math.min(1, (w.wind_kmh - 20) / 40));
       this.ambient.wind = wind;
@@ -1198,6 +1225,9 @@ export class Island {
       if (!before || before.sky !== this.weather.sky) this.weatherNews(!before);
     } catch (e) {
       fire("log_js", { msg: `weather: ${e}` });
+      // Offline or a hiccup: keep what we had, and try again soon (2, 4, 8 … up to 20 min).
+      this.weatherRetry = Math.min(this.weatherRetry + 1, 4);
+      window.setTimeout(() => void this.fetchWeather(), Math.min(20, 2 ** this.weatherRetry) * 60_000);
     }
   }
 
@@ -1305,6 +1335,12 @@ export class Island {
     State.mode = mode;
     // Opened by you: a soft open and close. Opened by itself (a card, a note): silent,
     // the card's own sound (if any) is enough.
+    if (mode === "expanded" && prev !== "expanded") {
+      this.islandEl.classList.remove("opening");
+      void this.islandEl.offsetWidth;
+      this.islandEl.classList.add("opening");
+      window.setTimeout(() => this.islandEl.classList.remove("opening"), 900);
+    }
     if (mode === "expanded") {
       // Like a drop of jelly: a squash, a stretch, and it settles.
       if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -1335,7 +1371,30 @@ export class Island {
     State.notify();
   }
 
+  /** Bob's state, and late at night with nothing going on, he sleeps. */
+  private botState(): BotStateName {
+    const st = State.effectiveState;
+    const hr = new Date().getHours();
+    const night = hr >= 23 || hr < 6;
+    return st === "idle" && night && !State.media?.playing && State.mode !== "expanded" && !State.focus ? "sleeping" : st;
+  }
+
+  /** Views in the order of the header's icons: going right slides in from the right. */
+  private slideTo(view: IslandViewName) {
+    const order = ["home", ...(State.settings.barIcons || DEFAULT_ICONS).split(",").map((id) => ({ music: "media", timer: "focus" } as Record<string, string>)[id] ?? id)];
+    const from = order.indexOf(State.view === "nowplaying" ? "media" : State.view);
+    const to = order.indexOf(view);
+    const dir = from < 0 || to < 0 ? 1 : to >= from ? 1 : -1;
+    this.viewsEl.style.setProperty("--dir", String(dir));
+    const old = this.views.get(State.view)?.el;
+    if (old && State.view !== view) {
+      old.classList.add("out");
+      window.setTimeout(() => old.classList.remove("out"), 380);
+    }
+  }
+
   setView(view: IslandViewName) {
+    if (State.mode === "expanded" && view !== State.view) this.slideTo(view);
     if (State.mode !== "expanded") {
       this.fsm.forceHome();
       State.view = view;
@@ -2276,7 +2335,7 @@ export class Island {
     this.confusedRecovery = window.setTimeout(() => {
       this.confusedRecovery = null;
       State.stateOverride = null;
-      this.engine.setState(State.effectiveState);
+      this.engine.setState(this.botState());
       this.engine.triggerEmote("happy");
       State.notify();
     }, 3300);
@@ -2324,6 +2383,8 @@ export class Island {
 
     const ambientOn = State.mode === "expanded" && State.view !== "greeting" && this.ambient.busy;
     this.engine.music = !!State.media?.playing && !this.quiet;
+    this.engine.dance = this.engine.music && State.mode === "expanded" && (State.view === "media" || State.view === "home") ? 1 : 0;
+    document.documentElement.dataset.music = this.engine.music ? "on" : "off";
     this.engine.headband = !!State.focus;
     if (ambientOn || this.ambientPx.w) this.drawAmbient(dt, ambientOn);
 
@@ -2521,7 +2582,7 @@ export class Island {
     this.compactLabel.style.opacity = State.mode === "compact" ? "1" : "0";
     this.compactLabel.style.left = `${40 + 20}px`;
 
-    this.engine.setState(State.effectiveState);
+    this.engine.setState(this.botState());
   }
 
   applySettings() {

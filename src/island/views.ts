@@ -5,7 +5,7 @@ import { fire } from "../bridge";
 import type { Snapshot } from "../types";
 import { h, svg } from "./dom";
 import { fmtMins, momentText } from "./moments";
-import { State, type LyricLine } from "./state";
+import { State, type LyricLine, type WeatherInfo } from "./state";
 import { nextReminder, reminderPresets, whenText } from "../core/notes";
 
 export interface ViewHost {
@@ -27,6 +27,8 @@ export interface ViewActions {
   toggleNotes(): void;
   toggleGame(): void;
   toggleAi(): void;
+  /** The header's weather button: the forecast, or back. */
+  toggleWeather(): void;
   /** Shift-drop menu: prepare the files this way, then send. */
   dropAction(a: "asis" | "zip" | "png" | "jpg"): void;
   /** Shift-drop menu: back out without sending. */
@@ -66,7 +68,29 @@ function keyed(el: HTMLElement, key: string, build: () => (Node | string)[]) {
 
 // ------------------------------------------------------------------ header
 
-export const DEFAULT_ICONS = "ai,notes,music,timer,devices,game,sound";
+export const DEFAULT_ICONS = "ai,notes,music,weather,timer,devices,game,sound";
+
+/** A number that rolls to its new value instead of jumping ("14°" → "17°"). */
+export function roll(el: HTMLElement, value: number, suffix = "", ms = 650) {
+  const from = Number(el.dataset.v ?? NaN);
+  el.dataset.v = String(value);
+  if (!Number.isFinite(from) || from === value || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    el.textContent = `${value}${suffix}`;
+    return;
+  }
+  const t0 = performance.now();
+  const step = () => {
+    if (el.dataset.v !== String(value)) return; // a newer value took over
+    const t = Math.min(1, (performance.now() - t0) / ms);
+    const e = 1 - Math.pow(1 - t, 3);
+    el.textContent = `${Math.round(from + (value - from) * e)}${suffix}`;
+    if (t < 1) requestAnimationFrame(step);
+  };
+  el.classList.remove("rolled");
+  void el.offsetWidth;
+  el.classList.add("rolled");
+  requestAnimationFrame(step);
+}
 
 export function buildHeader(a: ViewActions): ViewHost {
   const dot = h("i", { class: "hd-dot" });
@@ -82,7 +106,9 @@ export function buildHeader(a: ViewActions): ViewHost {
     svg("M12 3a9 9 0 100 18 9 9 0 000-18zM3.5 9.5h17M3.5 14.5h17M12 3c2.5 2.6 2.5 15.4 0 18", 15, { stroke: 1.8 }));
   const ai = h("button", { class: "icon-btn", title: "AI agents", "aria-label": "AI agents", onclick: () => { a.blip(); a.toggleAi(); } },
     svg("M12 3l1.8 4.6L18.5 9.4l-4.7 1.8L12 16l-1.8-4.8L5.5 9.4l4.7-1.8zM18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z", 15, { stroke: 1.8 }));
-  const byId: Record<string, HTMLElement> = { ai, notes, music, timer, devices, game, sound };
+  const weather = h("button", { class: "icon-btn", title: "Weather", "aria-label": "Weather", onclick: () => { a.blip(); a.toggleWeather(); } },
+    svg("M12 3v2M5.6 5.6l1.4 1.4M3 12h2M17 7l1.4-1.4M8 12a4 4 0 0 1 7.4-2.1M9 20h8.5a3.5 3.5 0 0 0 0-7h-.3A5 5 0 0 0 8 15a2.5 2.5 0 0 0 1 5z", 15, { stroke: 1.8 }));
+  const byId: Record<string, HTMLElement> = { ai, notes, music, weather, timer, devices, game, sound };
   const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }));
   let order = "-";
   return {
@@ -103,8 +129,9 @@ export function buildHeader(a: ViewActions): ViewHost {
       notes.classList.toggle("on", State.view === "notes" || !!State.dueNote);
       game.classList.toggle("on", State.view === "game");
       ai.classList.toggle("on", State.view === "ai" || State.view === "agent");
+      weather.classList.toggle("on", State.view === "weather");
       ai.classList.toggle("ping", [...agents.values()].some((e) => e.state === "approve" || e.state === "waiting"));
-      title.textContent = State.view === "lyrics" ? "Lyrics" : State.view === "stats" ? "Your week in music" : State.view === "ai" ? "AI agents" : State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
+      title.textContent = State.view === "weather" ? "Weather" : State.view === "lyrics" ? "Lyrics" : State.view === "stats" ? "Your week in music" : State.view === "ai" ? "AI agents" : State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
       sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
     },
   };
@@ -205,7 +232,29 @@ export function buildHome(a: ViewActions): ViewHost {
   const actions = h("div", { class: "h-actions" });
   const side = h("div", { class: "side-pick" });
   const xfers = h("div", { class: "xfers" });
-  const el = h("div", { class: "view home" }, h("div", { class: "h-text" }, title, sub, actions), side, xfers);
+  // Three live tiles: the time, the weather, and what's playing.
+  const tClock = h("div", { class: "ht-big" });
+  const tDate = h("div", { class: "ht-sub" });
+  const tTemp = h("span", { class: "ht-num" });
+  const tSky = h("div", { class: "ht-sub" });
+  const tIcon = h("span", { class: "ht-emoji" });
+  const tSong = h("div", { class: "ht-song" });
+  const tArtist = h("div", { class: "ht-sub" });
+  const eq = h("span", { class: "eq" }, h("i"), h("i"), h("i"), h("i"));
+  const tile = (cls: string, i: number, kids: Node[], act?: () => void) =>
+    h(act ? "button" : "div", { class: `h-tile ${cls}`, style: `--i:${i}`, ...(act ? { onclick: () => { a.blip(); act(); } } : {}) }, ...kids);
+  const tiles = h("div", { class: "h-tiles" },
+    tile("t-clock", 0, [tClock, tDate]),
+    tile("t-weather", 1, [h("div", { class: "ht-row" }, tIcon, tTemp), tSky], () => a.toggleWeather()),
+    tile("t-music", 2, [h("div", { class: "ht-row" }, eq, tSong), tArtist], () => a.toggleMedia()));
+  const paintClock = () => {
+    const d = new Date();
+    tClock.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    tDate.textContent = d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "short" });
+  };
+  paintClock();
+  window.setInterval(paintClock, 10_000);
+  const el = h("div", { class: "view home" }, h("div", { class: "h-text" }, title, sub, actions), side, tiles, xfers);
 
   const btn = (label: string, onclick: () => void, cls = "") => h("button", { class: `btn ${cls}`.trim(), text: label, onclick: () => { a.blip(); onclick(); } });
 
@@ -216,6 +265,21 @@ export function buildHome(a: ViewActions): ViewHost {
       const t = homeText(s);
       title.textContent = t.title;
       sub.textContent = t.sub;
+      paintClock();
+      const w = State.weather;
+      if (w) {
+        tIcon.textContent = skyEmoji(w.sky, w.day);
+        roll(tTemp, w.temp, "°");
+        tSky.textContent = `${w.city} · ${SKY[w.sky]?.[1] ?? ""}`;
+      } else {
+        tIcon.textContent = "⛅";
+        tTemp.textContent = "–";
+        tSky.textContent = State.settings.weather ? "Getting the weather…" : "Weather is off";
+      }
+      const m = State.media;
+      tSong.textContent = m ? m.title : "Nothing playing";
+      tArtist.textContent = m ? m.artist || appName(m.app) : "Play a song anywhere";
+      tiles.classList.toggle("playing", !!m?.playing);
 
       const near = s ? s.nearby.find((n) => n.paired) ?? s.paired.find((p) => p.nearby && !p.connected) : undefined;
       const live = (s?.paired ?? []).filter((p) => p.connected);
@@ -497,6 +561,69 @@ const SKY: Record<string, [string, string]> = {
   rain: ["🌧️", "Raining"], snow: ["❄️", "Snowing"], storm: ["⛈️", "Thunderstorm"],
 };
 
+export function skyEmoji(sky: string, day: boolean): string {
+  if (!day && sky === "clear") return "🌙";
+  if (!day && sky === "clouds") return "☁️";
+  return (SKY[sky] ?? SKY.clouds)[0];
+}
+
+/** The weather, as a little live scene: sun, moon and stars, drifting clouds, rain, snow,
+ *  lightning; the temperature, today's high and low, the next hours, sunrise and sunset. */
+export function buildWeather(a: { refresh(): void }): ViewHost {
+  const scene = h("div", { class: "wx-scene" },
+    h("div", { class: "wx-stars" }),
+    h("div", { class: "wx-sun" }, h("i")),
+    h("div", { class: "wx-moon" }),
+    h("div", { class: "wx-clouds" }, h("i"), h("i"), h("i"), h("i")),
+    h("div", { class: "wx-rain" }, ...Array.from({ length: 34 }, (_, i) => h("i", { style: `--x:${(i * 37) % 100}%;--d:${(i * 0.137) % 1}s;--s:${0.55 + ((i * 7) % 5) / 12}s` }))),
+    h("div", { class: "wx-snow" }, ...Array.from({ length: 28 }, (_, i) => h("i", { style: `--x:${(i * 41) % 100}%;--d:${(i * 0.31) % 4}s;--s:${3.2 + ((i * 5) % 7) / 3}s;--z:${3 + (i % 3)}px` }))),
+    h("div", { class: "wx-fog" }, h("i"), h("i")),
+    h("div", { class: "wx-flash" }));
+  const city = h("div", { class: "wx-city" });
+  const temp = h("div", { class: "wx-temp" });
+  const what = h("div", { class: "wx-what" });
+  const more = h("div", { class: "wx-more" });
+  const hours = h("div", { class: "wx-hours" });
+  const sun = h("div", { class: "wx-chips" });
+  const empty = h("div", { class: "wx-empty" });
+  const info = h("div", { class: "wx-info" }, h("div", { class: "wx-now" }, city, temp, what, more), h("div", { class: "wx-side" }, hours, sun));
+  const el = h("div", { class: "view weather" }, scene, info, empty);
+  let shown = "";
+  return {
+    el,
+    sync() {
+      const w: WeatherInfo | null = State.weather;
+      info.hidden = !w;
+      empty.hidden = !!w;
+      if (!w) {
+        empty.replaceChildren(h("div", { text: State.settings.weather ? "Getting the weather…" : "The weather is off (Settings → Top bar)." }),
+          ...(State.settings.weather ? [h("button", { class: "btn", text: "Try again", onclick: () => a.refresh() })] : []));
+        el.dataset.sky = "clouds";
+        el.dataset.day = "1";
+        return;
+      }
+      el.dataset.sky = w.sky;
+      el.dataset.day = w.day ? "1" : "0";
+      const key = JSON.stringify([w.city, w.sky, w.day, w.feels, w.high, w.low, w.sunrise, w.hours, w.source]);
+      roll(temp, w.temp, "°");
+      if (key === shown) return;
+      shown = key;
+      city.replaceChildren(...(w.source === "device" ? [svg("M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12zM12 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z", 12, { stroke: 2 })] : []), document.createTextNode(w.city));
+      what.textContent = SKY[w.sky]?.[1] ?? "";
+      more.textContent = `Feels ${w.feels}° · H ${w.high}° · L ${w.low}°`;
+      hours.replaceChildren(...w.hours.map((hr, i) =>
+        h("div", { class: "wx-hour", style: `--i:${i}` },
+          h("span", { class: "wx-h", text: hr.hour }),
+          h("span", { class: "wx-e", text: skyEmoji(hr.sky, hr.day) }),
+          h("span", { class: "wx-t", text: `${hr.temp}°` }))));
+      sun.replaceChildren(
+        h("span", { class: "wx-chip" }, svg("M12 3v4M5 12H3M21 12h-2M6.3 6.3 7.8 7.8M17.7 6.3l-1.5 1.5M7 17a5 5 0 0 1 10 0M3 21h18", 13, { stroke: 1.9 }), document.createTextNode(w.sunrise)),
+        h("span", { class: "wx-chip" }, svg("M12 10V6M5 14H3M21 14h-2M7 19a5 5 0 0 1 10 0M3 21h18M9 8l3-3 3 3", 13, { stroke: 1.9 }), document.createTextNode(w.sunset)),
+        h("span", { class: "wx-chip" }, svg("M3 8h11a3 3 0 1 0-3-3M3 16h15a3 3 0 1 1-3 3M3 12h17", 13, { stroke: 1.9 }), document.createTextNode(`${Math.round(w.wind)} km/h`)));
+    },
+  };
+}
+
 export function buildCharge(): ViewHost & {
   show(m: import("./moments").Moment): void;
   showWeather(w: { city: string; temp: number; sky: string; day: boolean }): void;
@@ -516,10 +643,10 @@ export function buildCharge(): ViewHost & {
       el.className = `view charge${State.view === "charge" ? " on" : ""} k-weather sky-${w.sky}`;
       void el.offsetWidth;
       el.classList.add("enter");
-      const [emoji, what] = SKY[w.sky] ?? SKY.clouds;
-      icon.replaceChildren(h("span", { class: "ch-emoji", text: w.sky === "clear" && !w.day ? "🌙" : emoji }));
+      const [, what] = SKY[w.sky] ?? SKY.clouds;
+      icon.replaceChildren(h("span", { class: "ch-emoji", text: skyEmoji(w.sky, w.day) }));
       word.textContent = `${w.city} · ${what}`;
-      pct.textContent = `${w.temp}°`;
+      roll(pct, w.temp, "°");
     },
     show(m) {
       const me = m.id === "me";
@@ -552,7 +679,7 @@ export function buildCharge(): ViewHost & {
       icon.append(batt);
       const what = m.kind === "plug" ? "Charging" : m.kind === "full" ? "Fully charged" : "On battery";
       word.textContent = me ? what : `${m.name} · ${what.toLowerCase()}`;
-      pct.textContent = `${level}%`;
+      roll(pct, level, "%");
       fill.style.width = "0%";
       // The level fills in once the pill has opened.
       requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = `${Math.max(4, level)}%`)));
@@ -1033,8 +1160,14 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
       ...peers.map((p) => h("option", { value: `pc:${p.id}`, text: `🖥 ${p.name}` })));
     out.value = sel;
   });
-  const body = h("div", { class: "m-text" }, h("div", { class: "m-app-row" }, app, upnext), title, artist, h("div", { class: "m-row" }, heart, plist, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext, row2);
-  const el = h("div", { class: "view media" }, body, empty);
+  const eq = h("span", { class: "eq" }, h("i"), h("i"), h("i"), h("i"));
+  const glow = h("div", { class: "m-glow" });
+  const cover = h("div", { class: "m-cover" });
+  const body = h("div", { class: "m-text" }, h("div", { class: "m-app-row" }, eq, app, upnext), title, artist, h("div", { class: "m-row" }, heart, plist, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext, row2);
+  const el = h("div", { class: "view media" }, glow, cover, body, empty);
+  let shownSong = "";
+  let shownArt = "";
+  let shownLine = "";
   const mmss = (ms: number) => {
     const s = Math.floor(ms / 1000);
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -1059,13 +1192,33 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
       sleep.textContent = left ? `🌙 ${left} min` : "🌙";
       sleep.classList.toggle("on", left > 0);
       app.textContent = appName(m.app);
-      title.textContent = m.title;
-      artist.textContent = [m.artist, m.album].filter(Boolean).join(" · ");
+      el.classList.toggle("playing", m.playing);
+      const song = `${m.title}|${m.artist}`;
+      if (song !== shownSong) {
+        // A new song: the words slide in.
+        const first = !shownSong;
+        shownSong = song;
+        title.textContent = m.title;
+        artist.textContent = [m.artist, m.album].filter(Boolean).join(" · ");
+        if (!first) for (const n of [title, artist]) { n.classList.remove("swap"); void n.offsetWidth; n.classList.add("swap"); }
+      }
+      if ((m.art ?? "") !== shownArt) {
+        shownArt = m.art ?? "";
+        const url = shownArt ? `url("${shownArt}")` : "";
+        glow.style.backgroundImage = url;
+        cover.style.backgroundImage = url;
+        cover.hidden = !shownArt;
+        cover.classList.remove("swap");
+        void cover.offsetWidth;
+        cover.classList.add("swap");
+      }
       prev.disabled = !m.can_prev;
       next.disabled = !m.can_next;
       if (shownPlaying !== m.playing) {
+        const was = shownPlaying;
         shownPlaying = m.playing;
         play.replaceChildren(icon(m.playing ? MEDIA_ICON.pause : MEDIA_ICON.play));
+        if (was != null) { play.classList.remove("morph"); void play.offsetWidth; play.classList.add("morph"); }
       }
       const pos = mediaPosition();
       bar.show(pos, m.duration_ms, !!m.can_seek);
@@ -1084,7 +1237,14 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
         lineNext.textContent = "No timing for this song, so the lyrics don't follow along.";
       } else if (Array.isArray(State.lyrics)) {
         sing.show(pos, "♪");
-        lineNext.textContent = lyricAt(pos).next;
+        const nxt = lyricAt(pos).next;
+        if (nxt !== shownLine) {
+          shownLine = nxt;
+          lineNext.textContent = nxt;
+          lineNext.classList.remove("swap");
+          void lineNext.offsetWidth;
+          lineNext.classList.add("swap");
+        }
       } else {
         const key = `${m.title}|${m.artist}`;
         line.textContent = State.lyricsFor === key ? "No lyrics found for this song."

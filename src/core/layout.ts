@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai" | "lyrics" | "stats";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai" | "lyrics" | "stats" | "weather";
 
 export type BotStateName =
   | "idle"
@@ -41,7 +41,8 @@ export const ROUNDED_CORNER = 14;
 export const EXPANDED_CORNER = 22;
 
 export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
-  home: { height: 164, botX: 68, botY: 102, botDiameter: 58 },
+  home: { height: 240, botX: 68, botY: 102, botDiameter: 58 },
+  weather: { height: 222, botX: 0, botY: 0, botDiameter: 0 },
   drop: { height: 164, botX: 130, botY: 102, botDiameter: 66 },
   note: { height: 120, botX: 62, botY: 76, botDiameter: 50 },
   greeting: { height: 150, botX: 320, botY: 90, botDiameter: 0 },

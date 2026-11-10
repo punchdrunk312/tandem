@@ -2,6 +2,26 @@
 
 import type { BotStateName, IslandMode, IslandViewName } from "../core/layout";
 import type { Snapshot } from "../types";
+import type { Sky } from "../core/seasons";
+
+/** The weather where you are: now, today and the next hours. */
+export interface WeatherInfo {
+  city: string;
+  temp: number;
+  sky: Sky;
+  day: boolean;
+  feels: number;
+  high: number;
+  low: number;
+  wind: number;
+  sunrise: string;
+  sunset: string;
+  hours: { hour: string; temp: number; sky: Sky; day: boolean }[];
+  /** "device", "city" or "timezone". */
+  source: string;
+  /** When it was fetched (Date.now()). */
+  at: number;
+}
 import { loadNotes, type Note } from "../core/notes";
 
 export interface IslandSettings {
@@ -169,6 +189,8 @@ class IslandState {
   /** The video playing in the bar: its YouTube id, title, where it started (ms), and how
    *  far it has got (ms, from the player). */
   video: { id: string; title: string; startMs: number; nowMs: number } | null = null;
+  /** The weather (null until known, or when it's turned off). */
+  weather: WeatherInfo | null = null;
   /** The album art's colour ("rgb(r, g, b)"), for tinting the bar while the song shows. */
   mediaColor = "";
   /** Lyrics for `lyricsFor` ("title|artist"): time-stamped lines, or plain text, or none. */

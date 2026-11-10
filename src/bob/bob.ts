@@ -281,6 +281,9 @@ export class Bob {
 
   /** A song is playing: headphones on, nodding to the beat, notes floating up. */
   music = false;
+  /** How hard he dances to it (0 nodding … 1 dancing): while you look at the music. */
+  dance = 0;
+  private danceNow = 0;
   /** A focus is running: a sweatband on his forehead. */
   headband = false;
   /** How windy it is outside (0 calm … 1 gale): he and his things lean with it. */
@@ -953,8 +956,10 @@ export class Bob {
     x.translate(cx + this.yaw * R * 0.05, cy - this.pitch * R * 0.03);
     const tt = now();
     // Nodding to the beat (about 112 bpm), and leaning into the wind.
-    if (this.music) x.translate(0, -Math.abs(Math.sin(tt * Math.PI * 1.87)) * R * 0.07);
-    const lean = this.tilt + this.yaw * 0.05 + (this.music ? Math.sin(tt * Math.PI * 0.93) * 0.05 : 0) + this.wind * (0.05 + Math.sin(tt * 2.3) * 0.03);
+    this.danceNow += ((this.music ? this.dance : 0) - this.danceNow) * 0.06;
+    const dn = this.danceNow;
+    if (this.music) x.translate(Math.sin(tt * Math.PI * 0.93) * R * 0.07 * dn, -Math.abs(Math.sin(tt * Math.PI * 1.87)) * R * (0.07 + 0.09 * dn));
+    const lean = this.tilt + this.yaw * 0.05 + (this.music ? Math.sin(tt * Math.PI * 0.93) * (0.05 + 0.1 * dn) : 0) + this.wind * (0.05 + Math.sin(tt * 2.3) * 0.03);
     if (lean !== 0) x.rotate(lean);
     x.scale(this.sx, this.sy);
 

@@ -1039,8 +1039,8 @@ function islandSettings(): IslandOpts {
     return { ...ISLAND_DEFAULTS };
   }
 }
-const BAR_ICONS: [string, string][] = [["ai", "AI agents"], ["notes", "Notes"], ["music", "Now playing"], ["timer", "Focus timer"], ["devices", "Your computers"], ["game", "Catch with Bob"], ["sound", "Sound"]];
-const DEFAULT_BAR_ICONS = "ai,notes,music,timer,devices,game,sound";
+const BAR_ICONS: [string, string][] = [["ai", "AI agents"], ["notes", "Notes"], ["music", "Now playing"], ["weather", "Weather"], ["timer", "Focus timer"], ["devices", "Your computers"], ["game", "Catch with Bob"], ["sound", "Sound"]];
+const DEFAULT_BAR_ICONS = "ai,notes,music,weather,timer,devices,game,sound";
 /** The top-bar icons: a tick to show each, arrows to move it. */
 function barIconsEl(v: string, change: (v: string) => void): HTMLElement {
   const shown = (v || DEFAULT_BAR_ICONS).split(",").filter((id) => BAR_ICONS.some(([k]) => k === id));
@@ -1211,9 +1211,9 @@ function renderTopBar() {
           more: "A short card in the bar when a laptop is plugged in, runs low or is full, or when a computer joins or leaves. Each one only once in a while.",
           control: switchEl(is.moments, (v) => set({ moments: v })) }),
         tile({ id: "weather", icon: ICONS.weather, color: "blue", title: "Weather", line: "Rain, snow or sun in the bar; Bob dresses for it.", on: is.weather,
-          more: "The weather comes from Open-Meteo for the city you type (or the one in your time zone). Only the city name is sent.",
+          more: "The weather comes from Open-Meteo for where this computer is (Windows location, so a VPN doesn't fool it). Type a city to use that one instead.",
           control: h("div", { class: "row" },
-            h("input", { type: "text", class: "city-in", placeholder: "City", value: is.city, maxLength: 60, "aria-label": "City",
+            h("input", { type: "text", class: "city-in", placeholder: "My location", value: is.city, maxLength: 60, "aria-label": "City",
               onchange: (e: Event) => set({ city: (e.target as HTMLInputElement).value.trim() }) }),
             switchEl(is.weather, (v) => set({ weather: v }))) }),
         tile({ id: "voice", icon: ICONS.voice, color: "violet", title: "Hey Bob", line: "Say \"Hey Bob, play\", \"…next song\", \"…start focus\".", on: is.voice,

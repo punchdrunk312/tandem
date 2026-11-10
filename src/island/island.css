@@ -898,3 +898,179 @@ html.dev body { background: #2b2f38; }
 .m-pl { appearance: none; -webkit-appearance: none; width: 30px; height: 30px; border: none; border-radius: 50%; background: transparent; color: var(--ink); font: 600 17px/30px inherit; text-align: center; text-align-last: center; cursor: pointer; }
 .m-pl:hover { background: rgba(255, 255, 255, 0.12); }
 .m-pl option { color: #000; font-size: 13px; text-align: left; }
+
+/* ══ Motion: the bar opens, views slide, things roll and pop ═══════════════════ */
+#header { position: relative; z-index: 3; }
+#views { --dir: 1; }
+
+/* views slide in the direction you went (by the header's icon order) */
+.view { transform: translateX(calc(var(--dir) * 22px)) scale(0.985); }
+.view.out { transform: translateX(calc(var(--dir) * -22px)) scale(0.985); }
+.view.on { transform: none; }
+
+/* opening: the header drops in, then the view's parts one after another */
+#island.opening #header { animation: hdr-in 0.42s cubic-bezier(0.2, 0.9, 0.25, 1.05) 0.05s both; }
+#island.opening .view.on > * { animation: kid-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.05) both; }
+#island.opening .view.on > :nth-child(1) { animation-delay: 0.09s; }
+#island.opening .view.on > :nth-child(2) { animation-delay: 0.14s; }
+#island.opening .view.on > :nth-child(3) { animation-delay: 0.19s; }
+#island.opening .view.on > :nth-child(4) { animation-delay: 0.24s; }
+#island.opening .view.on > :nth-child(n + 5) { animation-delay: 0.29s; }
+@keyframes hdr-in { from { opacity: 0; transform: translateY(-8px); filter: blur(4px); } }
+@keyframes kid-in { from { opacity: 0; transform: translateY(10px) scale(0.98); filter: blur(5px); } }
+
+/* buttons pop when pressed, and settle with a little spring */
+.btn, .icon-btn, .h-tile { transition: transform 0.28s cubic-bezier(0.3, 1.6, 0.4, 1), background 0.15s, color 0.15s, box-shadow 0.25s; }
+.btn:active, .icon-btn:active, .h-tile:active { transform: scale(0.9); transition-duration: 0.08s; }
+.icon-btn.on { color: var(--ink); background: rgba(255, 255, 255, 0.1); box-shadow: 0 0 14px -4px var(--bar-tint, var(--teal)); }
+
+/* a number that changed gives a small bounce */
+.rolled { display: inline-block; animation: rolled 0.6s cubic-bezier(0.3, 1.5, 0.4, 1); }
+@keyframes rolled { 30% { transform: translateY(-3px) scale(1.08); } }
+
+/* notes slide down into the bar */
+.view.note.on { animation: note-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.05); }
+@keyframes note-in { from { transform: translateY(-14px); opacity: 0; } }
+
+/* the bar's bottom edge glows in the album's colours while music plays */
+#island::after {
+  content: ""; position: absolute; left: 12%; right: 12%; bottom: -1px; height: 2px; border-radius: 2px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--bar-tint, var(--teal)), transparent);
+  box-shadow: 0 0 16px 3px color-mix(in srgb, var(--bar-tint, var(--teal)) 55%, transparent);
+  opacity: 0; transition: opacity 0.6s;
+}
+:root[data-music="on"] #island::after { opacity: 0.85; animation: edge 2.6s ease-in-out infinite; }
+@keyframes edge { 50% { opacity: 0.4; left: 22%; right: 22%; } }
+
+/* the little equaliser */
+.eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; margin-right: 7px; flex: none; }
+.eq i { width: 3px; height: 3px; border-radius: 2px; background: var(--bar-tint, var(--teal)); transition: height 0.3s; }
+.playing .eq i { animation: eq 0.9s ease-in-out infinite; }
+.playing .eq i:nth-child(2) { animation-duration: 0.7s; animation-delay: -0.2s; }
+.playing .eq i:nth-child(3) { animation-duration: 1.1s; animation-delay: -0.5s; }
+.playing .eq i:nth-child(4) { animation-duration: 0.8s; animation-delay: -0.35s; }
+@keyframes eq { 0%, 100% { height: 3px; } 50% { height: 12px; } }
+
+/* ── home: three live tiles ───────────────────────────────────────────── */
+.view.home .xfers { top: 188px; }
+.h-tiles { position: absolute; left: 14px; right: 14px; top: 116px; display: grid; grid-template-columns: 0.9fr 1fr 1.4fr; gap: 8px; }
+.h-tile {
+  position: relative; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; height: 62px; padding: 6px 12px;
+  border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.06); color: inherit; font: inherit; text-align: left; overflow: hidden;
+}
+button.h-tile { cursor: pointer; }
+button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.1); box-shadow: 0 10px 22px -12px var(--bar-tint, var(--teal)); }
+.h-tile::before { content: ""; position: absolute; inset: 0; background: radial-gradient(120px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.08), transparent 70%); opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+.h-tile:hover::before { opacity: 1; }
+.view.home.on .h-tile { animation: tile-in 0.55s cubic-bezier(0.2, 0.9, 0.25, 1.1) both; animation-delay: calc(0.08s + var(--i) * 0.07s); }
+@keyframes tile-in { from { opacity: 0; transform: translateY(12px) scale(0.94); } }
+.ht-sub, .ht-song { line-height: 1.3; }
+.ht-big { line-height: 1.15; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ht-sub { font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ht-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ht-emoji { font-size: 18px; line-height: 1; }
+.ht-num { line-height: 1.15; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ht-song { font-size: 13px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.t-weather .ht-emoji { animation: float 3.4s ease-in-out infinite; }
+@keyframes float { 50% { transform: translateY(-2px) rotate(-4deg); } }
+
+/* ── music: the album fills the bar with its colours ─────────────────── */
+.m-glow { position: absolute; inset: -60px -20px -20px; background: center / cover no-repeat; filter: blur(34px) saturate(1.7); opacity: 0; transform: scale(1.2); pointer-events: none; transition: opacity 0.8s; }
+.view.media.on .m-glow { opacity: 0.38; animation: drift 14s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: scale(1.35) translate(-4%, 3%); } }
+.m-cover { position: absolute; left: 40px; top: 116px; width: 50px; height: 50px; border-radius: 12px; background: center / cover no-repeat; box-shadow: 0 10px 22px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.m-cover[hidden] { display: none; }
+.view.media.playing .m-cover { animation: breathe 3.2s ease-in-out infinite; }
+.m-cover.swap { animation: cover-in 0.6s cubic-bezier(0.2, 0.9, 0.25, 1.2) both !important; }
+@keyframes cover-in { from { opacity: 0; transform: scale(0.6) rotate(-10deg); } }
+@keyframes breathe { 50% { transform: scale(1.04); } }
+.m-text { z-index: 1; }
+.swap { animation: swap-in 0.45s cubic-bezier(0.2, 0.9, 0.25, 1.05); }
+@keyframes swap-in { from { opacity: 0; transform: translateX(14px); filter: blur(4px); } }
+.m-btn.morph svg { animation: morph 0.4s cubic-bezier(0.3, 1.5, 0.4, 1); }
+@keyframes morph { from { transform: scale(0.3) rotate(-90deg); opacity: 0; } }
+.m-line.next.swap { animation: lyric-in 0.5s ease-out; }
+@keyframes lyric-in { from { opacity: 0; transform: translateY(8px); } }
+.seek > i { transition: width 0.12s linear; }
+
+/* ── weather: a little live sky ──────────────────────────────────────── */
+.view.weather { overflow: visible; }
+.wx-scene { position: absolute; inset: -44px -10px -10px; overflow: hidden; z-index: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(180deg, #2f80ed, #6cb4f7); transition: background 0.8s; }
+.view.weather[data-sky="clear"][data-day="0"] .wx-scene { background: linear-gradient(180deg, #070d24, #1a2752); }
+.view.weather[data-sky="clouds"] .wx-scene { background: linear-gradient(180deg, #4d6580, #8ea3b8); }
+.view.weather[data-sky="clouds"][data-day="0"] .wx-scene, .view.weather[data-sky="fog"][data-day="0"] .wx-scene { background: linear-gradient(180deg, #121927, #2b3446); }
+.view.weather[data-sky="rain"] .wx-scene, .view.weather[data-sky="drizzle"] .wx-scene { background: linear-gradient(180deg, #24364d, #4b5f78); }
+.view.weather[data-sky="storm"] .wx-scene { background: linear-gradient(180deg, #121826, #313a52); }
+.view.weather[data-sky="snow"] .wx-scene { background: linear-gradient(180deg, #4f6b8a, #93a9c0); }
+.view.weather[data-sky="fog"] .wx-scene { background: linear-gradient(180deg, #697887, #a8b3be); }
+.view.weather[data-day="0"]:is([data-sky="rain"], [data-sky="drizzle"], [data-sky="snow"]) .wx-scene { filter: brightness(0.55); }
+.wx-scene > div { position: absolute; inset: 0; opacity: 0; transition: opacity 0.8s; }
+
+.wx-sun { inset: -30px auto auto 150px !important; width: 96px; height: 96px; }
+.wx-sun::before { content: ""; position: absolute; inset: 22px; border-radius: 50%; background: radial-gradient(circle, #fff7c2, #ffd23f 55%, #ffb000); box-shadow: 0 0 40px 12px rgba(255, 200, 60, 0.55); }
+.wx-sun i { position: absolute; inset: 0; border-radius: 50%; background: repeating-conic-gradient(rgba(255, 225, 120, 0.55) 0 6deg, transparent 6deg 30deg); -webkit-mask: radial-gradient(circle, transparent 34px, #000 35px, #000 46px, transparent 47px); mask: radial-gradient(circle, transparent 34px, #000 35px, #000 46px, transparent 47px); animation: spin 26s linear infinite; }
+@keyframes spin { to { transform: rotate(1turn); } }
+.view.weather[data-day="1"]:is([data-sky="clear"], [data-sky="clouds"]) .wx-sun { opacity: 1; }
+.view.weather[data-day="1"][data-sky="clouds"] .wx-sun { opacity: 0.55; }
+
+.wx-moon { inset: 8px auto auto 178px !important; width: 34px; height: 34px; border-radius: 50%; box-shadow: inset -9px 5px 0 0 #f4f1d8; filter: drop-shadow(0 0 12px rgba(244, 241, 216, 0.6)); animation: float 6s ease-in-out infinite; }
+.wx-stars { background-image: radial-gradient(1.4px 1.4px at 12% 18%, #fff, transparent), radial-gradient(1px 1px at 28% 42%, #fff, transparent), radial-gradient(1.2px 1.2px at 47% 12%, #fff, transparent), radial-gradient(1px 1px at 63% 35%, #fff, transparent), radial-gradient(1.4px 1.4px at 78% 64%, #fff, transparent), radial-gradient(1px 1px at 88% 22%, #fff, transparent), radial-gradient(1.2px 1.2px at 36% 70%, #fff, transparent), radial-gradient(1px 1px at 55% 82%, #fff, transparent), radial-gradient(1px 1px at 8% 76%, #fff, transparent); animation: twinkle 3.5s ease-in-out infinite; }
+@keyframes twinkle { 50% { filter: brightness(0.5); } }
+.view.weather[data-day="0"]:is([data-sky="clear"], [data-sky="clouds"]) .wx-moon { opacity: 1; }
+.view.weather[data-day="0"][data-sky="clear"] .wx-stars { opacity: 1; }
+.view.weather[data-day="0"][data-sky="clouds"] .wx-stars { opacity: 0.4; }
+
+.wx-clouds i { position: absolute; width: 180px; height: 54px; border-radius: 60px; background: rgba(255, 255, 255, 0.85); filter: blur(10px); animation: cloud 38s linear infinite; }
+.wx-clouds i:nth-child(1) { top: 10px; animation-delay: -8s; }
+.wx-clouds i:nth-child(2) { top: 56px; width: 240px; animation-duration: 52s; animation-delay: -30s; opacity: 0.8; }
+.wx-clouds i:nth-child(3) { top: 120px; width: 150px; animation-duration: 44s; animation-delay: -18s; opacity: 0.6; }
+.wx-clouds i:nth-child(4) { top: 30px; width: 200px; animation-duration: 60s; animation-delay: -45s; opacity: 0.7; }
+@keyframes cloud { from { transform: translateX(-260px); } to { transform: translateX(760px); } }
+.view.weather:is([data-sky="clouds"], [data-sky="rain"], [data-sky="drizzle"], [data-sky="storm"], [data-sky="snow"], [data-sky="fog"]) .wx-clouds { opacity: 0.55; }
+.view.weather:is([data-sky="rain"], [data-sky="storm"]) .wx-clouds i { background: rgba(70, 85, 105, 0.9); }
+.view.weather[data-day="0"] .wx-clouds i { background: rgba(90, 100, 125, 0.7); }
+
+.wx-rain i { position: absolute; top: -20px; left: var(--x); width: 1.5px; height: 16px; border-radius: 1px; background: linear-gradient(transparent, rgba(190, 220, 255, 0.85)); animation: rain var(--s) linear var(--d) infinite; }
+@keyframes rain { to { transform: translate(-30px, 260px); } }
+.view.weather:is([data-sky="rain"], [data-sky="storm"]) .wx-rain { opacity: 1; }
+.view.weather[data-sky="drizzle"] .wx-rain { opacity: 0.6; }
+.view.weather[data-sky="drizzle"] .wx-rain i:nth-child(odd) { display: none; }
+
+.wx-snow i { position: absolute; top: -10px; left: var(--x); width: var(--z); height: var(--z); border-radius: 50%; background: #fff; opacity: 0.9; animation: snow var(--s) linear var(--d) infinite; }
+@keyframes snow { 50% { transform: translate(14px, 120px); } to { transform: translate(-6px, 260px); } }
+.view.weather[data-sky="snow"] .wx-snow { opacity: 1; }
+
+.wx-fog i { position: absolute; left: -30%; width: 160%; height: 60px; border-radius: 50%; background: rgba(255, 255, 255, 0.35); filter: blur(16px); animation: fog 14s ease-in-out infinite alternate; }
+.wx-fog i:nth-child(1) { top: 40px; }
+.wx-fog i:nth-child(2) { top: 130px; animation-delay: -7s; }
+@keyframes fog { to { transform: translateX(12%); } }
+.view.weather[data-sky="fog"] .wx-fog { opacity: 1; }
+
+.wx-flash { background: rgba(255, 255, 255, 0.9); }
+.view.weather[data-sky="storm"] .wx-flash { animation: flash 7s infinite; }
+@keyframes flash { 0%, 62%, 66%, 70%, 100% { opacity: 0; } 63% { opacity: 0.7; } 68% { opacity: 0.45; } }
+
+.wx-info { position: absolute; inset: 0; z-index: 1; display: flex; gap: 16px; padding: 2px 10px 0 18px; text-shadow: 0 1px 10px rgba(0, 0, 0, 0.35); }
+.wx-now { flex: 0 0 auto; min-width: 150px; }
+.wx-city { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.9; }
+.wx-temp { font-size: 58px; font-weight: 250; letter-spacing: -0.04em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.wx-what { font-size: 15px; font-weight: 600; }
+.wx-more { font-size: 12px; opacity: 0.8; margin-top: 2px; }
+.wx-side { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+.wx-hours { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.wx-hour { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0; border-radius: 14px; background: rgba(255, 255, 255, 0.14); border: 1px solid rgba(255, 255, 255, 0.16); backdrop-filter: blur(8px); }
+.view.weather.on .wx-hour { animation: tile-in 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.1) both; animation-delay: calc(0.12s + var(--i) * 0.05s); }
+.wx-h { font-size: 11px; opacity: 0.8; }
+.wx-e { font-size: 18px; line-height: 1.2; }
+.wx-t { font-size: 13px; font-weight: 650; }
+.wx-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.wx-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; background: rgba(0, 0, 0, 0.22); font-size: 12px; font-weight: 600; }
+.wx-empty { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; font-size: 14px; }
+.wx-empty[hidden], .wx-info[hidden] { display: none; }
+/* over a bright sky the header stays readable */
+#island:has(.view.weather.on) #header .icon-btn, #island:has(.view.weather.on) .hd-title { color: rgba(255, 255, 255, 0.92); filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wx-scene *, .eq i, .m-glow, .m-cover, .h-tile, #island::after { animation: none !important; }
+}
