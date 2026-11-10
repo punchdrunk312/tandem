@@ -1,7 +1,7 @@
 import "@fontsource-variable/inter";
 import "./panel.css";
 import { call, onEvent, onFileDrop, onSnapshot } from "./api";
-import type { ElevState, Side, Snapshot, UiOptions } from "../types";
+import type { DeviceInfo, ElevState, Side, Snapshot, UiOptions } from "../types";
 import { RELEASES, markSeen, pending } from "../whatsnew";
 
 // ---------------------------------------------------------------- tiny DOM helper
@@ -75,6 +75,9 @@ const topbar = h("div", { class: "feat-page" });
 const features = h("div", { class: "feat-page" });
 const bobPage = h("div", { class: "feat-page" });
 const aiPage = h("div", { class: "feat-page" });
+const quick = h("section", { class: "card dash-card" });
+const xfers = h("section", { class: "card dash-card" });
+const activity = h("section", { class: "card dash-card" });
 const veil = h("div", { id: "veil" });
 document.body.append(veil);
 
@@ -123,7 +126,7 @@ function ico(d: string, size = 18): SVGElement {
 
 type PageId = "computers" | "features" | "files" | "ai" | "bar" | "bob" | "account";
 const PAGES: { id: PageId; label: string; title: string; sub: string; icon: string }[] = [
-  { id: "computers", label: "Computers", title: "Computers", sub: "Pair computers and arrange them around this one.", icon: ICONS.computers },
+  { id: "computers", label: "Computers", title: "Your Computers", sub: "Manage and control all your connected devices.", icon: ICONS.computers },
   { id: "features", label: "Features", title: "Features", sub: "Turn things on and off. Everything is ready to use.", icon: ICONS.features },
   { id: "files", label: "Files", title: "Files", sub: "Send files and folders to your other computers.", icon: ICONS.files },
   { id: "ai", label: "AI", title: "AI", sub: "Claude Code, Codex and ChatGPT across your computers.", icon: ICONS.ai },
@@ -155,7 +158,17 @@ for (const pg of PAGES) {
   (pg as unknown as { body: HTMLElement }).body = body;
 }
 const bodyOf = (id: PageId) => (PAGES.find((x) => x.id === id) as unknown as { body: HTMLElement }).body;
-bodyOf("computers").append(stage, layout);
+bodyOf("computers").append(stage, h("div", { class: "dash-row" }, layout, quick), h("div", { class: "dash-row" }, xfers, activity));
+layout.classList.add("dash-card");
+// "Add Computer" sits beside the page title.
+pageEls.get("computers")!.querySelector(".page-head")!.append(
+  h("button", { class: "primary add-btn", onclick: () => openAdd() }, ico("M12 5v14M5 12h14", 16), "Add Computer"));
+function openAdd() {
+  addOpen = true;
+  keys.stage = "";
+  if (snap) renderStage(snap);
+  requestAnimationFrame(() => stage.querySelector(".add")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
 bodyOf("features").append(features);
 bodyOf("files").append(files);
 bodyOf("bar").append(topbar);
@@ -199,10 +212,11 @@ function applySearch() {
 content.append(noHits);
 
 const side = h("aside", { class: "side" },
-  h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-name" }, "CubeCursor")),
+  h("div", { class: "brand" }, h("span", { class: "brand-logo" }), h("span", { class: "brand-text" }, h("span", { class: "brand-name" }, "CubeCursor"), h("small", {}, "Control · Sync · Share"))),
   h("label", { class: "search" }, ico(ICONS.search, 15), searchIn),
-  statusEl, nav,
+  nav,
   h("div", { class: "side-foot" },
+    statusEl,
     h("div", { class: "foot-row" }, h("kbd", {}, "Ctrl+Alt+Z"), h("span", {}, "control bar")),
     h("button", { class: "link", onclick: () => startTour() }, "Show the tour")));
 app.append(side, content);
@@ -323,100 +337,201 @@ function pairSection(s: Snapshot, heading: string, first = false): Node[] {
 
 const MAX_COMPUTERS = 8;
 
-/** A little ring with a number in it (battery, load). */
-function miniRing(pct: number, color: string, label: string): HTMLElement {
-  const r = 15, c = 2 * Math.PI * r;
-  const w = h("span", { class: "mring", title: label });
-  w.innerHTML = `<svg viewBox="0 0 36 36" width="36" height="36"><circle cx="18" cy="18" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="3.5"/><circle cx="18" cy="18" r="${r}" fill="none" stroke="${color}" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="${(c * Math.max(0, Math.min(100, pct))) / 100} ${c}" transform="rotate(-90 18 18)"/></svg>`; // numbers only
-  w.append(h("b", {}, String(Math.round(pct))));
+const ACC_ICON = { earbuds: "M7 4a3 3 0 0 0-3 3v3a3 3 0 0 0 3 3v7M17 4a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3v7" };
+
+/** A little monitor or laptop, its screen in the computer's colour. */
+function machineArt(laptop: boolean, color: string, on: boolean): HTMLElement {
+  const w = h("span", { class: `mach${on ? "" : " off"}` });
+  const id = `g${Math.random().toString(36).slice(2, 8)}`;
+  const screen = `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${color}"/><stop offset="0.55" stop-color="#1b3fb8"/><stop offset="1" stop-color="#0b1430"/></linearGradient></defs>`;
+  w.innerHTML = laptop // trusted: a colour and our own shapes
+    ? `<svg viewBox="0 0 120 80" width="120" height="80">${screen}<rect x="18" y="6" width="84" height="54" rx="5" fill="#0d1424" stroke="#2a3854"/><rect x="22" y="10" width="76" height="46" rx="2" fill="url(#${id})"/><path d="M8 62h104l-6 8H14z" fill="#3a465c"/><rect x="50" y="62" width="20" height="2.5" rx="1" fill="#232c3d"/></svg>`
+    : `<svg viewBox="0 0 120 80" width="120" height="80">${screen}<rect x="10" y="4" width="100" height="58" rx="5" fill="#0d1424" stroke="#2a3854"/><rect x="14" y="8" width="92" height="50" rx="2" fill="url(#${id})"/><path d="M52 62h16l3 9H49z" fill="#3a465c"/><rect x="40" y="71" width="40" height="4" rx="2" fill="#3a465c"/></svg>`;
   return w;
 }
 
-/** One computer: who it is, how it is doing, and what you can do with it. */
-function peerCard(s: Snapshot, p: Snapshot["paired"][number]): HTMLElement {
-  const color = p.color ?? "#14b8a6";
-  const d = p.device ?? null;
-  const inControl = p.id === s.control_peer;
-  const where = p.fleet ? "Fleet · files only" : `On your ${sideLabel(p.side)}`;
-  const status = !p.connected ? (p.nearby ? "Seen nearby · not connected" : "Not connected")
-    : inControl ? (s.control === "remote" ? "You're using it now" : "It's using this computer")
-    : `${where}${p.ping_ms != null ? ` · ${p.ping_ms} ms` : ""}`;
-  const stats: Node[] = [];
-  if (p.connected && d) {
-    if (d.battery != null) stats.push(h("div", { class: "stat" }, miniRing(d.battery, d.battery <= 20 && !d.plugged ? "#e8743b" : "#22a559", "Battery"), h("span", {}, d.charging ? "Charging" : d.plugged ? "Plugged in" : "Battery")));
-    stats.push(h("div", { class: "stat" }, miniRing(d.cpu, d.cpu > 80 ? "#e8743b" : color, "Processor"), h("span", {}, "Busy")));
-    for (const a of (d.accessories ?? []).slice(0, 2)) stats.push(h("div", { class: "stat" }, miniRing(a.battery, a.battery <= 15 ? "#e8743b" : "#2c6fd6", a.name), h("span", { class: "acc" }, a.name)));
-  }
-  const actions: Node[] = p.connected
-    ? [...(p.fleet ? [] : [h("button", { class: "primary", onclick: () => call("engage", { peerId: p.id }) }, inControl && s.control === "remote" ? "Come back" : "Jump there")]),
-       h("button", { onclick: () => call("disconnect", { peerId: p.id }) }, "Disconnect")]
-    : [h("button", { class: "primary", onclick: () => call("connect_known", { id: p.id }) }, "Connect"),
-       ...(p.wakeable ? [h("button", { onclick: () => call("wake_peer", { peerId: p.id }) }, "Wake it")] : [])];
-  return h("div", { class: `pc${p.connected ? " on" : ""}${inControl ? " live" : ""}`, style: `--c:${color}` },
-    h("div", { class: "pc-top" },
-      h("span", { class: "pc-av" }, Array.from(p.name)[0]?.toUpperCase() ?? "?"),
-      h("div", { class: "grow" }, h("div", { class: "pc-name" }, p.name), h("div", { class: "pc-sub" }, h("i", { class: "pc-dot" }), status))),
-    stats.length ? h("div", { class: "pc-stats" }, ...stats) : null,
-    h("div", { class: "pc-act" }, ...actions),
-    h("label", { class: "pc-fleet", title: "Fleet computers only send and receive files: no screen edge, no mouse, keyboard or clipboard. Up to 100 can be connected." },
-      switchEl(!!p.fleet, (on) => call("set_fleet", { peerId: p.id, on })), h("span", {}, "Files only (fleet)")));
+const pct = (n: number) => `${Math.round(n)}%`;
+
+/** Battery, processor, memory and free space, small, under a computer. */
+function machineStats(d: DeviceInfo | null | undefined): HTMLElement | null {
+  if (!d) return null;
+  const chips: Node[] = [];
+  if (d.battery != null) chips.push(h("span", { class: `chip${d.battery <= 20 && !d.plugged ? " warn" : ""}`, title: d.charging ? "Charging" : d.plugged ? "Plugged in" : "On battery" }, `${d.charging ? "⚡" : "🔋"} ${pct(d.battery)}`));
+  chips.push(h("span", { class: `chip${d.cpu > 85 ? " warn" : ""}`, title: "Processor" }, `CPU ${pct(d.cpu)}`));
+  chips.push(h("span", { class: "chip", title: "Memory in use" }, `RAM ${pct(d.mem)}`));
+  if (d.disk_total_gb) chips.push(h("span", { class: `chip${d.disk_free_gb < 10 ? " warn" : ""}`, title: "Free disk space" }, `${Math.round(d.disk_free_gb)} GB free`));
+  for (const a of (d.accessories ?? []).slice(0, 2)) chips.push(h("span", { class: `chip${a.battery <= 15 ? " warn" : ""}`, title: a.name }, `${a.name} ${pct(a.battery)}`));
+  return h("div", { class: "chips" }, ...chips);
 }
 
-const ACC_ICON: Record<string, string> = {
-  earbuds: "M7 4a3 3 0 0 0-3 3v3a3 3 0 0 0 3 3v7M17 4a3 3 0 0 1 3 3v3a3 3 0 0 1-3 3v7",
-  headphones: "M3 15v-3a9 9 0 0 1 18 0v3M3 15a2 2 0 0 1 2-2h1v7H5a2 2 0 0 1-2-2zM21 15a2 2 0 0 0-2-2h-1v7h1a2 2 0 0 0 2-2z",
-  mouse: "M12 3a6 6 0 0 0-6 6v6a6 6 0 0 0 12 0V9a6 6 0 0 0-6-6zM12 7v4",
-  keyboard: "M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10",
-  gamepad: ICONS.game,
-  speaker: "M6 3h12v18H6zM12 15a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM12 7h.01",
-  other: "M7 7l10 10-5 5V2l5 5L7 17",
-};
+/** The ⋯ menu on a computer card. */
+function moreMenu(items: [string, () => void, boolean?][]): HTMLElement {
+  const d = h("details", { class: "more" }) as HTMLDetailsElement;
+  d.append(h("summary", { title: "More", "aria-label": "More" }, ico("M5 12h.01M12 12h.01M19 12h.01", 18)),
+    h("div", { class: "more-list" }, ...items.map(([label, act, danger]) =>
+      h("button", { class: danger ? "danger" : "", onclick: () => { d.open = false; act(); } }, label))));
+  return d;
+}
+// A click anywhere else closes an open menu.
+document.addEventListener("click", (e) => {
+  for (const d of document.querySelectorAll<HTMLDetailsElement>("details.more[open]")) if (!d.contains(e.target as Node)) d.open = false;
+});
 
-/** Bluetooth accessories on this computer: earbuds show each bud and the case. */
-function accCard(list: NonNullable<Snapshot["me"]>["accessories"]): HTMLElement {
-  return h("section", { class: "card acc-card" },
-    h("h2", {}, "Bluetooth on this computer"),
-    h("div", { class: "accs" }, ...list.map((a) => {
-      const parts = a.left != null || a.right != null
-        ? [["L", a.left], ["R", a.right], ["Case", a.case]].filter(([, v]) => v != null).map(([l, v]) =>
-            h("div", { class: "acc-part" }, miniRing(v as number, (v as number) <= 15 ? "#e8743b" : "#22a559", `${l}`), h("span", {}, l as string)))
-        : [h("div", { class: "acc-part" }, miniRing(a.battery, a.battery <= 15 ? "#e8743b" : "#22a559", "Battery"))];
-      return h("div", { class: "acc" },
-        h("span", { class: "t-ico", style: "background:#e1efff;color:#2c6fd6" }, ico(ACC_ICON[a.kind ?? "other"] ?? ACC_ICON.other, 20)),
-        h("div", { class: "grow" }, h("div", { class: "pc-name" }, a.name), h("div", { class: "pc-sub" }, "Connected")),
-        h("div", { class: "acc-parts" }, ...parts));
-    })),
-    h("p", { class: "muted", style: "margin-top:10px" }, "Earbuds, headsets, mice and keyboards that report their battery show up here, and in the bar when they connect."));
+function meCard(s: Snapshot): HTMLElement {
+  const d = s.me ?? null;
+  return h("div", { class: "pc2 me" },
+    machineArt(d?.battery != null, s.my_color ?? "#2dd4bf", true),
+    h("div", { class: "pc2-body" },
+      h("div", { class: "pc2-name" }, s.device_name),
+      h("div", { class: "pc2-sub" }, "This device", h("span", { class: "you" }, "You")),
+      machineStats(d)),
+    h("i", { class: "pc2-dot on" }));
+}
+
+function peerCard2(s: Snapshot, p: Snapshot["paired"][number]): HTMLElement {
+  const d = p.device ?? null;
+  const inControl = p.id === s.control_peer;
+  const ip = s.nearby.find((n) => n.id === p.id)?.addr;
+  const pill = !p.connected ? h("span", { class: "pill off" }, p.nearby ? "Nearby" : "Offline")
+    : inControl ? h("span", { class: "pill live" }, s.control === "remote" ? "You're on it" : "Using this PC")
+    : p.fleet ? h("span", { class: "pill" }, "Files only")
+    : h("span", { class: "pill on" }, "Connected");
+  const items: [string, () => void, boolean?][] = p.connected
+    ? [...(p.fleet ? [] : [[inControl && s.control === "remote" ? "Come back here" : "Jump there", () => call("engage", { peerId: p.id })] as [string, () => void]]),
+       [p.fleet ? "Put it back on the desk" : "Files only (fleet)", () => call("set_fleet", { peerId: p.id, on: !p.fleet })],
+       ["Disconnect", () => call("disconnect", { peerId: p.id })],
+       ["Forget this computer", () => call("forget", { id: p.id }), true]]
+    : [["Connect", () => call("connect_known", { id: p.id })],
+       ...(p.wakeable ? [["Wake it up", () => call("wake_peer", { peerId: p.id })] as [string, () => void]] : []),
+       ["Forget this computer", () => call("forget", { id: p.id }), true]];
+  const sub = [ip, p.connected && !p.fleet ? `on your ${sideLabel(p.side)}` : null, p.connected && p.ping_ms != null ? `${p.ping_ms} ms` : null].filter(Boolean).join(" · ");
+  return h("div", { class: `pc2${p.connected ? "" : " away"}${inControl ? " live" : ""}`, style: `--c:${p.color ?? "#2f7cf6"}` },
+    machineArt(d?.battery != null, p.color ?? "#2f7cf6", p.connected),
+    h("div", { class: "pc2-body" },
+      h("div", { class: "pc2-name" }, p.name),
+      h("div", { class: "pc2-sub" }, sub || (p.connected ? "Connected" : "Not connected")),
+      p.connected ? machineStats(d) : null,
+      h("div", { class: "pc2-foot" }, pill, moreMenu(items))),
+    h("i", { class: `pc2-dot${p.connected ? " on" : ""}` }));
 }
 
 function renderStage(s: Snapshot) {
-  const live = s.paired.filter((p) => p.connected);
-  update(stage, "stage", [s.control, s.control_peer, s.paired.map((p) => [p.id, p.name, p.side, p.connected, p.nearby, p.ping_ms, p.color, p.wakeable, p.fleet, p.device?.battery, p.device?.charging, p.device?.plugged, p.device ? Math.round(p.device.cpu / 10) : null, p.device?.accessories]), s.me?.accessories, s.pairing_code, s.nearby, s.error, addOpen], () => {
+  update(stage, "stage", [s.device_name, s.my_color, s.me ? [s.me.battery, s.me.charging, Math.round(s.me.cpu / 5), Math.round(s.me.mem / 5), Math.round(s.me.disk_free_gb), s.me.accessories] : null, s.control, s.control_peer, s.paired.map((p) => [p.id, p.name, p.side, p.connected, p.nearby, p.ping_ms, p.color, p.wakeable, p.fleet, p.device?.battery, p.device?.charging, p.device ? [Math.round(p.device.cpu / 5), Math.round(p.device.mem / 5), Math.round(p.device.disk_free_gb)] : null, p.device?.accessories]), s.pairing_code, s.nearby, s.error, addOpen], () => {
     stage.className = s.paired.length ? "stage" : "card";
     if (!s.paired.length) return pairSection(s, "Add your first computer", true);
-    const ctl = s.paired.find((p) => p.id === s.control_peer)?.name ?? "";
-    const hero = h("div", { class: "hero2" },
-      h("div", { class: "big" },
-        s.control === "remote" ? "You're on " : s.control === "controlled" ? "" : live.length ? "Connected to " : "Waiting for ",
-        h("em", {}, s.control === "remote" || s.control === "controlled" ? ctl : live.length > 1 ? `${live.length} computers` : live[0]?.name ?? (s.paired.length > 1 ? "your computers" : s.paired[0].name)),
-        s.control === "controlled" ? " is using this one" : ""),
-      h("div", { class: "muted" },
-        s.control === "remote" ? "Your mouse and keyboard are over there. Move back through the edge, or press Scroll Lock, to come back."
-        : live.length ? "Push your cursor through an edge to cross. Copy and paste works everywhere." : "They connect by themselves when they're on and on this network."));
-    const out: Node[] = [hero, h("div", { class: "pcs" }, ...s.paired.map((p) => peerCard(s, p)))];
-    const mine = s.me?.accessories ?? [];
-    if (mine.length) out.push(accCard(mine));
+    const cards = h("div", { class: "pcs2" }, meCard(s), ...s.paired.map((p) => peerCard2(s, p)));
     if (s.paired.length < MAX_COMPUTERS) {
-      out.push(h("details", { class: "add", open: addOpen, ontoggle: (e: Event) => { addOpen = (e.target as HTMLDetailsElement).open; } },
+      cards.append(h("button", { class: "pc2 add-card", onclick: () => openAdd() }, h("span", { class: "plus2" }, ico("M12 5v14M5 12h14", 26)), h("span", {}, "Add Another Computer")));
+    }
+    const out: Node[] = [cards];
+    if (addOpen && s.paired.length < MAX_COMPUTERS) {
+      out.push(h("details", { class: "add", open: true, ontoggle: (e: Event) => { addOpen = (e.target as HTMLDetailsElement).open; if (!addOpen) { keys.stage = ""; renderStage(snap!); } } },
         h("summary", {}, h("span", { class: "plus" }, "+"), "Add another computer"),
         h("div", { class: "card" }, ...pairSection(s, "Pair a computer"))));
-    } else if (s.error) {
-      out.push(h("div", { class: "err", role: "alert" }, s.error));
     }
+    if (s.error && !addOpen) out.push(h("div", { class: "err", role: "alert" }, s.error));
     return out;
   });
 }
 
+// ---------------------------------------------------------------- the dashboard's other cards
+const ACT_KEY = "cc.activity";
+type Act = { at: number; text: string; kind: "on" | "off" | "file" };
+let acts: Act[] = [];
+try { acts = JSON.parse(localStorage.getItem(ACT_KEY) ?? "[]"); } catch { acts = []; }
+let seenLive: Set<string> | null = null;
+const seenDone = new Set<string>();
+function logAct(text: string, kind: Act["kind"]) {
+  acts = [{ at: Date.now(), text, kind }, ...acts].slice(0, 30);
+  try { localStorage.setItem(ACT_KEY, JSON.stringify(acts)); } catch { /* storage unavailable */ }
+}
+/** What happened since the last snapshot: connections and finished transfers. */
+function trackActivity(s: Snapshot) {
+  const live = new Set(s.paired.filter((p) => p.connected).map((p) => p.id));
+  if (seenLive) {
+    for (const p of s.paired) {
+      if (live.has(p.id) && !seenLive.has(p.id)) logAct(`Connected to ${p.name}`, "on");
+      if (!live.has(p.id) && seenLive.has(p.id)) logAct(`${p.name} disconnected`, "off");
+    }
+  }
+  seenLive = live;
+  for (const t of s.transfers) {
+    const k = `${t.direction}-${t.id}`;
+    if (t.state === "done" && !seenDone.has(k)) {
+      seenDone.add(k);
+      if (seenDone.size > 1 || acts.every((a) => a.text.indexOf(t.name) < 0)) logAct(`${t.direction === "out" ? "Sent" : "Received"} ${t.name}${t.peer ? ` ${t.direction === "out" ? "to" : "from"} ${t.peer}` : ""}`, "file");
+    }
+  }
+}
+function ago(at: number): string {
+  const m = Math.round((Date.now() - at) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const hrs = Math.round(m / 60);
+  return hrs < 24 ? `${hrs} h ago` : `${Math.round(hrs / 24)} d ago`;
+}
+
+function cardHead(iconPath: string, title: string, sub: string | null, right?: Node): HTMLElement {
+  return h("div", { class: "dc-head" },
+    h("span", { class: "dc-ico" }, ico(iconPath, 19)),
+    h("div", { class: "grow" }, h("div", { class: "dc-title" }, title), sub ? h("div", { class: "dc-sub" }, sub) : null),
+    right ?? null);
+}
+
+function renderDash(s: Snapshot) {
+  trackActivity(s);
+  const connected = !!s.connected;
+  update(quick, "quick", [s.clipboard_sync, connected], () => {
+    const row = (icon: string, tint: string, title: string, sub: string, ctl: Node, act?: () => void) =>
+      h(act ? "button" : "div", { class: "qf", ...(act ? { onclick: act } : {}) },
+        h("span", { class: "qf-ico", style: `--t:${tint}` }, ico(icon, 19)),
+        h("div", { class: "grow" }, h("div", { class: "qf-title" }, title), h("div", { class: "qf-sub" }, sub)),
+        ctl);
+    const chev = () => ico("M9 6l6 6-6 6", 16);
+    return [
+      cardHead("M13 2L4.5 13.5H11L10 22l9.5-12H13z", "Quick Features", null),
+      row(ICONS.clipboard, "#2f7cf6", "Share Clipboard", "Copy here, paste on the other PC", switchEl(s.clipboard_sync, (v) => call("set_clipboard_sync", { on: v }))),
+      row(ICONS.files, "#8b5cf6", "Transfer Files", "Send files between computers", chev(), () => go("files")),
+      row(ICONS.computers, "#14b8a6", "Arrange Screens", "Which side each computer is on", chev(), () => layout.scrollIntoView({ behavior: "smooth", block: "center" })),
+      row(ICONS.features, "#f59e0b", "All Features", "Moving apps, game mode and more", chev(), () => go("features")),
+    ];
+  });
+
+  const active = s.transfers.filter((t) => t.state === "active" || t.state === "paused");
+  update(xfers, "dash-xfers", [connected, active.map((t) => [t.id, t.direction, t.name, t.state, t.total, t.peer])], () => {
+    const out: Node[] = [cardHead("M7 7h13l-4-4M17 17H4l4 4", "File Transfer", active.length ? `${active.length} in progress` : "Nothing sending right now",
+      h("button", { class: "link-btn", onclick: () => go("files") }, "View All", ico("M5 12h14M13 6l6 6-6 6", 14)))];
+    if (!active.length) {
+      out.push(h("div", { class: "xf-empty" },
+        h("span", {}, connected ? "Drag a file through the screen edge, copy and paste it, or choose files to send." : "Connect to a computer to send files."),
+        h("button", { class: "primary", disabled: !connected, onclick: () => call("pick_and_send", { peerId: sendTo || undefined }) }, "Send files…")));
+    }
+    for (const t of active.slice(0, 3)) {
+      out.push(h("div", { class: "xf", "data-id": `${t.direction}-${t.id}` },
+        h("span", { class: "xf-ico" }, ico(ICONS.files, 22)),
+        h("div", { class: "grow" },
+          h("div", { class: "xf-name" }, t.name),
+          h("div", { class: "xf-meta" }, ""),
+          h("div", { class: "bar" }, h("i", {})))));
+    }
+    return out;
+  });
+  for (const t of active) {
+    const el = xfers.querySelector<HTMLElement>(`[data-id="${t.direction}-${t.id}"]`);
+    if (!el) continue;
+    const p = t.total ? Math.min(100, (t.bytes / t.total) * 100) : 0;
+    el.querySelector<HTMLElement>(".bar > i")!.style.width = `${p}%`;
+    el.querySelector<HTMLElement>(".xf-meta")!.textContent = `${fmtBytes(t.bytes)} / ${fmtBytes(t.total)} · ${Math.round(p)}%${t.state === "paused" ? " · paused" : ""} · ${t.direction === "out" ? "to" : "from"} ${t.peer}`;
+  }
+
+  update(activity, "activity", [acts.length, acts[0]?.at, Math.floor(Date.now() / 60000)], () => [
+    cardHead("M12 8v4l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4", "Recent Activity", "What happened lately"),
+    acts.length
+      ? h("div", { class: "acts" }, ...acts.slice(0, 5).map((a) => h("div", { class: "act" },
+          h("i", { class: `act-dot ${a.kind}` }), h("span", { class: "grow" }, a.text), h("small", {}, ago(a.at)))))
+      : h("div", { class: "xf-empty" }, h("span", {}, "Connections and transfers show up here.")),
+  ]);
+}
 function renderLayout(s: Snapshot) {
   layout.hidden = s.paired.length === 0;
   if (!s.paired.length) return;
@@ -447,10 +562,9 @@ function renderLayout(s: Snapshot) {
       }, held ? "Put it here" : "");
     });
     return [
-      h("h2", {}, "Your desk"),
-      h("p", { class: "muted", style: "margin:-6px 0 14px" }, heldPeer
-        ? `Now click an empty spot, or another computer to swap places with ${heldPeer.name}.`
-        : "Put each computer where it really is, so the cursor crosses the right edge. Click one to pick it up."),
+      cardHead(ICONS.computers, "Display Arrangement", heldPeer
+        ? `Now click an empty spot, or another computer to swap with ${heldPeer.name}.`
+        : "Put each computer where it really is. Click one to move it."),
       h("div", { class: "grid3 desk" }, h("div", { class: "cell me" }, h("i", { class: "scr" }), h("span", {}, s.device_name), h("small", {}, "This computer")), ...cells),
     ];
   });
@@ -637,13 +751,13 @@ function licenseSection(): Node[] {
 // longer explanation stays folded away behind "How it works" for those who want it.
 
 const COLORS = {
-  teal: ["#d9f5f1", "#0b8f81"],
-  amber: ["#fff0d1", "#b86e00"],
-  violet: ["#ece8ff", "#6d4fd8"],
-  blue: ["#e1efff", "#2c6fd6"],
-  rose: ["#ffe6ec", "#cc3d66"],
-  green: ["#dff6e7", "#1d8a4c"],
-  slate: ["#e9eef2", "#4b6173"],
+  teal: ["rgba(45,212,191,.15)", "#5eead4"],
+  amber: ["rgba(245,158,11,.15)", "#fbbf24"],
+  violet: ["rgba(139,92,246,.18)", "#c4b5fd"],
+  blue: ["rgba(47,124,246,.18)", "#8db8ff"],
+  rose: ["rgba(244,63,94,.16)", "#fda4af"],
+  green: ["rgba(34,197,94,.16)", "#86efac"],
+  slate: ["rgba(148,172,214,.14)", "#b9c5da"],
 } as const;
 type Color = keyof typeof COLORS;
 
@@ -1258,6 +1372,7 @@ function render(s: Snapshot) {
   renderHeader(s);
   renderStage(s);
   renderLayout(s);
+  renderDash(s);
   renderFiles(s);
   renderFeatures(s);
   renderSettings(s);
