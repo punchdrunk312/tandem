@@ -254,7 +254,7 @@ while ($true) {
       $named = $null; $any = $null
       foreach ($e in $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, $c)) {
         try { $v = [string]$e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { $v = '' }
-        if ($v -match '^(https?://)?[^\s/]+\.[^\s]+$') {
+        if ($v -match '^(https?://)?((localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(/\S*)?|[^\s/]+\.[^\s]+)$') {
           if (-not $any) { $any = $v }
           if ([string]$e.Current.Name -match 'address|url|search|location') { $named = $v; break }
         }
@@ -462,15 +462,17 @@ fn drag_thread(rx: std::sync::mpsc::Receiver<DragReq>) {
                 let still = || DRAG_GEN.load(Relaxed) == seq;
                 if app.is_browser() {
                     // Wait for the page to be read before the edge may offer anything.
+                    // Chrome and Edge often only start answering once asked, so a few
+                    // tries, a little apart.
                     APP_GEN.store(seq, Relaxed);
                     APP_STATE.store(1, Relaxed);
                     let mut url = None;
-                    for _ in 0..2 {
-                        url = parse_url(ask_ps_for(&mut ps, &format!("URL {hwnd}"), 4000));
+                    for i in 0..4 {
+                        url = parse_url(ask_ps_for(&mut ps, &format!("URL {hwnd}"), 5000));
                         if url.is_some() || !still() {
                             break;
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        std::thread::sleep(std::time::Duration::from_millis(150 * (i + 1)));
                     }
                     if url.is_none() {
                         log::info!("app drag: could not read the page address of {}", app.exe);

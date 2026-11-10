@@ -273,6 +273,16 @@ fn is_problem(level: log::Level, line: &str) -> bool {
         || l.contains("not on the title bar")
         || l.contains("no window is ready")
         || l.contains("person said no")
+        // Everyday situations, not faults: no Bluetooth on this computer, no internet
+        // for the update check, a computer that isn't paired (or was forgotten)
+        // knocking, a connection dropped while saying hello, and windows Windows
+        // itself won't let any program move.
+        || l.starts_with("airpods: can't listen")
+        || (l.starts_with("update: couldn't check")
+            && ["dns failed", "connection failed", "network error", "timed out", "no such host"].iter().any(|w| l.contains(w)))
+        || (l.starts_with("incoming from")
+            && ["refused: io:", "refused: closed", "unknown device"].iter().any(|w| l.contains(w)))
+        || l.contains("that window's program can't be moved")
     {
         return false;
     }
@@ -495,6 +505,14 @@ mod tests {
             "app drag: the window under the press can't be moved"
         ));
         assert!(!is_problem(Info, "clipboard: sending a picture (20 KB)"));
+        assert!(!is_problem(Info, "airpods: can't listen to Bluetooth adverts (The device is not ready for use.)"));
+        assert!(!is_problem(Info, "update: couldn't check (https://x/: Dns Failed: resolve dns name)"));
+        assert!(is_problem(Info, "update: couldn't check (server said 500)"));
+        assert!(!is_problem(Info, "incoming from 1.2.3.4:5 refused: authentication failed: unknown device — pair again"));
+        assert!(!is_problem(Info, "incoming from 1.2.3.4:5 refused: io: reset"));
+        assert!(is_problem(Info, "incoming from 1.2.3.4:5 refused: authentication failed: bad signature"));
+        assert!(!is_problem(Info, "app span: that window's program can't be moved"));
+        assert!(is_problem(Info, "app drag: could not read the page address of chrome.exe"));
     }
 
     #[test]
