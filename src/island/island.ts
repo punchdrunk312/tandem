@@ -1698,7 +1698,7 @@ export class Island {
     const v = State.video;
     if (!v) return;
     const peer = State.connectedPeers.find((p) => !p.fleet);
-    void call("video_window_open", { id: v.id, title: v.title, ms: v.startMs, peer: peer?.id ?? null, peerName: peer?.name ?? null }).catch((e) => this.showNote(String(e), 3000, "home"));
+    void call("video_window_open", { id: v.id, title: v.title, ms: Math.max(0, Math.round(v.startMs || 0)), peer: peer?.id ?? null, peerName: peer?.name ?? null }).catch((e) => this.showNote(String(e), 3000, "home"));
   }
 
   /** The floating video window's buttons. */

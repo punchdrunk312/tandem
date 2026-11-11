@@ -979,8 +979,9 @@ export function karaoke(cls: string): { el: HTMLElement; show(ms: number, fallba
         spans.forEach((s, k) => r.append(...(k ? [" ", s] : [s])));
         swap(r);
         // A little too long: a touch smaller. Much too long: it follows the singing.
+        // Too long for the line: smaller until it fits (it follows the singing only past that).
         const over = r.scrollWidth / Math.max(1, el.clientWidth);
-        if (over > 1 && over < 1.22) r.style.fontSize = `${Math.max(0.82, 1 / over)}em`;
+        if (over > 1) r.style.fontSize = `${Math.max(0.62, 0.98 / over)}em`;
       }
       let now: HTMLElement | null = null;
       sung.words!.forEach((w, k) => {
@@ -1099,6 +1100,19 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const sleep = h("button", { class: "btn m-chip", title: "Sleep timer: the music stops by itself", onclick: () => { a.blip(); a.cycleSleep(); } });
   const full = h("button", { class: "btn m-chip", text: "All lyrics", title: "The whole song's words", onclick: () => { a.blip(); a.openLyrics(); } });
   const stats = h("button", { class: "btn m-chip", text: "📊", title: "What you listened to this week", onclick: () => { a.blip(); a.openStats(); } });
+  // The small song strip that pops up with each new song: on or off for good.
+  const paintMini = () => {
+    mini.textContent = State.settings.mediaPopup ? "🪟 Mini player: on" : "🪟 Mini player: off";
+    mini.classList.toggle("off", !State.settings.mediaPopup);
+  };
+  const mini = h("button", { class: "btn m-chip m-mini", title: "Show the small player when a new song starts", onclick: () => {
+    a.blip();
+    State.settings.mediaPopup = !State.settings.mediaPopup;
+    State.saveSettings();
+    paintMini();
+    State.notify();
+  } });
+  paintMini();
   // Spotify: the heart, "add to a playlist", and what's next (beside the app's name).
   let sp: SpotifyNow | null = null;
   const heart = h("button", { class: "icon-btn m-btn m-heart", hidden: true, title: "Save to your Liked Songs", "aria-label": "Like", onclick: () => {
@@ -1151,7 +1165,7 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
       paintHeart();
     });
   };
-  const row2 = h("div", { class: "m-row2" }, svg("M4 9v6h4l5 4V5L8 9H4z", 14, { stroke: 1.8 }), vol, out, speed, sleep, full, stats);
+  const row2 = h("div", { class: "m-row2" }, svg("M4 9v6h4l5 4V5L8 9H4z", 14, { stroke: 1.8 }), vol, out, speed, sleep, full, stats, mini);
   let wasOpen = false;
   const loadAudio = () => void a.audio().then(({ volume, outputs }) => {
     vol.disabled = volume == null;
@@ -1311,7 +1325,7 @@ export function buildNowPlaying(a: MediaActions & { open(): void; close(): void 
   const play = b("Play / pause", icon(MEDIA_ICON.play), () => a.control("play_pause"));
   const next = b("Next", icon(MEDIA_ICON.next), () => a.control("next"));
   const lyr = b("Lyrics", svg("M4 6h16M4 11h16M4 16h10M18 15v5", 14, { stroke: 2 }), () => a.toggleLyrics(), "np-lyr");
-  const close = b("Hide until the next song", svg("M6 6l12 12M18 6L6 18", 12, { stroke: 2 }), () => a.close());
+  const close = b("Hide until the next song", svg("M6 6l12 12M18 6L6 18", 13, { stroke: 2.6 }), () => a.close(), "np-close");
   const bar = seekBar("np-seek", a);
   const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, sing.el);
   const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, back, play, next, lyr, close), bar.el);
