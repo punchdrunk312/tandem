@@ -36,8 +36,9 @@ export class AmbientLayer {
   private pile: number[] = [];
   /** Seconds of rainbow left (after the rain stops). */
   private bow = 0;
-  /** A shooting star crossing, and when the next one comes. */
-  private shoot: { x: number; y: number; age: number } | null = null;
+  /** Shooting stars crossing, and when the next one comes. */
+  private shoots: { x: number; y: number; age: number; life: number; ang: number; speed: number; len: number }[] = [];
+  private moonCanvas: HTMLCanvasElement | null = null;
   private nextShoot = 5;
   /** Fireworks: rockets going up, then sparks. */
   private rockets: { x: number; y: number; vy: number; top: number; hue: number }[] = [];
@@ -75,12 +76,19 @@ export class AmbientLayer {
     if (kind !== "snow") this.pile = this.pile.map((v) => Math.max(0, v - dt * 0.4));
     if (kind === "night") {
       this.nextShoot -= dt;
-      if (this.nextShoot <= 0 && !this.shoot) {
-        this.shoot = { x: w * (0.3 + Math.random() * 0.6), y: 4 + Math.random() * h * 0.3, age: 0 };
-        this.nextShoot = 8 + Math.random() * 14;
+      if (this.nextShoot <= 0 && this.shoots.length < 3) {
+        // From the upper right, down and to the left, each a little different.
+        this.shoots.push({
+          x: w * (0.35 + Math.random() * 0.6), y: Math.random() * h * 0.35, age: 0,
+          life: 0.7 + Math.random() * 0.6, ang: Math.PI * (0.82 + Math.random() * 0.12),
+          speed: 180 + Math.random() * 160, len: 40 + Math.random() * 50,
+        });
+        // Every few seconds, and now and then two close together.
+        this.nextShoot = Math.random() < 0.25 ? 0.4 + Math.random() * 0.6 : 2.5 + Math.random() * 3.5;
       }
     }
-    if (this.shoot && (this.shoot.age += dt) > 0.9) this.shoot = null;
+    for (const s of this.shoots) s.age += dt;
+    this.shoots = this.shoots.filter((s) => s.age < s.life);
     if (kind === "fireworks" && Math.random() < dt * 0.9 && this.rockets.length < 3) {
       this.rockets.push({ x: w * (0.1 + Math.random() * 0.8), y: h + 4, vy: -(170 + Math.random() * 60), top: h * (0.15 + Math.random() * 0.35), hue: Math.random() * 360 });
     }
@@ -308,46 +316,107 @@ export class AmbientLayer {
     x.restore();
   }
 
-  /** Stars twinkling, the moon in today's phase, and a shooting star now and then. */
+  /** A night sky: stars of every size twinkling (the bright ones with a sparkle), the moon
+   *  in today's phase with its glow and craters, and shooting stars every few seconds. */
   private drawNight(x: CanvasRenderingContext2D, w: number, h: number) {
-    for (let i = 0; i < 26; i++) {
+    const boost = this.light ? 0.3 : 0;
+    for (let i = 0; i < 64; i++) {
       // Fixed places (a cheap hash), each twinkling at its own pace.
-      const sx = ((i * 2654435761) % 1000) / 1000 * w;
-      const sy = ((i * 40503) % 1000) / 1000 * h * 0.85;
-      const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(this.t * (1 + (i % 5) * 0.4) + i));
-      x.fillStyle = `rgba(255,255,240,${this.light ? Math.min(1, a + 0.3) : a})`;
-      x.fillRect(sx, sy, i % 4 === 0 ? 1.6 : 1, i % 4 === 0 ? 1.6 : 1);
+      const sx = (((i * 2654435761) >>> 0) % 1000) / 1000 * w;
+      const sy = (((i * 40503) >>> 0) % 1000) / 1000 * h * 0.9;
+      const size = i % 11 === 0 ? 2.2 : i % 5 === 0 ? 1.5 : i % 2 ? 0.9 : 0.6;
+      const tw = 0.5 + 0.5 * Math.sin(this.t * (0.7 + (i % 7) * 0.35) + i * 1.7);
+      const a = Math.min(1, (size > 1.4 ? 0.55 : 0.3) + 0.45 * tw + boost);
+      const tint = i % 6 === 0 ? "200,220,255" : i % 9 === 0 ? "255,230,200" : "255,255,250";
+      x.save();
+      x.fillStyle = `rgba(${tint},${a})`;
+      if (size > 1.4) {
+        x.shadowColor = `rgba(${tint},0.9)`;
+        x.shadowBlur = 6;
+      }
+      x.beginPath();
+      x.arc(sx, sy, size, 0, Math.PI * 2);
+      x.fill();
+      // The brightest ones sparkle: a soft cross that grows and shrinks.
+      if (size > 2) {
+        const len = 3 + 4 * tw;
+        x.shadowBlur = 0;
+        x.strokeStyle = `rgba(${tint},${0.5 * a})`;
+        x.lineWidth = 0.8;
+        x.beginPath();
+        x.moveTo(sx - len, sy); x.lineTo(sx + len, sy);
+        x.moveTo(sx, sy - len); x.lineTo(sx, sy + len);
+        x.stroke();
+      }
+      x.restore();
     }
-    // The moon: lit by today's phase (a 29.53-day cycle from a known new moon).
+    // The moon, in the open space of the header (not behind the buttons), lit by today's
+    // phase (a 29.53-day cycle from a known new moon).
     const phase = (((Date.now() - Date.UTC(2000, 0, 6, 18, 14)) / 864e5) % 29.53) / 29.53;
-    const mx = w - 46, my = 22, r = 9;
+    const mx = Math.min(w * 0.4, 270), my = 18, r = 11;
     x.save();
-    x.fillStyle = this.light ? "rgba(250,240,200,0.9)" : "rgba(255,246,214,0.92)";
-    x.shadowColor = "rgba(255,240,200,0.6)";
-    x.shadowBlur = 10;
+    const halo = x.createRadialGradient(mx, my, r * 0.6, mx, my, r * 4);
+    halo.addColorStop(0, "rgba(255,244,214,0.28)");
+    halo.addColorStop(1, "rgba(255,244,214,0)");
+    x.fillStyle = halo;
     x.beginPath();
-    x.arc(mx, my, r, 0, Math.PI * 2);
+    x.arc(mx, my, r * 4, 0, Math.PI * 2);
     x.fill();
-    x.shadowBlur = 0;
-    // The dark part: a disc slid across.
-    x.globalCompositeOperation = "destination-out";
+    // The disc on its own layer, so the dark part can be cut out of it alone.
+    const c = this.moonCanvas ??= document.createElement("canvas");
+    const d = Math.ceil(r * 2 + 4);
+    c.width = c.height = d;
+    const m = c.getContext("2d")!;
+    const o = d / 2;
+    const disc = m.createRadialGradient(o - r * 0.35, o - r * 0.35, r * 0.2, o, o, r);
+    disc.addColorStop(0, "#fffdf0");
+    disc.addColorStop(1, "#f1e6bf");
+    m.fillStyle = disc;
+    m.beginPath();
+    m.arc(o, o, r, 0, Math.PI * 2);
+    m.fill();
+    m.fillStyle = "rgba(190,175,135,0.35)";
+    for (const [cx, cy, cr] of [[-3, -2, 2.4], [3.5, 2.5, 1.8], [-1, 4.5, 1.3], [4, -4, 1.1]]) {
+      m.beginPath();
+      m.arc(o + cx, o + cy, cr, 0, Math.PI * 2);
+      m.fill();
+    }
+    m.globalCompositeOperation = "destination-out";
     const off = (phase < 0.5 ? 1 - phase * 4 : -(1 - (phase - 0.5) * 4)) * r * 2;
-    x.beginPath();
-    x.arc(mx + off, my, r, 0, Math.PI * 2);
-    x.fill();
+    // A thin crescent at new moon would vanish: keep at least a sliver.
+    const slide = Math.sign(off || 1) * Math.max(Math.abs(off), r * 0.55);
+    m.beginPath();
+    m.arc(o + slide, o, r, 0, Math.PI * 2);
+    m.fill();
+    x.shadowColor = "rgba(255,240,200,0.7)";
+    x.shadowBlur = 12;
+    x.drawImage(c, mx - o, my - o);
     x.restore();
-    if (this.shoot) {
-      const s = this.shoot, k = s.age / 0.9;
-      const hx = s.x - k * 140, hy = s.y + k * 50;
-      const g = x.createLinearGradient(hx, hy, hx + 40, hy - 14);
-      g.addColorStop(0, `rgba(255,255,255,${0.9 * (1 - k)})`);
-      g.addColorStop(1, "rgba(255,255,255,0)");
+    for (const s of this.shoots) {
+      const k = s.age / s.life;
+      const fade = Math.sin(Math.PI * Math.min(1, k));
+      const hx = s.x + Math.cos(s.ang) * s.speed * s.age;
+      const hy = s.y + Math.sin(s.ang) * s.speed * s.age;
+      const tx = hx - Math.cos(s.ang) * s.len, ty = hy - Math.sin(s.ang) * s.len;
+      const g = x.createLinearGradient(hx, hy, tx, ty);
+      g.addColorStop(0, `rgba(255,255,255,${0.95 * fade})`);
+      g.addColorStop(0.3, `rgba(190,220,255,${0.5 * fade})`);
+      g.addColorStop(1, "rgba(190,220,255,0)");
+      x.save();
       x.strokeStyle = g;
-      x.lineWidth = 1.5;
+      x.lineWidth = 1.6;
+      x.lineCap = "round";
+      x.shadowColor = "rgba(200,225,255,0.9)";
+      x.shadowBlur = 6;
       x.beginPath();
       x.moveTo(hx, hy);
-      x.lineTo(hx + 40, hy - 14);
+      x.lineTo(tx, ty);
       x.stroke();
+      x.fillStyle = `rgba(255,255,255,${fade})`;
+      x.beginPath();
+      x.arc(hx, hy, 1.4, 0, Math.PI * 2);
+      x.fill();
+      x.restore();
     }
   }
 

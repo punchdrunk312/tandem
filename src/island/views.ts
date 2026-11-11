@@ -68,7 +68,7 @@ function keyed(el: HTMLElement, key: string, build: () => (Node | string)[]) {
 
 // ------------------------------------------------------------------ header
 
-export const DEFAULT_ICONS = "ai,notes,music,weather,timer,devices,game,sound";
+export const DEFAULT_ICONS = "ai,notes,music,weather,timer,devices,sound";
 
 /** A number that rolls to its new value instead of jumping ("14°" → "17°"). */
 export function roll(el: HTMLElement, value: number, suffix = "", ms = 650) {
@@ -95,20 +95,19 @@ export function roll(el: HTMLElement, value: number, suffix = "", ms = 650) {
 export function buildHeader(a: ViewActions): ViewHost {
   const dot = h("i", { class: "hd-dot" });
   const title = h("span", { class: "hd-title", text: "CubeCursor" });
-  const sound = h("button", { class: "icon-btn", title: "Sound", "aria-label": "Toggle sound", onclick: () => a.toggleSound() });
-  const devices = h("button", { class: "icon-btn", title: "Your computers", "aria-label": "Show your computers", onclick: () => { a.blip(); a.toggleDevices(); } }, svg(ICON.devices, 15, { stroke: 1.8 }));
-  const settings = h("button", { class: "icon-btn", title: "Pair & settings", "aria-label": "Open settings", onclick: () => { a.blip(); fire("open_main_window"); } }, svg(ICON.sliders, 15, { stroke: 1.8 }));
+  const emo = (e: string) => h("span", { class: "emo", text: e });
+  const btn = (label: string, e: string, act: () => void) =>
+    h("button", { class: "icon-btn emo-btn", title: label, "aria-label": label, onclick: () => { a.blip(); act(); } }, emo(e));
+  const sound = h("button", { class: "icon-btn emo-btn", title: "Sound", "aria-label": "Toggle sound", onclick: () => a.toggleSound() });
+  const devices = btn("Your computers", "💻", () => a.toggleDevices());
+  const settings = btn("Pair & settings", "⚙️", () => fire("open_main_window"));
   const close = h("button", { class: "icon-btn", title: "Close", "aria-label": "Close", onclick: () => a.collapse() }, svg(ICON.close, 15, { stroke: 1.8 }));
-  const timer = h("button", { class: "icon-btn", title: "Focus timer", "aria-label": "Focus timer", onclick: () => { a.blip(); a.toggleFocus(); } }, svg(ICON.timer, 15, { stroke: 1.8 }));
-  const music = h("button", { class: "icon-btn", title: "Now playing", "aria-label": "Now playing", onclick: () => { a.blip(); a.toggleMedia(); } }, svg(ICON.music, 15, { stroke: 1.8 }));
-  const notes = h("button", { class: "icon-btn", title: "Notes", "aria-label": "Notes and reminders", onclick: () => { a.blip(); a.toggleNotes(); } }, svg(ICON.notes, 15, { stroke: 1.8 }));
-  const game = h("button", { class: "icon-btn", title: "Catch with Bob", "aria-label": "Play catch with Bob", onclick: () => { a.blip(); a.toggleGame(); } },
-    svg("M12 3a9 9 0 100 18 9 9 0 000-18zM3.5 9.5h17M3.5 14.5h17M12 3c2.5 2.6 2.5 15.4 0 18", 15, { stroke: 1.8 }));
-  const ai = h("button", { class: "icon-btn", title: "AI agents", "aria-label": "AI agents", onclick: () => { a.blip(); a.toggleAi(); } },
-    svg("M12 3l1.8 4.6L18.5 9.4l-4.7 1.8L12 16l-1.8-4.8L5.5 9.4l4.7-1.8zM18.5 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z", 15, { stroke: 1.8 }));
-  const weather = h("button", { class: "icon-btn", title: "Weather", "aria-label": "Weather", onclick: () => { a.blip(); a.toggleWeather(); } },
-    svg("M12 3v2M5.6 5.6l1.4 1.4M3 12h2M17 7l1.4-1.4M8 12a4 4 0 0 1 7.4-2.1M9 20h8.5a3.5 3.5 0 0 0 0-7h-.3A5 5 0 0 0 8 15a2.5 2.5 0 0 0 1 5z", 15, { stroke: 1.8 }));
-  const byId: Record<string, HTMLElement> = { ai, notes, music, weather, timer, devices, game, sound };
+  const timer = btn("Focus timer", "⏱️", () => a.toggleFocus());
+  const music = btn("Now playing", "🎧", () => a.toggleMedia());
+  const notes = btn("Notes", "📝", () => a.toggleNotes());
+  const ai = btn("AI agents", "✨", () => a.toggleAi());
+  const weather = btn("Weather", "🌤️", () => a.toggleWeather());
+  const byId: Record<string, HTMLElement> = { ai, notes, music, weather, timer, devices, sound };
   const el = h("div", { id: "header" }, dot, title, h("span", { class: "spacer" }));
   let order = "-";
   return {
@@ -127,12 +126,16 @@ export function buildHeader(a: ViewActions): ViewHost {
       timer.classList.toggle("on", State.view === "focus" || !!State.focus);
       music.classList.toggle("on", State.view === "media" || !!State.media?.playing);
       notes.classList.toggle("on", State.view === "notes" || !!State.dueNote);
-      game.classList.toggle("on", State.view === "game");
       ai.classList.toggle("on", State.view === "ai" || State.view === "agent");
-      weather.classList.toggle("on", State.view === "weather");
       ai.classList.toggle("ping", [...agents.values()].some((e) => e.state === "approve" || e.state === "waiting"));
+      weather.classList.toggle("on", State.view === "weather");
+      // The weather button shows the sky outside.
+      const w = State.weather;
+      const we = w ? skyEmoji(w.sky, w.day) : "🌤️";
+      if (weather.textContent !== we) weather.replaceChildren(emo(we));
       title.textContent = State.view === "weather" ? "Weather" : State.view === "lyrics" ? "Lyrics" : State.view === "stats" ? "Your week in music" : State.view === "ai" ? "AI agents" : State.view === "game" ? "Catch" : State.view === "tour" ? "Welcome" : State.view === "devices" ? "Your computers" : State.view === "focus" ? "Focus" : State.view === "media" ? "Now playing" : State.view === "notes" ? "Notes" : State.view === "recipients" ? "Send to…" : State.greeting ?? "CubeCursor";
-      sound.replaceChildren(svg(State.settings.soundEnabled ? ICON.speaker : ICON.speakerOff, 15, { stroke: 1.8 }));
+      const se = State.settings.soundEnabled ? "🔊" : "🔇";
+      if (sound.textContent !== se) sound.replaceChildren(emo(se));
     },
   };
 }

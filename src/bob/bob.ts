@@ -283,6 +283,8 @@ export class Bob {
   music = false;
   /** How hard he dances to it (0 nodding … 1 dancing): while you look at the music. */
   dance = 0;
+  /** Headphones while music plays (off: people didn't like them). */
+  headphones = false;
   private danceNow = 0;
   /** A focus is running: a sweatband on his forehead. */
   headband = false;
@@ -1691,7 +1693,7 @@ export class Bob {
         x.fill();
       }
     }
-    if (this.music) {
+    if (this.music && this.headphones) {
       // Headphones: the band over his head, a cup on each side with a glowing ring.
       x.strokeStyle = "#1d2430";
       x.lineWidth = Math.max(2, R * 0.11);

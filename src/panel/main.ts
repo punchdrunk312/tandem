@@ -1039,8 +1039,8 @@ function islandSettings(): IslandOpts {
     return { ...ISLAND_DEFAULTS };
   }
 }
-const BAR_ICONS: [string, string][] = [["ai", "AI agents"], ["notes", "Notes"], ["music", "Now playing"], ["weather", "Weather"], ["timer", "Focus timer"], ["devices", "Your computers"], ["game", "Catch with Bob"], ["sound", "Sound"]];
-const DEFAULT_BAR_ICONS = "ai,notes,music,weather,timer,devices,game,sound";
+const BAR_ICONS: [string, string][] = [["ai", "AI agents"], ["notes", "Notes"], ["music", "Now playing"], ["weather", "Weather"], ["timer", "Focus timer"], ["devices", "Your computers"], ["sound", "Sound"]];
+const DEFAULT_BAR_ICONS = "ai,notes,music,weather,timer,devices,sound";
 /** The top-bar icons: a tick to show each, arrows to move it. */
 function barIconsEl(v: string, change: (v: string) => void): HTMLElement {
   const shown = (v || DEFAULT_BAR_ICONS).split(",").filter((id) => BAR_ICONS.some(([k]) => k === id));
