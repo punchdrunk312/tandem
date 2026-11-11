@@ -1086,3 +1086,33 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 :root[data-tone="light"] #island #header .icon-btn[aria-label="Close"], :root[data-tone="light"] #island .np-close { color: #10141c; background: rgba(10, 16, 32, 0.1); }
 .m-mini.off { opacity: 0.6; }
 .m-row2 { flex-wrap: wrap; }
+
+/* media: the second row stays on one line inside the bar */
+.m-row2 { flex-wrap: nowrap; min-width: 0; }
+.m-out { max-width: 118px; text-overflow: ellipsis; }
+.m-row2 .m-chip { flex: none; }
+.m-mini { width: 30px; padding: 4px 0; text-align: center; }
+.m-mini.off { opacity: 1; background: rgba(244, 63, 94, 0.28); }
+
+/* Bob always sits on top of the glass */
+#bot-canvas, #bot-glow { z-index: 6; }
+
+/* Easy-to-read text: a shadow under the words, stronger colours */
+:root[data-readable="on"] #content { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 0 10px rgba(0, 0, 0, 0.25); }
+:root[data-readable="on"][data-tone="light"] #content { text-shadow: 0 1px 2px rgba(255, 255, 255, 0.7), 0 0 10px rgba(255, 255, 255, 0.45); }
+:root[data-readable="on"][data-tone="dark"] { --dim: rgba(255, 255, 255, 0.82); --dim-2: rgba(255, 255, 255, 0.66); }
+:root[data-readable="on"][data-tone="light"] { --dim: rgba(10, 14, 26, 0.78); --dim-2: rgba(10, 14, 26, 0.62); }
+:root[data-readable="on"] #island .btn { text-shadow: none; }
+
+/* corners */
+:root[data-radius="round"] #island { border-radius: 0 0 24px 24px; }
+:root[data-radius="square"] #island { border-radius: 0 0 4px 4px; }
+/* title */
+:root[data-title="off"] #header .hd-title { visibility: hidden; }
+/* music glow */
+:root[data-glow="off"][data-music="on"] #island::after { animation: none; opacity: 0; }
+/* animations */
+:root[data-motion="less"] #island *, :root[data-motion="less"] #island *::before, :root[data-motion="less"] #island *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+/* text size */
+:root[data-text="s"] #content { font-size: 92%; }
+:root[data-text="l"] #content { font-size: 108%; }

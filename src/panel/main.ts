@@ -1018,6 +1018,8 @@ interface IslandOpts {
   outfit: string;
   tips: boolean;
   accCards: boolean;
+  mediaPopup: boolean; videoPopup: boolean;
+  barRadius: string; readable: boolean; ambientFx: boolean; motion: string; showTitle: boolean; barGlow: boolean; textSize: string;
 }
 const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
@@ -1031,6 +1033,8 @@ const ISLAND_DEFAULTS: IslandOpts = {
   outfit: "none",
   tips: true,
   accCards: true,
+  mediaPopup: true, videoPopup: true,
+  barRadius: "soft", readable: true, ambientFx: true, motion: "full", showTitle: true, barGlow: true, textSize: "m",
 };
 function islandSettings(): IslandOpts {
   try {
@@ -1244,6 +1248,21 @@ function renderTopBar() {
         h("div", { class: "card list" },
           block("Bar colour", "The bar itself, on Liquid Glass and Classic.", barColours),
           block("Accent", "Dots, glow, progress and buttons. Tints Bob too.", swatches))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Look & feel"),
+        h("div", { class: "card list" },
+          setting("Corners", null, seg([["round", "Round"], ["soft", "Soft"], ["square", "Square"]] as const, (is.barRadius || "soft") as "round" | "soft" | "square", (v) => set({ barRadius: v }))),
+          setting("Text size", null, seg([["s", "Small"], ["m", "Medium"], ["l", "Large"]] as const, (is.textSize || "m") as "s" | "m" | "l", (v) => set({ textSize: v }))),
+          setting("Easy-to-read text", "A soft shadow and stronger colours, so words stay clear on any colour.", switchEl(is.readable !== false, (v) => set({ readable: v }))),
+          setting("Title at the top", "\u201cNow playing\u201d, the greeting and so on.", switchEl(is.showTitle !== false, (v) => set({ showTitle: v }))),
+          setting("Sky effects", "Stars, rain, snow and shooting stars in the bar.", switchEl(is.ambientFx !== false, (v) => set({ ambientFx: v }))),
+          setting("Music glow", "The bottom edge glows in the song's colours.", switchEl(is.barGlow !== false, (v) => set({ barGlow: v }))),
+          setting("Animations", null, seg([["full", "Full"], ["less", "Less"]] as const, (is.motion || "full") as "full" | "less", (v) => set({ motion: v }))))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Pop-up players"),
+        h("div", { class: "card list" },
+          setting("Song strip", "The small player that pops up when a new song starts.", switchEl(is.mediaPopup !== false, (v) => set({ mediaPopup: v }))),
+          setting("Video window", "Plays a YouTube video on when you minimise its browser.", switchEl(is.videoPopup !== false, (v) => set({ videoPopup: v }))))),
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Behaviour"),
         h("div", { class: "card list" },

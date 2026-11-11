@@ -1077,6 +1077,13 @@ export class Island {
       fire("set_glass", { on: glass });
     }
     document.documentElement.dataset.tone = this.tone;
+    const ds = document.documentElement.dataset, st = State.settings;
+    ds.radius = st.barRadius || "soft";
+    ds.readable = st.readable === false ? "off" : "on";
+    ds.motion = st.motion || "full";
+    ds.title = st.showTitle === false ? "off" : "on";
+    ds.glow = st.barGlow === false ? "off" : "on";
+    ds.text = st.textSize || "m";
     this.engine.glass = glass;
     // The hello is drawn, not styled: its words follow what is behind the glass too.
     this.greeting.light = glass && !carbon && !(this.bd && this.tone === "dark");
@@ -1283,7 +1290,7 @@ export class Island {
     this.engine.setAccent(State.settings.accent || null);
     this.engine.setWardrobe(State.settings.outfit);
     this.engine.setSkin(State.settings.bobSkin);
-    this.ambient.kind = look && !State.settings.calm ? look.ambient : null;
+    this.ambient.kind = look && !State.settings.calm && State.settings.ambientFx !== false ? look.ambient : null;
     this.hideEgg();
     State.greeting = look?.greeting ?? null;
     if (changed) {

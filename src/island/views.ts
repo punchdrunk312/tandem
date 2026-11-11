@@ -719,7 +719,31 @@ export function buildDevices(a: DeviceActions): ViewHost {
           .filter((p) => p.connected || p.wakeable)
           .map((p) => ({ id: p.id, name: p.name, color: p.color ?? "#2dd4bf", d: p.device ?? null, ping: p.ping_ms ?? null, me: false, connected: p.connected, wakeable: !!p.wakeable })),
       ];
-      const key = JSON.stringify(cards);
+      // Only what changes the cards rebuilds them; CPU, RAM, ping, uptime move in place.
+      const key = JSON.stringify(cards.map((c) => ({ ...c, ping: c.ping == null ? null : 0, d: c.d && { ...c.d, cpu: 0, mem: 0, uptime_min: 0, disk_free_gb: 0, mins_left: null, mins_to_full: null } })));
+      const live = () => {
+        for (const c of cards) {
+          const d = c.d;
+          if (!d) continue;
+          const card = row.querySelector<HTMLElement>(`[data-dev="${CSS.escape(c.id)}"]`);
+          if (!card) continue;
+          const put = (k: string, v: string, w?: number) => {
+            const n = card.querySelector<HTMLElement>(`[data-k="${k}"]`);
+            if (!n) return;
+            if (w != null) n.style.width = `${Math.max(3, Math.min(100, w))}%`;
+            else if (n.textContent !== v) n.textContent = v;
+          };
+          put("cpu", "", d.cpu);
+          put("mem", "", d.mem);
+          put("disk", `${d.disk_free_gb} GB free`);
+          put("up", `up ${fmtUp(d.uptime_min)}`);
+          if (c.ping != null) {
+            put("ping", `${c.ping} ms`);
+            const q = card.querySelector<HTMLElement>('[data-k="ping"]');
+            if (q) q.className = `q ${c.ping < 30 ? "good" : c.ping < 100 ? "ok" : "bad"}`;
+          }
+        }
+      };
       keyed(row, key, () =>
         cards.map((c) => {
           const d = c.d;
@@ -738,10 +762,10 @@ export function buildDevices(a: DeviceActions): ViewHost {
                 ? d.battery >= 100 ? "Full" : d.mins_to_full != null ? `Full in ${fmtMins(d.mins_to_full)}` : "Charging"
                 : d.mins_left != null ? `${fmtMins(d.mins_left)} left` : "On battery";
           const bar = (label: string, v: number) =>
-            h("div", { class: "dv-bar" }, h("span", { text: label }), h("i", {}, h("b", { style: `width:${Math.max(3, Math.min(100, v))}%` })));
+            h("div", { class: "dv-bar" }, h("span", { text: label }), h("i", {}, h("b", { "data-k": label.toLowerCase() === "ram" ? "mem" : "cpu", style: `width:${Math.max(3, Math.min(100, v))}%` })));
           const quality = c.ping == null ? null : c.ping < 30 ? "good" : c.ping < 100 ? "ok" : "bad";
           const acc = (d?.accessories ?? []).slice(0, 2);
-          return h("div", { class: `dev-card${c.connected ? "" : " away"}`, style: `--c:${c.color}` },
+          return h("div", { class: `dev-card${c.connected ? "" : " away"}`, "data-dev": c.id, style: `--c:${c.color}` },
             h("div", { class: "dv-top" },
               r.el,
               h("div", { class: "dv-name" },
@@ -752,9 +776,9 @@ export function buildDevices(a: DeviceActions): ViewHost {
                   bar("CPU", d.cpu),
                   bar("RAM", d.mem),
                   h("div", { class: "dv-meta" },
-                    h("span", { text: `${d.disk_free_gb} GB free` }),
-                    h("span", { text: `up ${fmtUp(d.uptime_min)}` }),
-                    quality ? h("span", { class: `q ${quality}`, text: `${c.ping} ms` }) : null),
+                    h("span", { "data-k": "disk", text: `${d.disk_free_gb} GB free` }),
+                    h("span", { "data-k": "up", text: `up ${fmtUp(d.uptime_min)}` }),
+                    quality ? h("span", { class: `q ${quality}`, "data-k": "ping", text: `${c.ping} ms` }) : null),
                   acc.length ? h("div", { class: "dv-acc" }, ...acc.map((x) => h("span", {
                     class: x.battery <= 15 ? "low" : "",
                     title: x.name,
@@ -773,6 +797,7 @@ export function buildDevices(a: DeviceActions): ViewHost {
                     : [btn("Wake", () => a.wake(c.id), "primary")])));
         }),
       );
+      live();
     },
   };
 }
@@ -1102,12 +1127,16 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const stats = h("button", { class: "btn m-chip", text: "📊", title: "What you listened to this week", onclick: () => { a.blip(); a.openStats(); } });
   // The small song strip that pops up with each new song: on or off for good.
   const paintMini = () => {
-    mini.textContent = State.settings.mediaPopup ? "🪟 Mini player: on" : "🪟 Mini player: off";
-    mini.classList.toggle("off", !State.settings.mediaPopup);
+    const on = State.settings.mediaPopup || State.settings.videoPopup;
+    mini.textContent = on ? "🪟" : "🚫";
+    mini.title = on ? "Pop-up players are on (the song strip and the video window). Click to turn them off." : "Pop-up players are off. Click to turn them on.";
+    mini.classList.toggle("off", !on);
   };
-  const mini = h("button", { class: "btn m-chip m-mini", title: "Show the small player when a new song starts", onclick: () => {
+  const mini = h("button", { class: "btn m-chip m-mini", "aria-label": "Pop-up players on or off", onclick: () => {
     a.blip();
-    State.settings.mediaPopup = !State.settings.mediaPopup;
+    const on = !(State.settings.mediaPopup || State.settings.videoPopup);
+    State.settings.mediaPopup = on;
+    State.settings.videoPopup = on;
     State.saveSettings();
     paintMini();
     State.notify();

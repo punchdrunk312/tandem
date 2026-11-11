@@ -4812,20 +4812,54 @@ pub fn wake_packet(mac: [u8; 6]) -> Vec<u8> {
 
 fn send_wake(mac: [u8; 6], last: Option<IpAddr>) {
     let pkt = wake_packet(mac);
-    let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") else {
-        return;
-    };
-    let _ = sock.set_broadcast(true);
-    for _ in 0..3 {
-        let _ = sock.send_to(&pkt, "255.255.255.255:9");
-        if let Some(IpAddr::V4(v4)) = last {
-            // The subnet's own broadcast address too (some routers drop 255.255.255.255).
-            let o = v4.octets();
-            let _ = sock.send_to(&pkt, (std::net::Ipv4Addr::new(o[0], o[1], o[2], 255), 9));
+    // Windows sends a broadcast out of one adapter only, so send from each of this
+    // computer's own addresses too (Wi-Fi, Ethernet, …), on both wake ports.
+    let mut from: Vec<std::net::Ipv4Addr> = vec![std::net::Ipv4Addr::UNSPECIFIED];
+    from.extend(local_v4s());
+    let mut sent = 0;
+    for src in &from {
+        let Ok(sock) = std::net::UdpSocket::bind((*src, 0)) else { continue };
+        let _ = sock.set_broadcast(true);
+        let mut to: Vec<std::net::Ipv4Addr> = vec![std::net::Ipv4Addr::BROADCAST];
+        for ip in [Some(*src), last.and_then(|a| if let IpAddr::V4(v) = a { Some(v) } else { None })].into_iter().flatten() {
+            if !ip.is_unspecified() {
+                let o = ip.octets();
+                to.push(std::net::Ipv4Addr::new(o[0], o[1], o[2], 255));
+            }
         }
-        std::thread::sleep(Duration::from_millis(80));
+        if let Some(IpAddr::V4(v)) = last {
+            to.push(v);
+        }
+        for _ in 0..3 {
+            for t in &to {
+                for port in [9u16, 7] {
+                    if sock.send_to(&pkt, (*t, port)).is_ok() {
+                        sent += 1;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(60));
+        }
     }
-    log::info!("wake: magic packet sent");
+    log::info!("wake: {sent} magic packets sent from {} addresses", from.len());
+}
+
+/// This computer's own IPv4 addresses on its networks (one per adapter, roughly): the
+/// address a socket would use to reach each private range.
+fn local_v4s() -> Vec<std::net::Ipv4Addr> {
+    let mut out = Vec::new();
+    for probe in ["192.168.1.1:9", "10.0.0.1:9", "172.16.0.1:9", "8.8.8.8:9"] {
+        if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if s.connect(probe).is_ok() {
+                if let Ok(std::net::SocketAddr::V4(a)) = s.local_addr() {
+                    if !a.ip().is_loopback() && !a.ip().is_unspecified() && !out.contains(a.ip()) {
+                        out.push(*a.ip());
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

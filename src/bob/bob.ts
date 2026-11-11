@@ -285,6 +285,8 @@ export class Bob {
   dance = 0;
   /** Headphones while music plays (off: people didn't like them). */
   headphones = false;
+  /** The see-through jelly sheen in Liquid Glass (off: it made him look behind the glass). */
+  jelly = false;
   private danceNow = 0;
   /** A focus is running: a sweatband on his forehead. */
   headband = false;
@@ -1113,7 +1115,7 @@ export class Bob {
     x.fill();
     x.restore();
 
-    if (this.glass) this.drawJelly(x, body, R, hw, hh);
+    if (this.glass && this.jelly) this.drawJelly(x, body, R, hw, hh);
 
     // Rim light: bright on the lit side, a cool edge on the far side.
     const rim = x.createLinearGradient(-hw, -hh, hw, hh);

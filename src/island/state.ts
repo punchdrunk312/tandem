@@ -72,6 +72,20 @@ export interface IslandSettings {
   mediaPopup: boolean;
   /** A YouTube video plays on in the bar when its browser is minimised. */
   videoPopup: boolean;
+  /** The bar's corners: "round", "soft" or "square". */
+  barRadius: string;
+  /** Text with a shadow and stronger colours, for busy or bright backgrounds. */
+  readable: boolean;
+  /** Stars, rain, snow and the rest drawn in the bar. */
+  ambientFx: boolean;
+  /** "full" or "less": fewer moving parts. */
+  motion: string;
+  /** The title ("Now playing", the greeting) at the top left. */
+  showTitle: boolean;
+  /** The bottom edge glows while music plays. */
+  barGlow: boolean;
+  /** Text size in the bar: "s", "m" or "l". */
+  textSize: string;
 }
 
 /** What Windows says is playing (see src-tauri/src/media.rs). */
@@ -142,6 +156,13 @@ const DEFAULTS: IslandSettings = {
   lyrics: false,
   mediaPopup: true,
   videoPopup: true,
+  barRadius: "soft",
+  readable: true,
+  ambientFx: true,
+  motion: "full",
+  showTitle: true,
+  barGlow: true,
+  textSize: "m",
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;
