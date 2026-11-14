@@ -53,7 +53,7 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   // The focus timer: Bob on the left keeping time, the clock in the middle.
   focus: { height: 162, botX: 68, botY: 98, botDiameter: 58 },
   // Now playing: Bob listens on the left, the song, its progress, buttons and a lyric line.
-  media: { height: 212, botX: 68, botY: 112, botDiameter: 58 },
+  media: { height: 212, botX: 84, botY: 172, botDiameter: 50 },
   // All the words of the song, the line being sung in the middle (Bob steps aside).
   lyrics: { height: 320, botX: 0, botY: 0, botDiameter: 0 },
   // What you listened to this week: Bob on the left with his headphones.

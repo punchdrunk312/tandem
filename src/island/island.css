@@ -978,7 +978,7 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 .m-glow { position: absolute; inset: -60px -20px -20px; background: center / cover no-repeat; filter: blur(34px) saturate(1.7); opacity: 0; transform: scale(1.2); pointer-events: none; transition: opacity 0.8s; }
 .view.media.on .m-glow { opacity: 0.38; animation: drift 14s ease-in-out infinite alternate; }
 @keyframes drift { to { transform: scale(1.35) translate(-4%, 3%); } }
-.m-cover { position: absolute; left: 40px; top: 116px; width: 50px; height: 50px; border-radius: 12px; background: center / cover no-repeat; box-shadow: 0 10px 22px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.m-cover { position: absolute; left: 18px; top: 34px; width: 56px; height: 56px; border-radius: 12px; background: center / cover no-repeat; box-shadow: 0 10px 22px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08); }
 .m-cover[hidden] { display: none; }
 .view.media.playing .m-cover { animation: breathe 3.2s ease-in-out infinite; }
 .m-cover.swap { animation: cover-in 0.6s cubic-bezier(0.2, 0.9, 0.25, 1.2) both !important; }
@@ -1105,8 +1105,8 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 :root[data-readable="on"] #island .btn { text-shadow: none; }
 
 /* corners */
-:root[data-radius="round"] #island { border-radius: 0 0 24px 24px; }
-:root[data-radius="square"] #island { border-radius: 0 0 4px 4px; }
+/* the glass layers follow the bar's corners */
+#glass, #bd-edge, #bar-tint { border-radius: inherit; overflow: hidden; }
 /* title */
 :root[data-title="off"] #header .hd-title { visibility: hidden; }
 /* music glow */

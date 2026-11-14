@@ -1084,6 +1084,7 @@ export class Island {
     ds.title = st.showTitle === false ? "off" : "on";
     ds.glow = st.barGlow === false ? "off" : "on";
     ds.text = st.textSize || "m";
+    if (this.radius.value !== this.targetSize().r) this.animateGeometry(false);
     this.engine.glass = glass;
     // The hello is drawn, not styled: its words follow what is behind the glass too.
     this.greeting.light = glass && !carbon && !(this.bd && this.tone === "dark");
@@ -2056,7 +2057,10 @@ export class Island {
 
   private targetSize(): { w: number; h: number; r: number } {
     const { w, h } = islandSize(State.mode, State.view, State.transferRows);
-    const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
+    // The corners the person picked (Top bar → Look & feel), in every look.
+    const pick = State.settings.barRadius;
+    const big = pick === "round" ? 28 : pick === "square" ? 4 : EXPANDED_CORNER;
+    const r = State.mode === "expanded" ? big : Math.min(big, ROUNDED_CORNER);
     return { w, h, r };
   }
 
