@@ -626,7 +626,8 @@ pub fn spawn_cursor_poll(app: AppHandle, gate: Arc<PollGate>) {
 
                 let now = now_ms();
                 let revealed = now < gate.reveal_until_ms.load(Ordering::Relaxed);
-                let quiet = fs && !revealed;
+                // An open bar is one the person asked for: it always takes the mouse.
+                let quiet = fs && !revealed && collapsed;
                 gate.quiet.store(quiet, Ordering::Relaxed);
                 if quiet_sent != Some(quiet) {
                     quiet_sent = Some(quiet);

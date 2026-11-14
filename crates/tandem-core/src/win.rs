@@ -999,6 +999,11 @@ pub fn fullscreen_foreground() -> bool {
         if hwnd.0.is_null() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return false;
         }
+        // A maximized app (Chrome, Discord, Spotify draw their own title bars) is not a
+        // full-screen game or film, even when an auto-hidden taskbar lets it fill the screen.
+        if windows::Win32::UI::WindowsAndMessaging::IsZoomed(hwnd).as_bool() {
+            return false;
+        }
         let mut name = [0u16; 64];
         let n = GetClassNameW(hwnd, &mut name);
         let class = String::from_utf16_lossy(&name[..n.max(0) as usize]);
