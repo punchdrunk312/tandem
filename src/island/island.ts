@@ -477,6 +477,7 @@ export class Island {
             this.greeting.interrupt();
             State.view = State.defaultView();
           }
+          if (State.mode === "expanded") fire("log_js", { msg: `bar hidden by the timer: from=${from} view=${State.view} pinned=${State.isPinned} hover=${this.wasInIsland} quiet=${this.quiet}` });
           this.setMode("hidden");
           // A full-screen app gets its screen back right away.
           fire("end_reveal");
@@ -973,7 +974,8 @@ export class Island {
       if (!(State.focus && !this.quiet && this.momentQueue.length)) return;
     }
     // Never take the bar away from someone using it.
-    if (State.mode === "expanded" && State.view !== "moment" && State.view !== "charge" && this.wasInIsland) {
+    // An open bar the person asked for (the hotkey, a click) waits too: a notice never closes it.
+    if (State.mode === "expanded" && State.view !== "moment" && State.view !== "charge" && (this.wasInIsland || State.isPinned)) {
       this.momentTimer = window.setTimeout(() => { this.momentTimer = null; this.nextMoment(); }, 2500);
       return;
     }
@@ -1878,6 +1880,9 @@ export class Island {
   }
 
   private closeBar() {
+    // Why the bar went away, for the log (the caller's line).
+    const from = (new Error().stack ?? "").split("\n")[2]?.trim().replace(/\(.*\//, "(") ?? "?";
+    fire("log_js", { msg: `bar closed: view=${State.view} pinned=${State.isPinned} hover=${this.wasInIsland} quiet=${this.quiet} ${from}` });
     this.notesView?.stopWriting();
     // Something else had the bar (a card, a note, the control bar): the song strip returns.
     const strip = State.view !== "nowplaying" && this.wantsStrip();
