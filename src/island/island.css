@@ -1342,3 +1342,27 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 :root[data-theme="island"] .playing .np-eq i:nth-child(3) { animation-duration: 1.15s; animation-delay: -0.55s; }
 :root[data-theme="island"] .playing .np-eq i:nth-child(4) { animation-duration: 0.85s; animation-delay: -0.2s; }
 :root[data-theme="island"] .playing .np-eq i:nth-child(5) { animation-duration: 1.05s; animation-delay: -0.7s; }
+
+/* ── a Windows notification ─────────────────────────────────────────────── */
+.notif { display: flex; align-items: center; gap: 12px; padding: 0 12px 0 14px; }
+.nf-icon {
+  flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+  background: rgba(255, 255, 255, 0.1) center / 70% no-repeat; font-weight: 800; font-size: 15px;
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.7);
+}
+.nf-text { flex: 1; min-width: 0; text-align: left; }
+.nf-app { font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+.nf-title, .nf-body { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nf-title { font-size: 13.5px; font-weight: 750; line-height: 17px; }
+.nf-body { font-size: 12px; color: var(--dim); line-height: 15px; }
+.nf-row { flex: none; display: flex; gap: 4px; align-items: center; }
+.nf-btn { width: 26px; height: 26px; }
+.notif.on.enter .nf-icon { animation: cover-in 0.55s cubic-bezier(0.2, 0.9, 0.25, 1.2) both; }
+.notif.on.enter .nf-text { animation: np-swap 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.1) 0.06s both; }
+:root[data-theme="island"] .notif .nf-app { color: rgba(255, 255, 255, 0.55); }
+:root[data-theme="island"] .notif .nf-body { color: rgba(235, 238, 248, 0.65); }
+
+/* the black bars (Classic, Island): light words on the notification, whatever the desktop */
+:root[data-theme="dark"] .notif, :root[data-theme="island"] .notif { color: #fff; text-shadow: none; }
+:root[data-theme="dark"] .notif .nf-app, :root[data-theme="dark"] .notif .nf-body { color: rgba(235, 238, 248, 0.68); }
+:root[data-theme="dark"] #island .notif .np-close, :root[data-theme="island"] #island .notif .np-close { color: #fff; background: rgba(255, 255, 255, 0.14); }

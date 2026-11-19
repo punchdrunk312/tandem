@@ -90,6 +90,10 @@ export interface IslandSettings {
   islandGlow: string;
   /** How strong the rim glows: "low", "med", "high". */
   glowLevel: string;
+  /** Windows notifications show in the bar. */
+  notifications: boolean;
+  /** Apps whose notifications don't (names, comma separated). */
+  notifMuted: string;
 }
 
 /** What Windows says is playing (see src-tauri/src/media.rs). */
@@ -173,6 +177,8 @@ const DEFAULTS: IslandSettings = {
   textSize: "m",
   islandGlow: "neon",
   glowLevel: "med",
+  notifications: true,
+  notifMuted: "",
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;

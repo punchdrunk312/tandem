@@ -39,6 +39,7 @@ async function main() {
   await safe("ai-in listener", () => onEvent<{ from: string; preview: string; image: boolean }>("ai-in", (m) => island.onAiIn(m)));
   await safe("ai-sent listener", () => onEvent<{ to: string; shot: boolean }>("ai-sent", (m) => island.onAiSent(m)));
   await safe("relay listener", () => onEvent<{ kind: string; json: string }>("relay", (m) => island.onRelay(m)));
+  await safe("notification listener", () => onEvent<import("./views").Notif>("notification", (n) => island.onNotification(n)));
   await safe("quiet listener", () => onEvent<boolean>("quiet", (q) => island.setQuiet(q)));
   await safe("drag-hint listener", () => onEvent<boolean>("drag-hint", (on) => island.dragHint(on)));
   await safe("screen listener", () => onEvent<null>("screen-changed", () => fire("reposition")));

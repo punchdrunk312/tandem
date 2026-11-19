@@ -25,6 +25,7 @@ mod license_client;
 mod media;
 mod voice;
 mod weather;
+mod notify;
 mod reports;
 mod shellmenu;
 #[cfg(windows)]
@@ -1306,6 +1307,7 @@ pub fn run() {
             #[cfg(windows)]
             spawn_hotkey_poll(app.handle().clone());
             media::start(app.handle().clone());
+            notify::start(app.handle().clone());
             #[cfg(not(windows))]
             {
                 register_hotkeys(app.handle(), /* first_try */ true);
@@ -1471,6 +1473,7 @@ pub fn run() {
             media::media_lyrics,
             media::media_video_id,
             weather::weather,
+            notify::notify_set,
             hear_audio,
             voice::voice_set,
             ai::ai_status,

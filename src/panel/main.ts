@@ -1021,6 +1021,7 @@ interface IslandOpts {
   mediaPopup: boolean; videoPopup: boolean;
   barRadius: string; readable: boolean; ambientFx: boolean; motion: string; showTitle: boolean; barGlow: boolean; textSize: string;
   islandGlow: string; glowLevel: string;
+  notifications: boolean; notifMuted: string;
 }
 const ISLAND_DEFAULTS: IslandOpts = {
   soundEnabled: true, soundVolume: 0.12, autoCloseInterval: 15,
@@ -1037,6 +1038,7 @@ const ISLAND_DEFAULTS: IslandOpts = {
   mediaPopup: true, videoPopup: true,
   barRadius: "soft", readable: true, ambientFx: true, motion: "full", showTitle: true, barGlow: true, textSize: "m",
   islandGlow: "neon", glowLevel: "med",
+  notifications: true, notifMuted: "",
 };
 function islandSettings(): IslandOpts {
   try {
@@ -1263,6 +1265,14 @@ function renderTopBar() {
           setting("Animations", null, seg([["full", "Full"], ["less", "Less"]] as const, (is.motion || "full") as "full" | "less", (v) => set({ motion: v }))),
           setting("Island glow", "The Island look's rim.", seg([["neon", "Neon"], ["album", "Album colours"]] as const, (is.islandGlow || "neon") as "neon" | "album", (v) => set({ islandGlow: v }))),
           setting("Glow strength", null, seg([["low", "Soft"], ["med", "Medium"], ["high", "Bright"]] as const, (is.glowLevel || "med") as "low" | "med" | "high", (v) => set({ glowLevel: v }))))),
+      h("section", { class: "group" },
+        h("h2", { class: "g-title" }, "Notifications"),
+        h("div", { class: "card list" },
+          setting("Show notifications in the bar", "Messages, mail and reminders from Windows pop up in the bar for a few seconds. Not during games, films or focus.",
+            switchEl(is.notifications !== false, (v) => set({ notifications: v }))),
+          setting("Muted apps", (is.notifMuted || "") ? "Click one to show its notifications again." : "Press 🔕 on a notification to mute that app.",
+            h("div", { class: "row wrap" }, ...(is.notifMuted || "").split(",").filter(Boolean).map((app) =>
+              h("button", { class: "chip-btn", title: "Show this app again", onclick: () => set({ notifMuted: (is.notifMuted || "").split(",").filter((x) => x && x !== app).join(",") }) }, `${app} ✕`)))))),
       h("section", { class: "group" },
         h("h2", { class: "g-title" }, "Pop-up players"),
         h("div", { class: "card list" },

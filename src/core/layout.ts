@@ -1,7 +1,7 @@
 // Island geometry (from Coucou's layout, trimmed to Tandem's views). Logical px.
 
 export type IslandMode = "hidden" | "compact" | "expanded";
-export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai" | "lyrics" | "stats" | "weather";
+export type IslandViewName = "home" | "drop" | "note" | "greeting" | "moment" | "devices" | "focus" | "update" | "media" | "notes" | "nowplaying" | "recipients" | "video" | "charge" | "game" | "suggest" | "tour" | "agent" | "ai" | "lyrics" | "stats" | "weather" | "notif";
 
 export type BotStateName =
   | "idle"
@@ -66,6 +66,8 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   nowplaying: { height: 56, botX: 30, botY: 26, botDiameter: 28, width: 430 },
   // A YouTube video whose browser was minimised, playing on in the bar (Bob steps aside).
   video: { height: 250, botX: 0, botY: 0, botDiameter: 0, width: 428 },
+  // A Windows notification: the app's logo, who it's from, the title and a line of text.
+  notif: { height: 64, botX: 0, botY: 0, botDiameter: 0, width: 470 },
   // This computer's charger, like a phone's: a slim wide pill, the battery left, the level right.
   charge: { height: 40, botX: 0, botY: 0, botDiameter: 0, width: 400 },
   // Catch: the ball over the bar, Bob running along the bottom to catch it.

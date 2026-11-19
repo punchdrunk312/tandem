@@ -627,6 +627,39 @@ export function buildWeather(a: { refresh(): void }): ViewHost {
   };
 }
 
+export interface Notif { id: number; app: string; title: string; body: string; icon: string }
+
+/** A Windows notification in the bar: the app's logo, its name, the title and a line of
+ *  text. A bell to mute that app, and a cross. */
+export function buildNotif(a: { blip(): void; mute(app: string): void; close(): void }): ViewHost & { show(n: Notif): void } {
+  const icon = h("div", { class: "nf-icon" });
+  const app = h("div", { class: "nf-app" });
+  const title = h("div", { class: "nf-title" });
+  const body = h("div", { class: "nf-body" });
+  let current: Notif | null = null;
+  const mute = h("button", { class: "icon-btn nf-btn", title: "Don't show this app's notifications", "aria-label": "Mute this app",
+    onclick: () => { a.blip(); if (current) a.mute(current.app); } }, h("span", { class: "emo", text: "🔕" }));
+  const close = h("button", { class: "icon-btn nf-btn np-close", title: "Close", "aria-label": "Close notification",
+    onclick: () => { a.blip(); a.close(); } }, svg("M6 6l12 12M18 6L6 18", 12, { stroke: 2.4 }));
+  const el = h("div", { class: "view notif" }, icon, h("div", { class: "nf-text" }, app, title, body), h("div", { class: "nf-row" }, mute, close));
+  return {
+    el,
+    sync() {},
+    show(n) {
+      current = n;
+      icon.style.backgroundImage = n.icon ? `url("${n.icon}")` : "";
+      icon.textContent = n.icon ? "" : Array.from(n.app)[0]?.toUpperCase() ?? "•";
+      app.textContent = n.app;
+      title.textContent = n.title;
+      body.textContent = n.body;
+      body.hidden = !n.body;
+      el.classList.remove("enter");
+      void el.offsetWidth;
+      el.classList.add("enter");
+    },
+  };
+}
+
 export function buildCharge(): ViewHost & {
   show(m: import("./moments").Moment): void;
   showWeather(w: { city: string; temp: number; sky: string; day: boolean }): void;

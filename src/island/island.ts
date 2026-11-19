@@ -22,7 +22,7 @@ import { agentKey, agents, buildAgent, buildAi, loadPrompts, type AgentEv, type 
 import { appName, buildLyrics, buildStats, dayKey, hoursText, listenWeek, loadListen } from "./views";
 import { buildWeather, DEFAULT_ICONS } from "./views";
 import type { BotStateName } from "../core/layout";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, pictureColor, picturePalette, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, pictureColor, picturePalette, buildNote, buildNotif, type Notif, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -62,6 +62,31 @@ export class Island {
   private botGlow!: HTMLElement;
   private greetingCanvas!: HTMLCanvasElement;
   private compactLabel!: HTMLElement;
+  private notifView!: ReturnType<typeof buildNotif>;
+  private notifTimer: number | null = null;
+
+  /** A Windows notification: shown for a few seconds, unless the person is busy in the bar,
+   *  a full-screen app is up, they're focusing, or that app is muted. */
+  onNotification(n: Notif) {
+    if (State.settings.notifications === false || this.quiet || State.focus) return;
+    if ((State.settings.notifMuted || "").split(",").includes(n.app)) return;
+    // Never take the bar from someone using it.
+    const busy = State.mode === "expanded" && State.view !== "notif" && State.view !== "nowplaying" && State.view !== "charge" && (this.wasInIsland || State.isPinned);
+    if (busy) return;
+    this.notifView.show(n);
+    Sound.play("tink");
+    this.engine.triggerEmote("surprised", 0.5);
+    this.autoly(() => this.alert("notif"));
+    if (this.notifTimer != null) window.clearTimeout(this.notifTimer);
+    const done = () => {
+      this.notifTimer = null;
+      if (State.view !== "notif" || State.mode !== "expanded") return;
+      // Still being read: a little longer.
+      if (this.wasInIsland) { this.notifTimer = window.setTimeout(done, 1500); return; }
+      this.closeBar();
+    };
+    this.notifTimer = window.setTimeout(done, 5500);
+  }
   private pillRing!: HTMLElement;
   private lineEl!: HTMLElement;
 
@@ -234,6 +259,18 @@ export class Island {
     this.views.set("weather", buildWeather({ refresh: () => void this.fetchWeather() }));
     this.chargeView = buildCharge();
     this.views.set("charge", this.chargeView);
+    this.notifView = buildNotif({
+      blip: () => Sound.play("blip"),
+      mute: (app) => {
+        const list = new Set((State.settings.notifMuted || "").split(",").filter(Boolean));
+        list.add(app);
+        State.settings.notifMuted = [...list].join(",");
+        State.saveSettings();
+        this.showNote(`${app}'s notifications won't show here (Settings → Top bar).`, 3200);
+      },
+      close: () => this.closeBar(),
+    });
+    this.views.set("notif", this.notifView);
     this.views.set("devices", buildDevices({
       blip: () => Sound.play("blip"),
       jump: (id) => { fire("engage", { peerId: id }); this.closeBar(); },
@@ -1094,6 +1131,7 @@ export class Island {
     ds.text = st.textSize || "m";
     ds.glowStyle = st.islandGlow || "neon";
     ds.glowLevel = st.glowLevel || "med";
+    fire("notify_set", { on: st.notifications !== false });
     if (this.radius.value !== this.targetSize().r) this.animateGeometry(false);
     this.engine.glass = glass;
     // The hello is drawn, not styled: its words follow what is behind the glass too.
@@ -2092,7 +2130,7 @@ export class Island {
     const big = pick === "round" ? 28 : pick === "square" ? 4 : EXPANDED_CORNER;
     let r = State.mode === "expanded" ? big : Math.min(big, ROUNDED_CORNER);
     // The island look: a full pill while slim, soft and round when open.
-    if (State.settings.theme === "island") r = h <= 60 ? h / 2 : 30;
+    if (State.settings.theme === "island") r = h <= 66 ? h / 2 : 30;
     return { w, h, r };
   }
 
@@ -2503,7 +2541,7 @@ export class Island {
   private nextPeek = performance.now() + 25_000;
   private islandSlim(): boolean {
     return State.settings.theme === "island"
-      && (State.mode === "compact" || (State.mode === "expanded" && (State.view === "nowplaying" || State.view === "charge")));
+      && (State.mode === "compact" || (State.mode === "expanded" && (State.view === "nowplaying" || State.view === "charge" || State.view === "notif")));
   }
   private peekTick() {
     const now = performance.now();
@@ -2685,7 +2723,7 @@ export class Island {
     this.greetingCanvas.style.display = greetingActive ? "block" : "none";
 
     this.header.sync();
-    this.header.el.style.display = State.view === "moment" || State.view === "charge" || State.view === "suggest" || State.view === "tour" || State.view === "nowplaying" || State.view === "video" ? "none" : "";
+    this.header.el.style.display = State.view === "moment" || State.view === "charge" || State.view === "suggest" || State.view === "tour" || State.view === "nowplaying" || State.view === "video" || State.view === "notif" ? "none" : "";
     for (const [name, view] of this.views) {
       const on = name === State.view;
       view.el.classList.toggle("on", on);
