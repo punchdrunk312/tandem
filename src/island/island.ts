@@ -22,7 +22,7 @@ import { agentKey, agents, buildAgent, buildAi, loadPrompts, type AgentEv, type 
 import { appName, buildLyrics, buildStats, dayKey, hoursText, listenWeek, loadListen } from "./views";
 import { buildWeather, DEFAULT_ICONS } from "./views";
 import type { BotStateName } from "../core/layout";
-import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, pictureColor, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
+import { buildDevices, buildDrop, buildFocus, buildHeader, buildHome, buildMedia, buildMoment, buildCharge, buildNotes, buildNowPlaying, buildRecipients, pictureColor, picturePalette, buildNote, buildUpdate, homeText, mediaPosition, parseLrc, spreadLyrics, type UpdateInfo, type ViewActions, type ViewHost } from "./views";
 import { saveFocus, type NowPlaying } from "./state";
 import { addNote, loadNotes, nextReminder, updateNote } from "../core/notes";
 import { nextTip } from "./tips";
@@ -1658,6 +1658,13 @@ export class Island {
     if (this.onVideo(m, before)) return;
     if (m?.art !== before?.art) {
       const art = m?.art ?? "";
+      // The island's rim takes the cover's two strongest colours (Island glow → Album colours).
+      void picturePalette(art).then((p) => {
+        if ((State.media?.art ?? "") !== art) return;
+        const root = document.documentElement.style;
+        if (p) { root.setProperty("--a1", p[0]); root.setProperty("--a2", p[1]); }
+        else { root.removeProperty("--a1"); root.removeProperty("--a2"); }
+      });
       void pictureColor(art).then((c) => {
         if ((State.media?.art ?? "") !== art) return;
         State.mediaColor = c;
@@ -2077,8 +2084,8 @@ export class Island {
   private targetSize(): { w: number; h: number; r: number } {
     let { w, h } = islandSize(State.mode, State.view, State.transferRows);
     if (State.settings.theme === "island" && State.mode === "expanded" && State.view === "nowplaying") {
-      w = State.media?.playing ? 480 : 330;
-      h = 62;
+      w = State.media?.playing ? 500 : 350;
+      h = State.media?.playing ? 64 : 60;
     }
     // The corners the person picked (Top bar → Look & feel), in every look.
     const pick = State.settings.barRadius;
@@ -2438,6 +2445,7 @@ export class Island {
     this.engine.music = !!State.media?.playing && !this.quiet;
     this.engine.dance = this.engine.music && State.mode === "expanded" && (State.view === "media" || State.view === "home") ? 1 : 0;
     document.documentElement.dataset.music = this.engine.music ? "on" : "off";
+    document.documentElement.dataset.playing = State.media?.playing ? "on" : "off";
     this.engine.headband = !!State.focus;
     if (ambientOn || this.ambientPx.w) this.drawAmbient(dt, ambientOn);
 

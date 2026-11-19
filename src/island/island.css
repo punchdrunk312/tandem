@@ -1227,7 +1227,6 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 :root[data-theme="island"] .np-cover {
   left: 12px; top: -4px; width: 42px; height: 42px; border-radius: 11px;
   box-shadow: 0 6px 14px -6px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.06);
-  transition: background-image 0.4s;
 }
 :root[data-theme="island"] .np-text { left: 64px; right: 132px; top: -6px; }
 .np-app { display: none; }
@@ -1273,3 +1272,73 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 .m-shuf.on, .m-rep.on { color: var(--teal); filter: drop-shadow(0 0 5px color-mix(in srgb, var(--teal) 70%, transparent)); }
 .m-rep[data-mode="track"]::after { content: "1"; position: absolute; font: 700 7px/1 system-ui; margin: 9px 0 0 9px; }
 .m-shuf, .m-rep { position: relative; }
+
+/* ══ Island, design pass 2 ════════════════════════════════════════════════════ */
+/* the rim colours glide from song to song */
+@property --g1 { syntax: "<color>"; inherits: true; initial-value: #22d3ee; }
+@property --g2 { syntax: "<color>"; inherits: true; initial-value: #3b82f6; }
+@property --g3 { syntax: "<color>"; inherits: true; initial-value: #a855f7; }
+:root { transition: --g1 0.9s ease, --g2 0.9s ease, --g3 0.9s ease; }
+:root[data-glow-style="album"] {
+  --g1: var(--a1, var(--bar-tint, #22d3ee));
+  --g3: var(--a2, color-mix(in srgb, var(--bar-tint, #a855f7) 55%, #a855f7));
+  --g2: color-mix(in srgb, var(--g1) 50%, var(--g3));
+}
+
+/* glass with depth: lighter at the top, a hairline highlight, side glows */
+:root[data-theme="island"] #island {
+  top: 8px;
+  background: linear-gradient(180deg, rgba(19, 21, 30, 0.97), rgba(4, 5, 10, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 12px 35px rgba(0, 0, 0, 0.65),
+    -12px 0 30px -15px color-mix(in srgb, var(--g1) var(--glow-pct), transparent),
+    12px 0 30px -15px color-mix(in srgb, var(--g3) var(--glow-pct), transparent);
+  animation: none;
+  transition: scale 0.35s cubic-bezier(0.3, 1.4, 0.45, 1), filter 0.35s;
+}
+/* the glow breathes only while a song is actually playing */
+:root[data-theme="island"][data-music="on"] #island { animation: none; }
+:root[data-theme="island"][data-playing="on"] #island { animation: island-beat2 2.4s ease-in-out infinite; }
+@keyframes island-beat2 {
+  0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 12px 35px rgba(0, 0, 0, 0.65),
+    -12px 0 30px -15px color-mix(in srgb, var(--g1) var(--glow-pct), transparent),
+    12px 0 30px -15px color-mix(in srgb, var(--g3) var(--glow-pct), transparent); }
+  50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.11), 0 12px 35px rgba(0, 0, 0, 0.65),
+    -14px 0 36px -13px color-mix(in srgb, var(--g1) var(--glow-pct), transparent),
+    14px 0 36px -13px color-mix(in srgb, var(--g3) var(--glow-pct), transparent); }
+}
+:root[data-theme="island"][data-motion="less"] #island { animation: none; }
+/* hovering the slim pill: it lifts a touch and glows brighter */
+:root[data-theme="island"] #island:has(.nowplaying.on):hover { scale: 1.025; filter: brightness(1.12) saturate(1.1); }
+
+/* text: more room, a tighter title */
+:root[data-theme="island"] .np-text { left: 66px; right: 156px; top: -5px; text-align: left; }
+:root[data-theme="island"] .np-title { font-size: 14px; line-height: 17px; font-weight: 750; letter-spacing: -0.25px; color: #fff; }
+:root[data-theme="island"] .np-sing { font-size: 11.5px; line-height: 16px; color: rgba(235, 238, 248, 0.65); }
+:root[data-theme="island"] .np-cover { top: -3px; width: 44px; height: 44px; }
+
+/* the other buttons a little quieter than play/pause */
+:root[data-theme="island"] .np-btn { opacity: 0.8; }
+:root[data-theme="island"] .np-btn:hover { opacity: 1; transform: scale(1.12); filter: drop-shadow(0 0 7px var(--g1)); }
+:root[data-theme="island"] .np-row button[aria-label="Play / pause"] { opacity: 1; }
+:root[data-theme="island"] .np-row button[aria-label="Play / pause"] svg { transition: transform 0.3s cubic-bezier(0.3, 1.6, 0.4, 1); }
+:root[data-theme="island"] .np-row button[aria-label="Play / pause"]:active svg { transform: scale(0.8); }
+
+/* progress: a soft glow on the filled part */
+:root[data-theme="island"] .seek.np-seek { left: 18px; right: 18px; border-radius: 10px; background: rgba(255, 255, 255, 0.12); }
+:root[data-theme="island"] .seek.np-seek i { border-radius: 10px; box-shadow: 0 0 7px color-mix(in srgb, var(--g1) 55%, transparent); }
+:root[data-theme="island"] .seek.np-seek b { box-shadow: 0 0 8px var(--g1); }
+
+/* the equaliser: five gentle bars, purple to cyan, still when paused */
+:root[data-theme="island"] .np-eq { height: 17px; gap: 3px; }
+:root[data-theme="island"] .np-eq i {
+  width: 3px; min-height: 3px; border-radius: 4px;
+  background: linear-gradient(180deg, var(--g3), var(--g1));
+  box-shadow: 0 0 5px color-mix(in srgb, var(--g1) 45%, transparent);
+}
+:root[data-theme="island"] .playing .np-eq i { animation: eq 0.95s ease-in-out infinite; }
+:root[data-theme="island"] .playing .np-eq i:nth-child(2) { animation-duration: 0.75s; animation-delay: -0.3s; }
+:root[data-theme="island"] .playing .np-eq i:nth-child(3) { animation-duration: 1.15s; animation-delay: -0.55s; }
+:root[data-theme="island"] .playing .np-eq i:nth-child(4) { animation-duration: 0.85s; animation-delay: -0.2s; }
+:root[data-theme="island"] .playing .np-eq i:nth-child(5) { animation-duration: 1.05s; animation-delay: -0.7s; }

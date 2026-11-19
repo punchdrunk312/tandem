@@ -1364,7 +1364,7 @@ export function buildNowPlaying(a: MediaActions & { open(): void; close(): void 
   const next = b("Next", icon(MEDIA_ICON.next), () => a.control("next"));
   const prev = b("Previous", icon(MEDIA_ICON.prev), () => a.control("prev"), "np-prev");
   const npCover = h("div", { class: "np-cover" });
-  const npEq = h("span", { class: "eq np-eq" }, h("i"), h("i"), h("i"), h("i"));
+  const npEq = h("span", { class: "eq np-eq" }, h("i"), h("i"), h("i"), h("i"), h("i"));
   let npArt = "";
   const lyr = b("Lyrics", svg("M4 6h16M4 11h16M4 16h10M18 15v5", 14, { stroke: 2 }), () => a.toggleLyrics(), "np-lyr");
   const close = b("Hide until the next song", svg("M6 6l12 12M18 6L6 18", 13, { stroke: 2.6 }), () => a.close(), "np-close");
@@ -1442,6 +1442,42 @@ export async function pictureColor(url: string): Promise<string> {
   const top = Math.max(r, g, b, 1);
   const lift = Math.min(1.6, 200 / top);
   return `rgb(${Math.round(Math.min(255, r * lift))}, ${Math.round(Math.min(255, g * lift))}, ${Math.round(Math.min(255, b * lift))})`;
+}
+
+/** The cover's two strongest colours, for the island's rim: the main one, and a second
+ *  one of a different hue (or the main one turned a little round the colour wheel). */
+export async function picturePalette(url: string): Promise<[string, string] | null> {
+  if (!url) return null;
+  const img = new Image();
+  img.src = url;
+  try { await img.decode(); } catch { return null; }
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const x = c.getContext("2d", { willReadFrequently: true });
+  if (!x) return null;
+  x.drawImage(img, 0, 0, 32, 32);
+  const px = x.getImageData(0, 0, 32, 32).data;
+  // Twelve hue buckets, each pixel weighted by how colourful and bright it is.
+  const buckets = Array.from({ length: 12 }, () => ({ w: 0, h: 0 }));
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i] / 255, g = px[i + 1] / 255, b = px[i + 2] / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    if (d < 0.08 || max < 0.15) continue;
+    let hue = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    hue = (hue * 60 + 360) % 360;
+    const w = d * max;
+    const k = Math.floor(hue / 30) % 12;
+    buckets[k].w += w;
+    buckets[k].h += hue * w;
+  }
+  const ranked = buckets.map((b, i) => ({ i, w: b.w, hue: b.w ? b.h / b.w : 0 })).sort((a, b) => b.w - a.w);
+  if (!ranked[0].w) return null;
+  const first = ranked[0];
+  const dist = (a: number, b: number) => Math.min(Math.abs(a - b), 12 - Math.abs(a - b));
+  const second = ranked.find((b) => b.w > first.w * 0.15 && dist(b.i, first.i) >= 2);
+  const h2 = second ? second.hue : (first.hue + 45) % 360;
+  // Bright and rich, like light, whatever the cover's own brightness.
+  return [`hsl(${Math.round(first.hue)} 90% 62%)`, `hsl(${Math.round(h2)} 85% 64%)`];
 }
 
 // ------------------------------------------------------------------ notes & reminders
