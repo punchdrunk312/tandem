@@ -4,7 +4,7 @@
 
 import { call, fire, IS_TAURI, onDragDrop, type DragDropPayload, type Dropped } from "../bridge";
 import { Spring, Tracked } from "../core/anim";
-import {
+import { ISLAND_TOP,
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_W, ROUNDED_CORNER,
   botGlowColor, botGlowOpacity, botPosition, islandSize,
   type IslandMode, type IslandViewName,
@@ -62,6 +62,7 @@ export class Island {
   private botGlow!: HTMLElement;
   private greetingCanvas!: HTMLCanvasElement;
   private compactLabel!: HTMLElement;
+  private pillRing!: HTMLElement;
   private lineEl!: HTMLElement;
 
   private header!: ViewHost;
@@ -151,6 +152,7 @@ export class Island {
     this.reminderLoop();
     // Bob's tip of the day, when nothing else is going on.
     window.setInterval(() => this.maybeTip(), 60_000);
+    window.setInterval(() => this.peekTick(), 1000);
     // The look changes with the day; the year turning gets confetti on the minute.
     window.setInterval(() => {
       this.refreshLook();
@@ -452,7 +454,8 @@ export class Island {
     this.bdEdgeImg = h("canvas", { id: "bd-edge-img" }) as HTMLCanvasElement;
     const glass = h("div", { id: "glass" }, this.bdEl, h("div", { id: "bd-edge" }, this.bdEdgeImg));
     const clip = h("div", { id: "island-clip" }, glass, h("div", { id: "bar-tint" }), this.ambientCanvas, this.greetingCanvas, this.contentEl);
-    this.islandEl = h("div", { id: "island" }, clip, this.botGlow, this.botCanvas, this.compactLabel);
+    this.pillRing = h("i", { class: "ring pill-ring" });
+    this.islandEl = h("div", { id: "island" }, clip, this.botGlow, this.botCanvas, this.compactLabel, this.pillRing);
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     this.greetingCanvas.width = Math.round(EXPANDED_W * dpr);
@@ -505,7 +508,7 @@ export class Island {
   /** Should the small transfer bar be up right now? */
   private wantPill(): boolean {
     if (this.quiet || this.pillSuppressed) return false;
-    return this.pillPinned || State.activeTransfers.length > 0 || State.staging > 0;
+    return this.pillPinned || State.activeTransfers.length > 0 || State.staging > 0 || (State.settings.theme === "island" && !!State.focus);
   }
 
   // ── Bob's mood ──────────────────────────────────────────────────────────────
@@ -1057,8 +1060,11 @@ export class Island {
   private glassOn: boolean | null = null;
   /** Liquid Glass or the classic black bar: the page, Bob and the season all follow. */
   private applyTheme() {
-    const glass = State.settings.theme !== "dark";
-    document.documentElement.dataset.theme = glass ? "glass" : "dark";
+    const island = State.settings.theme === "island";
+    const glass = !island && State.settings.theme !== "dark";
+    document.documentElement.dataset.theme = island ? "island" : glass ? "glass" : "dark";
+    // The island is black inside: white words, whatever is behind.
+    if (island) this.tone = "dark";
     const bar = State.settings.barColor;
     const carbon = bar === "carbon" || bar === "midnight";
     if (bar) document.documentElement.dataset.bar = bar;
@@ -1517,6 +1523,11 @@ export class Island {
     }
     if (State.view === "focus" && State.mode === "expanded") State.notify();
     else this.syncLine();
+    // The island look: the countdown lives in the small pill while the bar is closed.
+    if (State.settings.theme === "island" && !this.quiet) {
+      if (State.mode === "hidden" && this.fsm.state === "hidden") this.fsm.forcePetit();
+      else if (State.mode === "compact") State.notify();
+    }
     this.focusTimer = window.setTimeout(() => this.focusTick(), 1000);
   }
 
@@ -2065,7 +2076,9 @@ export class Island {
     // The corners the person picked (Top bar → Look & feel), in every look.
     const pick = State.settings.barRadius;
     const big = pick === "round" ? 28 : pick === "square" ? 4 : EXPANDED_CORNER;
-    const r = State.mode === "expanded" ? big : Math.min(big, ROUNDED_CORNER);
+    let r = State.mode === "expanded" ? big : Math.min(big, ROUNDED_CORNER);
+    // The island look: a full pill while slim, soft and round when open.
+    if (State.settings.theme === "island") r = h <= 60 ? h / 2 : 30;
     return { w, h, r };
   }
 
@@ -2089,14 +2102,17 @@ export class Island {
     const r = this.radius.value;
     this.islandEl.style.width = `${w}px`;
     this.islandEl.style.height = `${hh}px`;
-    this.islandEl.style.borderRadius = `0 0 ${r}px ${r}px`;
+    // The island floats: round on all four corners.
+    this.islandEl.style.borderRadius = State.settings.theme === "island" ? `${r}px` : `0 0 ${r}px ${r}px`;
     this.islandEl.style.transform = `translateX(-50%)`;
     this.placeBackdrop();
     this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
     this.compactLabel.style.top = `${hh / 2 - 9}px`;
 
     // A retracted island takes no mouse at all: nothing at the top of the screen is covered.
-    const rect = hh < 1 ? { x: 0, y: 0, w: 0, h: 0 } : { x: (PANEL_W - w) / 2, y: 0, w, h: hh };
+    const top = State.settings.theme === "island" ? ISLAND_TOP : 0;
+    const rect = hh < 1 ? { x: 0, y: 0, w: 0, h: 0 } : { x: (PANEL_W - w) / 2, y: top, w, h: hh };
+    this.syncBubble(w, hh);
     const p = this.pushedRect;
     if (Math.abs(p.x - rect.x) > 0.5 || Math.abs(p.w - rect.w) > 0.5 || Math.abs(p.h - rect.h) > 0.5) {
       this.pushedRect = rect;
@@ -2122,7 +2138,7 @@ export class Island {
 
   /** A new picture of what is behind the bar: drawn on the next frame. */
   setBackdropFrame(f: BackdropFrame) {
-    if (State.settings.theme === "dark") return;
+    if (State.settings.theme !== "glass") return;
     const first = this.bdPending == null;
     this.bdPending = f;
     if (first) requestAnimationFrame(() => this.drawBackdrop());
@@ -2131,7 +2147,7 @@ export class Island {
   private drawBackdrop() {
     const f = this.bdPending;
     this.bdPending = null;
-    if (!f || State.settings.theme === "dark") return;
+    if (!f || State.settings.theme !== "glass") return;
     for (const c of [this.bdEl, this.bdEdgeImg]) {
       if (c.width !== f.pw || c.height !== f.ph) {
         c.width = f.pw;
@@ -2186,7 +2202,7 @@ export class Island {
 
   /** Where the bar is (window coordinates), with room for the blur, while it is open. */
   glassRect(): { x: number; y: number; w: number; h: number } | null {
-    if (State.settings.theme === "dark" || State.mode === "hidden") return null;
+    if (State.settings.theme !== "glass" || State.mode === "hidden") return null;
     const r = this.islandEl.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return null;
     const m = 24;
@@ -2452,8 +2468,73 @@ export class Island {
     this.ambient.draw(ctx, w, hh);
   }
 
+  /** Bob peeks out from under the island pill now and then (ms, performance clock). */
+  private peekUntil = 0;
+  private nextPeek = performance.now() + 25_000;
+  private islandSlim(): boolean {
+    return State.settings.theme === "island"
+      && (State.mode === "compact" || (State.mode === "expanded" && (State.view === "nowplaying" || State.view === "charge")));
+  }
+  private peekTick() {
+    const now = performance.now();
+    if (!this.islandSlim() || this.quiet) return;
+    if (now > this.nextPeek) {
+      this.peekUntil = now + 3400;
+      this.nextPeek = now + 45_000 + Math.random() * 40_000;
+      this.engine.triggerEmote(Math.random() < 0.5 ? "wink" : "happy", 0.6);
+      this.ensureRunning();
+      window.setTimeout(() => this.ensureRunning(), 3500);
+    }
+  }
+
+  /** The second bubble beside the island: another thing going on at the same time. */
+  private bubble = h("div", { id: "island-bubble" }, h("i", { class: "ring" }), h("b"));
+  private syncBubble(w: number, hh: number) {
+    const b = this.bubble;
+    if (!b.isConnected) this.root.append(b);
+    const island = State.settings.theme === "island";
+    const music = !!State.media?.playing;
+    const t = State.activeTransfers[0];
+    let kind = "";
+    if (island && hh > 8) {
+      if (State.mode === "expanded" && State.view === "nowplaying") kind = t ? "transfer" : State.focus ? "focus" : "";
+      else if (State.mode === "compact" && music) kind = "music";
+    }
+    b.dataset.kind = kind;
+    if (!kind) return;
+    const size = Math.max(30, Math.min(hh, 44));
+    b.style.width = b.style.height = `${size}px`;
+    b.style.left = `calc(50% + ${w / 2 + 8}px)`;
+    b.style.top = `${ISLAND_TOP + (hh - size) / 2}px`;
+    const label = b.querySelector("b")!;
+    if (kind === "music") {
+      b.style.backgroundImage = State.media?.art ? `url("${State.media.art}")` : "";
+      b.style.setProperty("--p", "0");
+      label.textContent = State.media?.art ? "" : "♪";
+    } else {
+      b.style.backgroundImage = "";
+      let p = 0;
+      if (kind === "transfer" && t) {
+        p = t.total ? Math.round((t.bytes / t.total) * 100) : 0;
+        label.textContent = t.direction === "out" ? "↑" : "↓";
+      } else if (State.focus) {
+        p = Math.round(Math.min(1, Math.max(0, 1 - (State.focus.endsAt - Date.now()) / State.focus.total)) * 100);
+        label.textContent = `${Math.max(0, Math.ceil((State.focus.endsAt - Date.now()) / 60_000))}`;
+      }
+      b.style.setProperty("--p", String(p));
+    }
+  }
+
   private updateBotTargets() {
     const p = botPosition(State.mode, State.view);
+    if (this.islandSlim()) {
+      // The pill is the song, the timer or the transfer; Bob waits underneath and peeks out.
+      const peeking = performance.now() < this.peekUntil;
+      p.cx = this.width.value - 36;
+      p.cy = this.height.value + (peeking ? 14 : -6);
+      p.diameter = peeking ? 26 : 12;
+      p.opacity = peeking ? 1 : 0;
+    }
     this.botCx.target = State.view === "game" && State.mode === "expanded" && this.gameBobX != null ? this.gameBobX : p.cx;
     this.botCy.target = p.cy;
     this.botSize.target = p.diameter / 0.6;
@@ -2545,6 +2626,10 @@ export class Island {
     if (!s) return "";
     const active = State.activeTransfers[0];
     if (!active && State.staging > 0) return "↑ Preparing…";
+    if (!active && State.focus && State.settings.theme === "island") {
+      const left = Math.max(0, Math.ceil((State.focus.endsAt - Date.now()) / 1000));
+      return `Focus  ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    }
     if (active && active.total) {
       const pct = Math.min(100, Math.round((active.bytes / active.total) * 100));
       return `${active.direction === "out" ? "↑" : "↓"} ${pct}%  ${active.name}`;
@@ -2596,7 +2681,15 @@ export class Island {
 
     this.compactLabel.textContent = this.compactText();
     this.compactLabel.style.opacity = State.mode === "compact" ? "1" : "0";
-    this.compactLabel.style.left = `${40 + 20}px`;
+    this.compactLabel.style.left = State.settings.theme === "island" ? "44px" : `${40 + 20}px`;
+    // The island's small pill: a progress ring at the left for a transfer or the focus timer.
+    const ring = this.pillRing;
+    const t = State.activeTransfers[0];
+    const f = State.focus;
+    const pct = t && t.total ? (t.bytes / t.total) * 100 : f ? Math.min(1, Math.max(0, 1 - (f.endsAt - Date.now()) / f.total)) * 100 : -1;
+    ring.style.opacity = State.settings.theme === "island" && State.mode === "compact" && pct >= 0 ? "1" : "0";
+    ring.style.setProperty("--p", pct.toFixed(1));
+    ring.style.top = `${this.height.value / 2 - 10}px`;
 
     this.engine.setState(this.botState());
   }

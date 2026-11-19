@@ -1353,11 +1353,15 @@ export function buildNowPlaying(a: MediaActions & { open(): void; close(): void 
   const back = b("15 seconds back", svg(MEDIA_ICON.back15, 15, { stroke: 2 }), () => a.seek(Math.max(0, mediaPosition() - 15_000)));
   const play = b("Play / pause", icon(MEDIA_ICON.play), () => a.control("play_pause"));
   const next = b("Next", icon(MEDIA_ICON.next), () => a.control("next"));
+  const prev = b("Previous", icon(MEDIA_ICON.prev), () => a.control("prev"), "np-prev");
+  const npCover = h("div", { class: "np-cover" });
+  const npEq = h("span", { class: "eq np-eq" }, h("i"), h("i"), h("i"), h("i"));
+  let npArt = "";
   const lyr = b("Lyrics", svg("M4 6h16M4 11h16M4 16h10M18 15v5", 14, { stroke: 2 }), () => a.toggleLyrics(), "np-lyr");
   const close = b("Hide until the next song", svg("M6 6l12 12M18 6L6 18", 13, { stroke: 2.6 }), () => a.close(), "np-close");
   const bar = seekBar("np-seek", a);
   const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, sing.el);
-  const el = h("div", { class: "view nowplaying" }, text, h("div", { class: "np-row" }, back, play, next, lyr, close), bar.el);
+  const el = h("div", { class: "view nowplaying" }, npCover, text, h("div", { class: "np-row" }, npEq, prev, back, play, next, lyr, close), bar.el);
   let shown: boolean | null = null;
   return {
     el,
@@ -1366,6 +1370,12 @@ export function buildNowPlaying(a: MediaActions & { open(): void; close(): void 
       if (!m) return;
       const pos = mediaPosition();
       lyr.classList.toggle("on", State.settings.lyrics);
+      if ((m.art ?? "") !== npArt) {
+        npArt = m.art ?? "";
+        npCover.style.backgroundImage = npArt ? `url("${npArt}")` : "";
+      }
+      prev.disabled = !m.can_prev;
+      el.classList.toggle("playing", m.playing);
       // With lyrics on, the second line sings along word by word; otherwise it names the artist.
       const timed = State.settings.lyrics && Array.isArray(State.lyrics);
       const singing = timed ? sing.show(pos, m.artist) : sing.show(-1, m.artist);

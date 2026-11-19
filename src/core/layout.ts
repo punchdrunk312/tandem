@@ -38,6 +38,8 @@ export const COMPACT_W = 288;
 export const EXPANDED_W = 640;
 
 export const ROUNDED_CORNER = 14;
+/** The island look floats a little below the top of the screen. */
+export const ISLAND_TOP = 8;
 export const EXPANDED_CORNER = 22;
 
 export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {

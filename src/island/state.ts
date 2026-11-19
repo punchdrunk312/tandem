@@ -49,7 +49,7 @@ export interface IslandSettings {
   /** Calm Bob: no seasons drifting, quieter moments. */
   calm: boolean;
   /** The look: frosted "glass" (default) or the classic black bar. */
-  theme: "glass" | "dark";
+  theme: "glass" | "dark" | "island";
   /** Accent colour (hex), or "" for the default teal. Applies to both looks. */
   accent: string;
   /** The bar's own colour: "" (the look's own), "carbon", "midnight", "sand" or "rose". */

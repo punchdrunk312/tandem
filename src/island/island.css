@@ -1116,3 +1116,66 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 /* text size */
 :root[data-text="s"] #content { font-size: 92%; }
 :root[data-text="l"] #content { font-size: 108%; }
+
+/* ══ Island: a floating black pill that morphs ═════════════════════════════════ */
+:root[data-theme="island"] #island {
+  top: 8px; background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 14px 34px -10px rgba(0, 0, 0, 0.7);
+}
+:root[data-theme="island"] #island::after { display: none; }
+/* the rim glows all the way round in the song's colours */
+:root[data-theme="island"][data-music="on"] #island {
+  box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--bar-tint, var(--teal)) 75%, transparent),
+    0 0 20px 2px color-mix(in srgb, var(--bar-tint, var(--teal)) 45%, transparent),
+    0 14px 34px -10px rgba(0, 0, 0, 0.7);
+  animation: island-glow 3.2s ease-in-out infinite;
+}
+@keyframes island-glow {
+  50% { box-shadow:
+    0 0 0 1.5px color-mix(in srgb, var(--bar-tint, var(--teal)) 45%, transparent),
+    0 0 32px 5px color-mix(in srgb, var(--bar-tint, var(--teal)) 30%, transparent),
+    0 14px 34px -10px rgba(0, 0, 0, 0.7); }
+}
+:root[data-theme="island"] #line { opacity: 0; }
+
+/* the music pill: cover, the song, a little equaliser, previous / play / next */
+.np-cover, .np-prev, .np-eq { display: none; }
+:root[data-theme="island"] .np-cover {
+  display: block; position: absolute; left: 12px; top: -2px; width: 34px; height: 34px; border-radius: 10px;
+  background: #222 center / cover no-repeat; box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.8);
+}
+:root[data-theme="island"] .nowplaying.playing .np-cover { animation: breathe 3.2s ease-in-out infinite; }
+:root[data-theme="island"] .np-prev { display: grid; }
+:root[data-theme="island"] .np-row button[aria-label="15 seconds back"] { display: none; }
+:root[data-theme="island"] .np-eq { display: inline-flex; align-self: center; margin: 0 6px 0 0; }
+:root[data-theme="island"] .np-text { left: 56px; right: 158px; }
+:root[data-theme="island"] .seek.np-seek { left: 56px; right: 26px; }
+
+/* progress rings: the small pill and the bubble */
+.ring {
+  display: block; width: 20px; height: 20px; border-radius: 50%;
+  background: conic-gradient(var(--teal) calc(var(--p, 0) * 1%), rgba(255, 255, 255, 0.16) 0);
+  -webkit-mask: radial-gradient(circle, transparent 54%, #000 58%); mask: radial-gradient(circle, transparent 54%, #000 58%);
+  transition: background 0.3s;
+}
+.pill-ring { position: absolute; left: 14px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+
+/* the split bubble beside the island */
+#island-bubble {
+  position: absolute; display: grid; place-items: center; border-radius: 50%; background: #000 center / cover no-repeat;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 10px 24px -8px rgba(0, 0, 0, 0.7);
+  color: #fff; font: 700 11px/1 system-ui, sans-serif; pointer-events: none;
+  transform: scale(0.2); opacity: 0;
+  transition: transform 0.5s cubic-bezier(0.3, 1.5, 0.45, 1), opacity 0.25s, left 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+#island-bubble:not([data-kind=""]) { transform: none; opacity: 1; }
+#island-bubble[data-kind=""] { visibility: hidden; transition: none; }
+#island-bubble .ring { position: absolute; inset: 3px; width: auto; height: auto; }
+#island-bubble[data-kind="music"] .ring { display: none; }
+#island-bubble[data-kind="music"] { animation: spin 8s linear infinite; }
+@keyframes spin { to { rotate: 360deg; } }
+#island-bubble b { position: relative; }
+
+/* the island is pure black inside */
+:root[data-theme="island"] #bar-tint { display: none; }

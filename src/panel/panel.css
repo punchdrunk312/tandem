@@ -747,3 +747,8 @@ button.qf:hover:not(:disabled) { background: rgba(255, 255, 255, 0.03); }
 .add-card { min-height: 0; padding: 18px; }
 .search { background: var(--surface-2); border-color: var(--line-2); }
 .search input[type="search"], .search-in { background: transparent !important; border: none !important; box-shadow: none !important; }
+
+/* the Island look's picture */
+.looks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.look-art.island .lb { top: 6px; width: 46%; height: 20px; border-radius: 999px; background: #000; box-shadow: 0 0 0 1.5px rgba(167, 139, 250, 0.8), 0 0 12px 2px rgba(96, 165, 250, 0.5); }
+.look-art.island .lb s { background: rgba(255, 255, 255, 0.6); }

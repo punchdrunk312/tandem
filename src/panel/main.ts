@@ -1010,7 +1010,7 @@ interface IslandOpts {
   soundEnabled: boolean; soundVolume: number; autoCloseInterval: number;
   seasons: boolean; moments: boolean; crossWhoosh: boolean; birthday: string; calm: boolean;
   weather: boolean; city: string; voice: boolean; aiAgents: boolean; aiErrors: boolean;
-  theme: "glass" | "dark";
+  theme: "glass" | "dark" | "island";
   accent: string;
   barColor: string;
   bobSkin: string;
@@ -1119,6 +1119,7 @@ function maybeAskReports() {
 const LOOKS = [
   { id: "glass", title: "Liquid Glass", line: "Clear glass. Your desktop shows through." },
   { id: "dark", title: "Classic", line: "The black bar. Shows in screenshots." },
+  { id: "island", title: "Island", line: "A floating black pill that morphs, like a phone's." },
 ] as const;
 
 // Spotify: the person's own Spotify app (Client ID), signed in with PKCE.
