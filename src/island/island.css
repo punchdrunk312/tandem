@@ -1179,3 +1179,97 @@ button.h-tile:hover { transform: translateY(-2px); background: rgba(255, 255, 25
 
 /* the island is pure black inside */
 :root[data-theme="island"] #bar-tint { display: none; }
+
+/* ══ Island, polished ═════════════════════════════════════════════════════════
+   Dark glass, a thin lit rim (cyan → blue → purple, or the cover's colours), a soft
+   glow that breathes with the music. */
+:root { --g1: #22d3ee; --g2: #3b82f6; --g3: #a855f7; --glow-pct: 45%; }
+:root[data-glow-level="low"] { --glow-pct: 25%; }
+:root[data-glow-level="high"] { --glow-pct: 70%; }
+:root[data-glow-style="album"] {
+  --g1: var(--bar-tint, #22d3ee);
+  --g2: color-mix(in srgb, var(--bar-tint, #3b82f6) 60%, #3b82f6);
+  --g3: color-mix(in srgb, var(--bar-tint, #a855f7) 55%, #a855f7);
+}
+:root[data-theme="island"] #island {
+  top: 6px;
+  background: rgba(7, 8, 13, 0.9);
+  box-shadow:
+    -14px 0 26px -14px color-mix(in srgb, var(--g1) var(--glow-pct), transparent),
+    14px 0 26px -14px color-mix(in srgb, var(--g3) var(--glow-pct), transparent),
+    0 14px 34px -12px rgba(0, 0, 0, 0.75);
+  animation: none;
+}
+/* the rim: one thin lit line */
+:root[data-theme="island"] #island::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 7;
+  background: linear-gradient(90deg, var(--g1), var(--g2) 50%, var(--g3));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: 0.55; transition: opacity 0.4s;
+}
+:root[data-theme="island"][data-music="on"] #island::before { opacity: 0.95; }
+/* it breathes with the music */
+:root[data-theme="island"][data-music="on"] #island { animation: island-beat 1.8s ease-in-out infinite; }
+@keyframes island-beat {
+  0%, 100% { box-shadow:
+    -14px 0 26px -14px color-mix(in srgb, var(--g1) var(--glow-pct), transparent),
+    14px 0 26px -14px color-mix(in srgb, var(--g3) var(--glow-pct), transparent),
+    0 14px 34px -12px rgba(0, 0, 0, 0.75); }
+  50% { box-shadow:
+    -16px 0 34px -12px color-mix(in srgb, var(--g1) var(--glow-pct), transparent),
+    16px 0 34px -12px color-mix(in srgb, var(--g3) var(--glow-pct), transparent),
+    0 14px 34px -12px rgba(0, 0, 0, 0.75); }
+}
+:root[data-theme="island"][data-motion="less"] #island { animation: none; }
+
+/* the music pill */
+:root[data-theme="island"] .np-cover {
+  left: 12px; top: -4px; width: 42px; height: 42px; border-radius: 11px;
+  box-shadow: 0 6px 14px -6px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition: background-image 0.4s;
+}
+:root[data-theme="island"] .np-text { left: 64px; right: 132px; top: -6px; }
+.np-app { display: none; }
+:root[data-theme="island"] .np-app {
+  display: flex; align-items: center; gap: 5px; height: 13px; margin-bottom: 1px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: rgba(255, 255, 255, 0.55);
+}
+:root[data-theme="island"] .np-title { font-size: 13.5px; line-height: 16px; font-weight: 750; color: #fff; }
+:root[data-theme="island"] .nowplaying.singing .np-title { font-size: 10.5px; color: rgba(255, 255, 255, 0.55); }
+:root[data-theme="island"] .np-sing { font-size: 11.5px; height: 16px; line-height: 16px; color: rgba(235, 238, 248, 0.6); }
+:root[data-theme="island"] .nowplaying.singing .np-sing { color: #fff; font-size: 12.5px; }
+:root[data-theme="island"] .np-text.swap, :root[data-theme="island"] .np-cover.swap { animation: np-swap 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.1); }
+@keyframes np-swap { from { opacity: 0; transform: translateY(6px) scale(0.96); filter: blur(3px); } }
+
+/* controls: previous, a round glowing play/pause, next */
+:root[data-theme="island"] .np-row { top: 6px; right: 12px; gap: 6px; align-items: center; }
+:root[data-theme="island"] .np-lyr { display: none; }
+:root[data-theme="island"] .np-btn { width: 26px; height: 26px; color: rgba(255, 255, 255, 0.78); transition: color 0.2s, transform 0.25s cubic-bezier(0.3, 1.6, 0.4, 1), filter 0.2s, background 0.2s; }
+:root[data-theme="island"] .np-btn:hover { color: #fff; transform: scale(1.12); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--g1) 80%, transparent)); background: rgba(255, 255, 255, 0.06); }
+:root[data-theme="island"] .np-row button[aria-label="Play / pause"] {
+  width: 32px; height: 32px; border-radius: 50%; color: #fff;
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--g2) 70%, transparent), 0 0 14px -2px color-mix(in srgb, var(--g2) 70%, transparent);
+}
+:root[data-theme="island"] .np-row button[aria-label="Play / pause"]:hover { box-shadow: 0 0 0 1px var(--g1), 0 0 20px 0 color-mix(in srgb, var(--g1) 80%, transparent); }
+:root[data-theme="island"] .np-close { width: 20px; height: 20px; background: rgba(255, 255, 255, 0.08); }
+:root[data-theme="island"] .np-eq { margin-right: 2px; }
+:root[data-theme="island"] .nowplaying:not(.playing) .np-prev,
+:root[data-theme="island"] .nowplaying:not(.playing) button[aria-label="Next"],
+:root[data-theme="island"] .nowplaying:not(.playing) .np-eq { display: none; }
+:root[data-theme="island"] .nowplaying:not(.playing) .np-text { right: 70px; }
+
+/* progress: a hairline along the bottom, cyan to purple, with a glowing dot */
+:root[data-theme="island"] .seek.np-seek { left: 22px; right: 22px; bottom: -5px; height: 2px; background: rgba(255, 255, 255, 0.1); }
+:root[data-theme="island"] .seek.np-seek i { background: linear-gradient(90deg, var(--g1), var(--g2), var(--g3)); transition: width 0.5s linear; }
+:root[data-theme="island"] .seek.np-seek b {
+  opacity: 1; transform: none; width: 6px; height: 6px; margin: -3px 0 0 -3px; transition: left 0.5s linear;
+  background: #fff; box-shadow: 0 0 6px 1px color-mix(in srgb, var(--g3) 90%, transparent);
+}
+:root[data-theme="island"] .seek.np-seek.can:hover { height: 3px; }
+
+/* the full player: shuffle and repeat lit when on */
+.m-shuf.on, .m-rep.on { color: var(--teal); filter: drop-shadow(0 0 5px color-mix(in srgb, var(--teal) 70%, transparent)); }
+.m-rep[data-mode="track"]::after { content: "1"; position: absolute; font: 700 7px/1 system-ui; margin: 9px 0 0 9px; }
+.m-shuf, .m-rep { position: relative; }

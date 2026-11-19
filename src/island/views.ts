@@ -868,7 +868,7 @@ export function buildFocus(a: FocusActions): ViewHost {
 
 // ------------------------------------------------------------------ now playing
 
-export type MediaAction = "play_pause" | "next" | "prev";
+export type MediaAction = "play_pause" | "next" | "prev" | "shuffle" | "repeat";
 
 export interface MediaActions {
   blip(): void;
@@ -1107,6 +1107,10 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const fwd = jump("15 seconds on", MEDIA_ICON.fwd15, 15_000);
   const next = btn("Next", MEDIA_ICON.next, "next");
   const lyr = h("button", { class: "btn m-lyr", text: "Lyrics", title: "Show lyrics (looks the song up online)", onclick: () => { a.blip(); a.toggleLyrics(); } });
+  const shuffle = h("button", { class: "icon-btn m-btn m-shuf", title: "Shuffle", "aria-label": "Shuffle", onclick: () => { a.blip(); a.control("shuffle"); } },
+    svg("M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5", 15, { stroke: 2 }));
+  const repeat = h("button", { class: "icon-btn m-btn m-rep", title: "Repeat", "aria-label": "Repeat", onclick: () => { a.blip(); a.control("repeat"); } },
+    svg("M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3", 15, { stroke: 2 }));
   const sing = karaoke("m-sing");
   const line = h("div", { class: "m-line" });
   const lineNext = h("div", { class: "m-line next" });
@@ -1209,7 +1213,7 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
   const eq = h("span", { class: "eq" }, h("i"), h("i"), h("i"), h("i"));
   const glow = h("div", { class: "m-glow" });
   const cover = h("div", { class: "m-cover" });
-  const body = h("div", { class: "m-text" }, h("div", { class: "m-app-row" }, eq, app, upnext), title, artist, h("div", { class: "m-row" }, heart, plist, prev, back, play, fwd, next, lyr), bar.el, times, sing.el, line, lineNext, row2);
+  const body = h("div", { class: "m-text" }, h("div", { class: "m-app-row" }, eq, app, upnext), title, artist, h("div", { class: "m-row" }, heart, plist, shuffle, prev, back, play, fwd, next, repeat, lyr), bar.el, times, sing.el, line, lineNext, row2);
   const el = h("div", { class: "view media" }, glow, cover, body, empty);
   let shownSong = "";
   let shownArt = "";
@@ -1272,6 +1276,11 @@ export function buildMedia(a: MediaActions & MediaMore): ViewHost {
       tNow.textContent = mmss(pos);
       tEnd.textContent = m.duration_ms ? mmss(m.duration_ms) : "";
       lyr.classList.toggle("on", State.settings.lyrics);
+      shuffle.hidden = m.shuffle == null;
+      shuffle.classList.toggle("on", !!m.shuffle);
+      repeat.hidden = !m.repeat;
+      repeat.classList.toggle("on", !!m.repeat && m.repeat !== "none");
+      repeat.dataset.mode = m.repeat ?? "";
       const timed = State.settings.lyrics && Array.isArray(State.lyrics);
       sing.el.hidden = !timed;
       line.hidden = timed;
@@ -1360,7 +1369,9 @@ export function buildNowPlaying(a: MediaActions & { open(): void; close(): void 
   const lyr = b("Lyrics", svg("M4 6h16M4 11h16M4 16h10M18 15v5", 14, { stroke: 2 }), () => a.toggleLyrics(), "np-lyr");
   const close = b("Hide until the next song", svg("M6 6l12 12M18 6L6 18", 13, { stroke: 2.6 }), () => a.close(), "np-close");
   const bar = seekBar("np-seek", a);
-  const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, title, sing.el);
+  const npApp = h("div", { class: "np-app" });
+  let npSong = "";
+  const text = h("button", { class: "np-text", title: "Show more", onclick: () => { a.blip(); a.open(); } }, npApp, title, sing.el);
   const el = h("div", { class: "view nowplaying" }, npCover, text, h("div", { class: "np-row" }, npEq, prev, back, play, next, lyr, close), bar.el);
   let shown: boolean | null = null;
   return {
@@ -1380,6 +1391,19 @@ export function buildNowPlaying(a: MediaActions & { open(): void; close(): void 
       const timed = State.settings.lyrics && Array.isArray(State.lyrics);
       const singing = timed ? sing.show(pos, m.artist) : sing.show(-1, m.artist);
       title.textContent = singing ? `${m.title} · ${m.artist}` : m.title;
+      const isSpotify = /spotify/i.test(m.app);
+      const appLabel = appName(m.app);
+      if (npApp.dataset.app !== appLabel) {
+        npApp.dataset.app = appLabel;
+        npApp.innerHTML = isSpotify ? `<svg viewBox="0 0 24 24" width="11" height="11"><circle cx="12" cy="12" r="12" fill="#1db954"/><path d="M6 9.4c4-1.3 8.6-1 12 1M7 12.9c3.2-1 6.6-.7 9.5.8M8 16.2c2.4-.7 5-.5 7 .6" stroke="#000" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>` : "";
+        npApp.append(appLabel);
+      }
+      // A new song: the words and the cover slide in.
+      const song = `${m.title}|${m.artist}`;
+      if (song !== npSong) {
+        if (npSong) for (const n of [text, npCover]) { n.classList.remove("swap"); void n.offsetWidth; n.classList.add("swap"); }
+        npSong = song;
+      }
       el.classList.toggle("singing", singing);
       next.disabled = !m.can_next;
       back.disabled = !m.can_seek;

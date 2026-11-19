@@ -31,6 +31,10 @@ pub struct NowPlaying {
     pub video_hidden: bool,
     /// The album art as a `data:` URL (the bar takes its colour from it), or "".
     pub art: String,
+    /// Shuffle on or off (None: this player has no shuffle).
+    pub shuffle: Option<bool>,
+    /// "none", "track" or "list" ("" : this player has no repeat).
+    pub repeat: String,
 }
 
 /// Starts the poll (Windows only; elsewhere the island simply never hears "media").
@@ -577,6 +581,22 @@ mod sys {
             can_prev: controls.IsPreviousEnabled().unwrap_or(false),
             can_seek: controls.IsPlaybackPositionEnabled().unwrap_or(false),
             video_hidden: false,
+            shuffle: if controls.IsShuffleEnabled().unwrap_or(false) {
+                Some(info.IsShuffleActive().ok().and_then(|r| r.Value().ok()).unwrap_or(false))
+            } else {
+                None
+            },
+            repeat: if controls.IsRepeatEnabled().unwrap_or(false) {
+                use windows::Media::MediaPlaybackAutoRepeatMode as R;
+                match info.AutoRepeatMode().ok().and_then(|r| r.Value().ok()) {
+                    Some(R::Track) => "track",
+                    Some(R::List) => "list",
+                    _ => "none",
+                }
+                .to_string()
+            } else {
+                String::new()
+            },
         })
     }
 
@@ -646,6 +666,17 @@ mod sys {
             "play" => s.TryPlayAsync(),
             "next" => s.TrySkipNextAsync(),
             "prev" => s.TrySkipPreviousAsync(),
+            // Shuffle on/off, and repeat round off → the whole list → this song → off.
+            "shuffle" => {
+                let on = s.GetPlaybackInfo().ok().and_then(|i| i.IsShuffleActive().ok()).and_then(|r| r.Value().ok()).unwrap_or(false);
+                s.TryChangeShuffleActiveAsync(!on)
+            }
+            "repeat" => {
+                use windows::Media::MediaPlaybackAutoRepeatMode as R;
+                let now = s.GetPlaybackInfo().ok().and_then(|i| i.AutoRepeatMode().ok()).and_then(|r| r.Value().ok()).unwrap_or(R::None);
+                let next = match now { R::None => R::List, R::List => R::Track, _ => R::None };
+                s.TryChangeAutoRepeatModeAsync(next)
+            }
             seek if seek.starts_with("seek:") => {
                 let ms: i64 = seek[5..].parse().map_err(|_| "bad seek")?;
                 let start = s.GetTimelineProperties().and_then(|t| t.StartTime()).map(|t| t.Duration).unwrap_or(0);

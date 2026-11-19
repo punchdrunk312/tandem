@@ -86,6 +86,10 @@ export interface IslandSettings {
   barGlow: boolean;
   /** Text size in the bar: "s", "m" or "l". */
   textSize: string;
+  /** The island's rim: "neon" (cyan to purple) or "album" (the cover's colours). */
+  islandGlow: string;
+  /** How strong the rim glows: "low", "med", "high". */
+  glowLevel: string;
 }
 
 /** What Windows says is playing (see src-tauri/src/media.rs). */
@@ -105,6 +109,10 @@ export interface NowPlaying {
   video_hidden?: boolean;
   /** The album art as a data: URL, or "". */
   art: string;
+  /** Shuffle on/off (absent or null: the player has none). */
+  shuffle?: boolean | null;
+  /** "none" | "track" | "list" ("" or absent: the player has no repeat). */
+  repeat?: string;
 }
 
 /** One time-stamped lyric line. */
@@ -163,6 +171,8 @@ const DEFAULTS: IslandSettings = {
   showTitle: true,
   barGlow: true,
   textSize: "m",
+  islandGlow: "neon",
+  glowLevel: "med",
 };
 export const SETTINGS_KEY = "tandem.island";
 const KEY = SETTINGS_KEY;

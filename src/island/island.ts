@@ -263,7 +263,7 @@ export class Island {
       State.notify();
       void call("media_control", { action: `seek:${Math.round(to)}` }).catch((e) => this.showNote(String(e)));
     };
-    const mediaControl = (action: "play_pause" | "next" | "prev") => {
+    const mediaControl = (action: "play_pause" | "next" | "prev" | "shuffle" | "repeat") => {
       // Show the change at once; Windows confirms it within a second.
       if (action === "play_pause" && State.media) {
         State.media = { ...State.media, position_ms: mediaPosition(), playing: !State.media.playing };
@@ -1092,6 +1092,8 @@ export class Island {
     ds.title = st.showTitle === false ? "off" : "on";
     ds.glow = st.barGlow === false ? "off" : "on";
     ds.text = st.textSize || "m";
+    ds.glowStyle = st.islandGlow || "neon";
+    ds.glowLevel = st.glowLevel || "med";
     if (this.radius.value !== this.targetSize().r) this.animateGeometry(false);
     this.engine.glass = glass;
     // The hello is drawn, not styled: its words follow what is behind the glass too.
@@ -1667,6 +1669,7 @@ export class Island {
     if (before?.playing && !m?.playing) this.pausedAt = performance.now();
     if (started && this.npHiddenFor !== this.songKey()) this.npHiddenFor = "";
     if (started) this.popNowPlaying();
+    if (State.settings.theme === "island" && State.view === "nowplaying" && before?.playing !== m?.playing) this.animateGeometry(false);
     if (!m && State.view === "nowplaying") this.closeBar();
     this.fetchLyrics();
     State.notify();
@@ -2072,7 +2075,11 @@ export class Island {
   // ── Geometry ────────────────────────────────────────────────────────────────
 
   private targetSize(): { w: number; h: number; r: number } {
-    const { w, h } = islandSize(State.mode, State.view, State.transferRows);
+    let { w, h } = islandSize(State.mode, State.view, State.transferRows);
+    if (State.settings.theme === "island" && State.mode === "expanded" && State.view === "nowplaying") {
+      w = State.media?.playing ? 480 : 330;
+      h = 62;
+    }
     // The corners the person picked (Top bar → Look & feel), in every look.
     const pick = State.settings.barRadius;
     const big = pick === "round" ? 28 : pick === "square" ? 4 : EXPANDED_CORNER;
@@ -2285,6 +2292,20 @@ export class Island {
       if (this.fsm.state !== "hidden") this.fsm.mouseEntered();
     }
     if (!inIsland && this.wasInIsland) this.fsm.mouseLeft();
+    if (State.settings.theme === "island" && State.mode === "expanded" && State.view === "nowplaying") {
+      if (inIsland && this.hoverOpen == null) {
+        this.hoverOpen = window.setTimeout(() => {
+          this.hoverOpen = null;
+          if (this.wasInIsland && State.view === "nowplaying" && State.mode === "expanded") {
+            State.isPinned = false;
+            this.setView("media");
+          }
+        }, 650);
+      } else if (!inIsland && this.hoverOpen != null) {
+        window.clearTimeout(this.hoverOpen);
+        this.hoverOpen = null;
+      }
+    }
     this.wasInIsland = inIsland;
 
     // Bot hover → love
@@ -2470,6 +2491,7 @@ export class Island {
 
   /** Bob peeks out from under the island pill now and then (ms, performance clock). */
   private peekUntil = 0;
+  private hoverOpen: number | null = null;
   private nextPeek = performance.now() + 25_000;
   private islandSlim(): boolean {
     return State.settings.theme === "island"
